@@ -6,6 +6,8 @@ NUM_CHANNELS = 16  # Note that ELEC573Net is hardcoded in, doesn't use this...
 NUM_TRAIN_GESTURES = 8  # For pretrained models
 NUM_FT_GESTURES = 1  # Oneshot finetuning
 
+# TODO: Delete all the unused stuff... this NB shouldnt have any non-meta-learning stuff
+
 
 # ===================== MODEL CONFIG ===========================
 basicMOE_config = {

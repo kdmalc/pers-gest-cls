@@ -53,13 +53,13 @@ def apply_fold_to_config(config, all_splits, fold_idx):
 
 #code_dir.April_25.MOE. --> Said not to use this... code_dir isn't an actual package...
 # Make sure I don't have files named the same thing...
-from April_25.MOE.MOE_multimodal_model_classes import *
-from April_25.MOE.MOE_quick_cls_heads import *
-from April_25.MOE.MOE_training import *
-from April_25.MOE.MOE_configs import *
-from April_25.MOE.multimodal_data_processing import *  # Needed for load_multimodal_dataloaders()
-from April_25.MOE.mamlpp import *
-from April_25.MOE.maml_multimodal_dataloaders import *
+from system.MAML_MOE.MOE_multimodal_model_classes import *
+from system.MAML_MOE.MOE_quick_cls_heads import *
+from system.MAML_MOE.MOE_training import *
+from system.MAML_MOE.MOE_configs import *
+from system.MAML_MOE.multimodal_data_processing import *  # Needed for load_multimodal_dataloaders()
+from system.MAML_MOE.mamlpp import *
+from system.MAML_MOE.maml_multimodal_dataloaders import *
 
 current_directory = os.getcwd()
 print(f"The current working directory is: {current_directory}")
@@ -189,6 +189,7 @@ def build_model_from_trial(trial, base_config=None):
     config["ft_batch_size"] = 10  #trial.suggest_categorical("ft_bs", [1, 2, 8, 10])
 
     # User table usage (important for novel users) --> I think this needs to stay True, if False there's no backup method to learn user embeddings rn...
+    # TODO: I have literally no idea how this works for a new user. I dont remember anymore
     config["use_user_table"]     = True  #trial.suggest_categorical("use_user_table", [True, False])
 
     # NEW MULTIMODAL
@@ -228,11 +229,11 @@ def build_model_from_trial(trial, base_config=None):
     config["k_shot"] = 1
     config["q_query"] = 9  # TODO: Does this need to be 9? If it set it lower does that just make it faster? Does that impact the model? Slightly noiser eval??
     # TODO: Do the below eps/batch and eps/epoch need to be multiple of each other?
-    config["episodes_per_batch_train"] = trial.suggest_categorical("episodes_per_batch_train", [10, 100, 500])  # Meta learning batch size
-    config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [100, 1000, 5000])  # TODO: I have no idea what this should be... this is the max on the number of tasks per EPOCH. So this limits training, if the iterable is way too big. Idk if this is necessary for us or not
-    config["num_workers"] = 0  # TODO: Idk what this does
+    config["episodes_per_batch_train"] = trial.suggest_categorical("episodes_per_batch_train", [50, 100, 250])  # Meta learning batch size
+    config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500, 1000])  # TODO: I have no idea what this should be... this is the max on the number of tasks per EPOCH. So this limits training, if the iterable is way too  (obvi true)
+    config["num_workers"] = 8  # This is the dataloader, something about how many processes the CPU can use (more is faster generally)
     # Core MAML++
-    config["maml_inner_steps"] = trial.suggest_int("maml_inner_steps", 1, 5)
+    config["maml_inner_steps"] = trial.suggest_int("maml_inner_steps", 1, 3)
     # TODO: Are the first and second order plus MSL not... like almost the same thing? I guess with no MSL there is literally no inner loop??
     config["maml_second_order"] = trial.suggest_categorical("maml_second_order", [True, False])                         # enables second-order when DOA switches on
     config["maml_first_order_to_second_order_epoch"] = trial.suggest_categorical("maml_first_order_to_second_order_epoch", [10, 30, 60, 100])      # DOA threshold (epochs <= this are first-order)
@@ -246,7 +247,7 @@ def build_model_from_trial(trial, base_config=None):
     config["maml_alpha_init"] = 1E-3                            # fallback α (also eval α if LSLR not used at eval)
     config["enable_inner_loop_optimizable_bn_params"] = False  # by default, do NOT adapt BN in inner loop
     # Eval
-    config["maml_inner_steps_eval"] = trial.suggest_int("maml_inner_steps_eval", 1, 5)
+    config["maml_inner_steps_eval"] = trial.suggest_int("maml_inner_steps_eval", 1, 3)
     config["maml_alpha_init_eval"] = 1E-3
     config["use_cosine_outer_lr"] = False                       # This is cosine-based lr annealing... is this in addition to my lr scheduler....
     config["use_lslr_at_eval"] = False                         # set True if you want to use learned per-parameter step sizes at eval
@@ -327,7 +328,13 @@ def objective(trial):
     all_fold_user_accs = []      # list of lists, per-fold user accuracies
     pretrain_val_accs = []       # best pretrain val acc per fold (for logging/debug)
 
-    for fold_idx in range(NUM_FOLDS):
+    #for fold_idx in range(NUM_FOLDS):
+    # I am going to switch to just using fold 0 for computational reasons.
+    ## After HPO, we should do our 4fcv on the top 3 or so trials
+    ## The reasoning for not doing kfcv during HPO is;
+    ## if a set of HPs perform better on one fold, they should still perform better (than a different set of HPs) on a different fold even if the absolute perforamnce changes 
+    ## (ie the relative performance of HPs should not change based on the fold)
+    for fold_idx in range(1):
         print("=" * 80)
         print(f"[Trial {trial.number}] Starting fold {fold_idx + 1}/{NUM_FOLDS}")
         print("=" * 80)

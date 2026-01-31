@@ -194,7 +194,7 @@ def load_multimodal_data_loaders(config,
         train_ds, _ = build_dataloader_from_two_dfs(
             time_df=train_merged_df, demo_df=demoENC_df,
             emg_cols=emg_cols, imu_cols=imu_cols, demo_cols=demo_cols,
-            batch_size=32, shuffle=False, num_workers=0,  # batch_size unused for episodic
+            batch_size=32, shuffle=False, num_workers=int(config['num_workers']),  # batch_size unused for episodic, allegedly...
             collate_fn=default_mm_collate_fixed
         )
         train_uc = UserClassIndex(train_ds, user_key="PIDs", label_key="label")
@@ -204,8 +204,8 @@ def load_multimodal_data_loaders(config,
         n_way   = int(config['n_way'])  #10
         k_shot  = int(config['k_shot'])  #1
         q_query = int(config['q_query'])  #9
-        episodes_per_epoch_train = int(config['episodes_per_epoch_train'])  #1000?
-        num_workers = int(config['num_workers'])  #0
+        episodes_per_epoch_train = int(config['episodes_per_epoch_train'])  #1000? Idk what is reasonable...
+        num_workers = int(config['num_workers'])  # Probably 0 but we should raise this when on the cluster
 
         train_epi = EpisodicIterable(
             base_ds=train_ds, uc_index=train_uc, users_subset=train_users,
@@ -218,12 +218,12 @@ def load_multimodal_data_loaders(config,
         val_support_ds, _ = build_dataloader_from_two_dfs(
             time_df=val_support_df, demo_df=demoENC_df,
             emg_cols=emg_cols, imu_cols=imu_cols, demo_cols=demo_cols,
-            batch_size=32, shuffle=False, num_workers=0, collate_fn=default_mm_collate_fixed
+            batch_size=32, shuffle=False, num_workers=num_workers, collate_fn=default_mm_collate_fixed
         )
         val_query_ds, _ = build_dataloader_from_two_dfs(
             time_df=val_query_df, demo_df=demoENC_df,
             emg_cols=emg_cols, imu_cols=imu_cols, demo_cols=demo_cols,
-            batch_size=32, shuffle=False, num_workers=0, collate_fn=default_mm_collate_fixed
+            batch_size=32, shuffle=False, num_workers=num_workers, collate_fn=default_mm_collate_fixed
         )
         val_uc_sup = UserClassIndex(val_support_ds, user_key="PIDs", label_key="label")
         val_users  = val_uc_sup.users
@@ -238,12 +238,12 @@ def load_multimodal_data_loaders(config,
         test_support_ds, _ = build_dataloader_from_two_dfs(
             time_df=test_support_df, demo_df=demoENC_df,
             emg_cols=emg_cols, imu_cols=imu_cols, demo_cols=demo_cols,
-            batch_size=32, shuffle=False, num_workers=0, collate_fn=default_mm_collate_fixed
+            batch_size=32, shuffle=False, num_workers=num_workers, collate_fn=default_mm_collate_fixed
         )
         test_query_ds, _ = build_dataloader_from_two_dfs(
             time_df=test_query_df, demo_df=demoENC_df,
             emg_cols=emg_cols, imu_cols=imu_cols, demo_cols=demo_cols,
-            batch_size=32, shuffle=False, num_workers=0, collate_fn=default_mm_collate_fixed
+            batch_size=32, shuffle=False, num_workers=num_workers, collate_fn=default_mm_collate_fixed
         )
         test_uc_sup = UserClassIndex(test_support_ds, user_key="PIDs", label_key="label")
         test_users  = test_uc_sup.users
@@ -347,18 +347,18 @@ class PerChannelZScore:
         return pd.DataFrame(X, columns=df.columns, index=df.index)
 
 
-def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, cfg):
+def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, config):
     """
     Creates user-specific dataloaders from the provided ft/val/test dataloaders.
 
     Axes handled:
-      1. meta_learning vs non-meta_learning       (cfg['meta_learning'])
-      2. multimodal vs non-multimodal             (cfg['multimodal'])
-      3. FT episodic (support/query) vs flat      (cfg['use_supportquery_for_ft'])
+      1. meta_learning vs non-meta_learning       (config['meta_learning'])
+      2. multimodal vs non-multimodal             (config['multimodal'])
+      3. FT episodic (support/query) vs flat      (config['use_supportquery_for_ft'])
 
     Semantics:
 
-      NON-META (cfg['meta_learning'] == False)
+      NON-META (config['meta_learning'] == False)
       ----------------------------------------
       - Assumes ft_dl_all and nv_dl_all are SUPPORT and QUERY splits (of the same split, ie of the test split)
         over the SAME users (PIDs overlap).
@@ -366,7 +366,7 @@ def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, cfg):
             user_loaders[pid] = (ft_dl_for_pid, nv_dl_for_pid)
         Only PIDs that appear in BOTH dls are included.
 
-      META (cfg['meta_learning'] == True)
+      META (config['meta_learning'] == True)
       -----------------------------------
       - ft_dl_all and nv_dl_all may be DIFFERENT splits (e.g., val vs test),
         with DISJOINT user sets.
@@ -378,23 +378,23 @@ def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, cfg):
           * If pid appears in both:   (ft_dl, nv_dl)
 
       Episodic vs flat FT:
-        - cfg['use_supportquery_for_ft'] == False:
+        - config['use_supportquery_for_ft'] == False:
             * Flatten FT and NV loaders into per-user flat loaders
               (support+query combined within each split).
-        - cfg['use_supportquery_for_ft'] == True AND meta_learning == True:
+        - config['use_supportquery_for_ft'] == True AND meta_learning == True:
             * Expects ft_dl_all.dataset and nv_dl_all.dataset to be
               FixedOneShotPerUserIterable (or same interface).
             * Returns per-user episodic loaders:
                 user_loaders[pid] = (ft_epi_dl_or_None, nv_epi_dl_or_None)
     """
 
-    multimodal_version    = cfg['multimodal']
-    metalearning_version  = cfg['meta_learning']
-    use_sq_ft             = cfg['use_supportquery_for_ft']
+    multimodal_version    = config['multimodal']
+    metalearning_version  = config['meta_learning']
+    use_sq_ft             = config['use_supportquery_for_ft']
 
     # Ensure we have some FT batch size for flat loaders
-    ft_bs = int(cfg.get('ft_batch_size', cfg.get('batch_size', 32)))
-    cfg['ft_batch_size'] = ft_bs
+    ft_bs = int(config.get('ft_batch_size', config.get('batch_size', 32)))
+    config['ft_batch_size'] = ft_bs
 
     # ----------------------------------------------------------------------
     # Helper: Flatten all samples out of a loader, grouped later by PID
@@ -597,7 +597,7 @@ def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, cfg):
         if not all_pids:
             raise RuntimeError("No users found in episodic FT/NV datasets.")
 
-        num_workers = int(cfg.get('num_workers', 0))
+        num_workers = int(config['num_workers'])
 
         for pid in all_pids:
             ft_dl = None
@@ -673,7 +673,7 @@ def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, cfg):
             mask = (PID_ft == pid)
             ft_ds = make_MOE_tensor_dataset(
                 EMG_ft[mask], IMU_ft[mask], DEMO_ft[mask], LABEL_ft[mask],
-                cfg, participant_ids=PID_ft[mask]
+                config, participant_ids=PID_ft[mask]
             )
             ft_dl = DataLoader(ft_ds, batch_size=ft_bs, shuffle=True)
             ft_map[pid] = ft_dl
@@ -683,7 +683,7 @@ def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, cfg):
             mask = (PID_nv == pid)
             nv_ds = make_MOE_tensor_dataset(
                 EMG_nv[mask], IMU_nv[mask], DEMO_nv[mask], LABEL_nv[mask],
-                cfg, participant_ids=PID_nv[mask]
+                config, participant_ids=PID_nv[mask]
             )
             nv_dl = DataLoader(nv_ds, batch_size=ft_bs, shuffle=False)
             nv_map[pid] = nv_dl
@@ -702,13 +702,13 @@ def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, cfg):
 
         for pid in pid_ft.unique().tolist():
             mask = (pid_ft == pid)
-            ft_ds = make_tensor_dataset(X_ft[mask], y_ft[mask], cfg)
+            ft_ds = make_tensor_dataset(X_ft[mask], y_ft[mask], config)
             ft_dl = DataLoader(ft_ds, batch_size=ft_bs, shuffle=True)
             ft_map[pid] = ft_dl
 
         for pid in pid_nv.unique().tolist():
             mask = (pid_nv == pid)
-            nv_ds = make_tensor_dataset(X_nv[mask], y_nv[mask], cfg)
+            nv_ds = make_tensor_dataset(X_nv[mask], y_nv[mask], config)
             nv_dl = DataLoader(nv_ds, batch_size=ft_bs, shuffle=False)
             nv_map[pid] = nv_dl
 
