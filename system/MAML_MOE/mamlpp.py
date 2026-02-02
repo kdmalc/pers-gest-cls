@@ -6,7 +6,8 @@ import torch.nn as nn
 import numpy as np
 import time
 
-from MOE_training import _model_forward_router, set_MOE_optimizer, SmoothedEarlyStopping
+#from MOE_training import _model_forward_router, set_MOE_optimizer, SmoothedEarlyStopping
+from system.MAML_MOE.MOE_training import _model_forward_router, set_MOE_optimizer, SmoothedEarlyStopping
 
 # -----------------------------
 # Functional execution helpers
