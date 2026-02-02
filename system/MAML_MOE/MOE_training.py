@@ -4,7 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from collections import deque
 
-from MOE_model_classes import WithUserOverride
+#from MOE_model_classes import WithUserOverride
+from system.MAML_MOE.MOE_model_classes import WithUserOverride
 
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False

@@ -4,8 +4,10 @@ import pandas as pd
 import pickle
 from torch.utils.data import DataLoader, TensorDataset
 
-from MOE_multimodal_model_classes import *
-from maml_multimodal_dataloaders import *
+#from MOE_multimodal_model_classes import *
+#from maml_multimodal_dataloaders import *
+from system.MAML_MOE.MOE_multimodal_model_classes import *
+from system.MAML_MOE.maml_multimodal_dataloaders import *
 
 
 # TODO: This needs to be updated to use config instead of default values...
