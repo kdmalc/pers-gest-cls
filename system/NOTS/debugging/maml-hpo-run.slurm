@@ -3,14 +3,14 @@
 #SBATCH --partition=commons
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=10
 #SBATCH --mem=10G
-#SBATCH --time=8:00:00
+#SBATCH --time=19:00:00
 #SBATCH --gres=gpu:1
 # Optional, only if your site really has those node features:
-# COMMENT: SBATCH --constraint="ampere|lovelace"
+# # SBATCH --constraint="ampere|lovelace"
 # Use a small whitelist, not ALL:
-# COMMENT: SBATCH --export=HOME,USER,LOGNAME,SHELL,LANG,LC_ALL,PATH,PROJECTS,WORK,SHARED_SCRATCH,LOCAL_SCRATCH
+# SBATCH --export=HOME,USER,LOGNAME,SHELL,LANG,LC_ALL,PATH,PROJECTS,WORK,SHARED_SCRATCH,LOCAL_SCRATCH
 #SBATCH --export=ALL
 
 # Safer bash: exit on error/undefined vars; fail pipelines if any step fails
@@ -34,18 +34,17 @@ source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/mamba.sh
 mamba activate /projects/my13/kai/meta-pers-gest/envs/fl-torch
 
 ######## 4) Paths & run ########
-export CODE_DIR=/projects/my13/kai/meta-pers-gest/fl-gestures
+export CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
 export DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
 export RUN_DIR=/scratch/my13/kai/runs/${SLURM_JOB_NAME}_${SLURM_JOB_ID}
 export DEBUG_RUN_DIR=/scratch/my13/kai/runs
 #mkdir -p "$RUN_DIR" /scratch/my13/kai/logs
 # For relative file imports (in other .py files)
-export MOE_DIR="$CODE_DIR/April_25/MOE"
-export APRIL_DIR="$CODE_DIR/April_25"
+export MOE_DIR="$CODE_DIR/MAML_MOE"
 
 # before running python
-# Put CODE_DIR (for April_25.* imports) and MOE_DIR (for MOE_model_classes, etc.) on PYTHONPATH
-export PYTHONPATH="$CODE_DIR:$MOE_DIR:$APRIL_DIR:$PYTHONPATH"
+# Put CODE_DIR (for ...) and MOE_DIR (for ...) on PYTHONPATH
+export PYTHONPATH="$CODE_DIR:$MOE_DIR:$PYTHONPATH"
 
 #echo "===== Sanity ====="
 #echo "Host: $(hostname)"
@@ -57,6 +56,6 @@ export PYTHONPATH="$CODE_DIR:$MOE_DIR:$APRIL_DIR:$PYTHONPATH"
 #echo "=================="
 
 echo "CWD:"; pwd
-python -u "$CODE_DIR/April_25/NOTS/debugging/maml_hpo.py" \
+python -u "$CODE_DIR/system/NOTS/debugging/maml_hpo.py" \
     --data_dir "$DATA_DIR" \
     --out_dir  "$DEBUG_RUN_DIR"
