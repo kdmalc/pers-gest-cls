@@ -110,6 +110,7 @@ def build_model_from_trial(trial, base_config=None):
     config["NOTS"] = True
     if config["NOTS"]==False:
         # TODO: These are not updated yet...
+        raise ValueError("You are running the NOTS=False (non-cluster) version!")
 
         # Presumably this will never be used since this .py file should only be called by a slurm file?
         ## SAVING
@@ -137,8 +138,8 @@ def build_model_from_trial(trial, base_config=None):
         
         # TODO I dont fucking know where this shit is either
         # TODO I dont even know what this is or what it is supposed to be................
-        config["dfs_save_path"] = f"{CODE_DIR}//dataset//meta-learning-sup-que-ds//full_datasplit_dfs//"
-        config["dfs_load_path"] = f"{CODE_DIR}//dataset//meta-learning-sup-que-ds//full_datasplit_dfs//Initial_Multimodal//"
+        config["dfs_save_path"] = f"{CODE_DIR}/dataset"
+        config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds"
 
     # ----- Model layout hyperparams -----
     config["user_emb_dim"]  = trial.suggest_int("user_emb_dim", 12, 48)
@@ -461,6 +462,7 @@ def run_study(study_name="maml_mmoe_ft_HPO", storage=None, n_trials=2):
 
 
 if __name__ == "__main__":
+    # NOTE: This is where the SQL db is set!
     db_path = "/scratch/my13/kai/meta-pers-gest/optuna_dbs/maml_moe_hpo.db"
     storage_url = f"sqlite:///{db_path}"
 
