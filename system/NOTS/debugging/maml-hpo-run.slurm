@@ -40,7 +40,7 @@ export RUN_DIR=/scratch/my13/kai/runs/${SLURM_JOB_NAME}_${SLURM_JOB_ID}
 export DEBUG_RUN_DIR=/scratch/my13/kai/runs
 #mkdir -p "$RUN_DIR" /scratch/my13/kai/logs
 # For relative file imports (in other .py files)
-export MOE_DIR="$CODE_DIR/MAML_MOE"
+export MOE_DIR="$CODE_DIR/system/MAML_MOE"
 
 # before running python
 # Put CODE_DIR (for ...) and MOE_DIR (for ...) on PYTHONPATH
