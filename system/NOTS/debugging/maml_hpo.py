@@ -138,8 +138,8 @@ def build_model_from_trial(trial, base_config=None):
         
         # TODO I dont fucking know where this shit is either
         # TODO I dont even know what this is or what it is supposed to be................
-        config["dfs_save_path"] = f"{CODE_DIR}/dataset"
-        config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds"
+        config["dfs_save_path"] = f"{CODE_DIR}/dataset//"
+        config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds//"
 
     # ----- Model layout hyperparams -----
     config["user_emb_dim"]  = trial.suggest_int("user_emb_dim", 12, 48)
