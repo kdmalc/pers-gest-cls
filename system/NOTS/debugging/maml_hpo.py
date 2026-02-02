@@ -65,15 +65,16 @@ current_directory = os.getcwd()
 print(f"The current working directory is: {current_directory}")
 
 # TODO: Not sure if this is needed on NOTS... or how this should ideally resolve itself...
+# TODO: These dont even exist in the new repo...
 #######################################################
 # Add the parent directory folder to the system path
-sys.path.append(os.path.abspath(os.path.join('..')))
-print(f"CWD after sys path append: {os.getcwd()}")
-from April_25.configs.hyperparam_tuned_configs import *
-from April_25.utils.DNN_FT_funcs import *
-from April_25.utils.gesture_dataset_classes import *
-from April_25.utils.global_seed import set_seed
-set_seed()
+#sys.path.append(os.path.abspath(os.path.join('..')))
+#print(f"CWD after sys path append: {os.getcwd()}")
+#from April_25.configs.hyperparam_tuned_configs import *
+#from April_25.utils.DNN_FT_funcs import *
+#from April_25.utils.gesture_dataset_classes import *
+#from April_25.utils.global_seed import set_seed
+#set_seed()
 #######################################################
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M")
