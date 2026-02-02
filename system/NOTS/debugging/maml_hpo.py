@@ -40,7 +40,7 @@ models_save_dir.mkdir(parents=True, exist_ok=True)
 # adjust these to where you staged each file under $DATA_DIR
 ## These are now inputs to the config directly... --> These are actually the NOTS specific versions...
 ###########################
-user_split_json_filepath = CODE_DIR / "April_25" / "fixed_user_splits" / "4kfcv_splits_reduced.json"
+user_split_json_filepath = CODE_DIR / "system" / "fixed_user_splits" / "4kfcv_splits_reduced.json"
 def apply_fold_to_config(config, all_splits, fold_idx):
     """Mutates config in-place to set train/val/test PIDs for the given fold."""
     split = all_splits[fold_idx]
@@ -109,6 +109,8 @@ def build_model_from_trial(trial, base_config=None):
 
     config["NOTS"] = True
     if config["NOTS"]==False:
+        # TODO: These are not updated yet...
+
         # Presumably this will never be used since this .py file should only be called by a slurm file?
         ## SAVING
         config["user_split_json_filepath"] = "C:\\Users\\kdmen\\Repos\\fl-gestures\\April_25\\fixed_user_splits\\24_8_user_splits_RS17.json"
@@ -126,17 +128,17 @@ def build_model_from_trial(trial, base_config=None):
         config["results_save_dir"] = results_save_dir
         config["models_save_dir"] = models_save_dir
         ## Mutlimodal LOADING
-        # These used to be outside this func
-        #emg_imu_pkl_full_path = DATA_DIR / "filtered_datasets" / "metadata_IMU_EMG_allgestures_allusers.pkl"
-        #pwmd_xlsx_filepath    = CODE_DIR / "Biosignal gesture questionnaire for participants with disabilities.xlsx"
-        #pwoutmd_xlsx_filepath = CODE_DIR / "Biosignal gesture questionnaire for participants without disabilities.xlsx"
-        #dfs_save_path = f"{CODE_DIR}//April_25//MOE//full_datasplit_dfs//"
-        #dfs_load_path = f"{CODE_DIR}//April_25//MOE//full_datasplit_dfs//Initial_Multimodal//"
-        config["emg_imu_pkl_full_path"] = f"{CODE_DIR}//filtered_datasets//metadata_IMU_EMG_allgestures_allusers.pkl" 
-        config["pwmd_xlsx_filepath"] = f"{CODE_DIR}//Biosignal gesture questionnaire for participants with disabilities.xlsx"
-        config["pwoutmd_xlsx_filepath"] = f"{CODE_DIR}//Biosignal gesture questionnaire for participants without disabilities.xlsx"
-        config["dfs_save_path"] = f"{CODE_DIR}//April_25//MOE//full_datasplit_dfs//"
-        config["dfs_load_path"] = f"{CODE_DIR}//April_25//MOE//full_datasplit_dfs//Initial_Multimodal//"
+        # TODO God fucking damn it I have no idea where the fuck this is
+        #/scratch/my13/kai/meta-pers-gest/data/filtered_datasets
+        config["emg_imu_pkl_full_path"] = f"{CODE_DIR}//dataset//filtered_datasets//metadata_IMU_EMG_allgestures_allusers.pkl" 
+        
+        config["pwmd_xlsx_filepath"] = f"{CODE_DIR}//dataset//Biosignal gesture questionnaire for participants with disabilities.xlsx"
+        config["pwoutmd_xlsx_filepath"] = f"{CODE_DIR}//dataset//Biosignal gesture questionnaire for participants without disabilities.xlsx"
+        
+        # TODO I dont fucking know where this shit is either
+        # TODO I dont even know what this is or what it is supposed to be................
+        config["dfs_save_path"] = f"{CODE_DIR}//dataset//meta-learning-sup-que-ds//full_datasplit_dfs//"
+        config["dfs_load_path"] = f"{CODE_DIR}//dataset//meta-learning-sup-que-ds//full_datasplit_dfs//Initial_Multimodal//"
 
     # ----- Model layout hyperparams -----
     config["user_emb_dim"]  = trial.suggest_int("user_emb_dim", 12, 48)
