@@ -1,3 +1,7 @@
+# NOTE: This file does NOT auto sync on the cluster!
+## While it is on the cluster, there is a separate copy on SCRATCH that is called by slurm
+## ... if it is on projects then I could just have slurm call this copy....... ......
+
 N_TRIALS = 2
 
 import os
@@ -5,10 +9,9 @@ code_dir = os.environ["CODE_DIR"]
 data_dir = os.environ["DATA_DIR"]
 run_dir  = os.environ["RUN_DIR"]
 
-import sys, copy, json, time, joblib
+import copy, json, time, datetime#, joblib, sys
 
 import numpy as np
-#import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import optuna
@@ -40,7 +43,7 @@ models_save_dir.mkdir(parents=True, exist_ok=True)
 # adjust these to where you staged each file under $DATA_DIR
 ## These are now inputs to the config directly... --> These are actually the NOTS specific versions...
 ###########################
-user_split_json_filepath = CODE_DIR / "system" / "fixed_user_splits" / "4kfcv_splits_reduced.json"
+user_split_json_filepath = CODE_DIR / "system" / "fixed_user_splits" / "4kfcv_splits_shared_test.json"
 def apply_fold_to_config(config, all_splits, fold_idx):
     """Mutates config in-place to set train/val/test PIDs for the given fold."""
     split = all_splits[fold_idx]
@@ -54,28 +57,16 @@ def apply_fold_to_config(config, all_splits, fold_idx):
 #code_dir.April_25.MOE. --> Said not to use this... code_dir isn't an actual package...
 # Make sure I don't have files named the same thing...
 from system.MAML_MOE.MOE_multimodal_model_classes import *
-from system.MAML_MOE.MOE_quick_cls_heads import *
-from system.MAML_MOE.MOE_training import *
-from system.MAML_MOE.MOE_configs import *
+#from system.MAML_MOE.MOE_quick_cls_heads import *
+#from system.MAML_MOE.MOE_training import *  # SmoothedEarlyStopping is in here...
+## ^^ Also has some generic MOE funcs: gate_stats, accuracy, gate_balance_loss, make_ce
+#from system.MAML_MOE.MOE_configs import *
 from system.MAML_MOE.multimodal_data_processing import *  # Needed for load_multimodal_dataloaders()
 from system.MAML_MOE.mamlpp import *
 from system.MAML_MOE.maml_multimodal_dataloaders import *
 
 current_directory = os.getcwd()
 print(f"The current working directory is: {current_directory}")
-
-# TODO: Not sure if this is needed on NOTS... or how this should ideally resolve itself...
-# TODO: These dont even exist in the new repo...
-#######################################################
-# Add the parent directory folder to the system path
-#sys.path.append(os.path.abspath(os.path.join('..')))
-#print(f"CWD after sys path append: {os.getcwd()}")
-#from April_25.configs.hyperparam_tuned_configs import *
-#from April_25.utils.DNN_FT_funcs import *
-#from April_25.utils.gesture_dataset_classes import *
-#from April_25.utils.global_seed import set_seed
-#set_seed()
-#######################################################
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 
@@ -110,11 +101,11 @@ def build_model_from_trial(trial, base_config=None):
     config["NOTS"] = True
     if config["NOTS"]==False:
         # TODO: These are not updated yet...
-        raise ValueError("You are running the NOTS=False (non-cluster) version!")
+        raise ValueError("You are running the NOTS=False (non-cluster) version! Filepaths must be fixed for new repo.")
 
         # Presumably this will never be used since this .py file should only be called by a slurm file?
         ## SAVING
-        config["user_split_json_filepath"] = "C:\\Users\\kdmen\\Repos\\fl-gestures\\April_25\\fixed_user_splits\\24_8_user_splits_RS17.json"
+        config["user_split_json_filepath"] = "C:\\Users\\kdmen\\Repos\\fl-gestures\\April_25\\fixed_user_splits\\4kfcv_splits_shared_test.json"
         config["results_save_dir"] = f"C:\\Users\\kdmen\\Repos\\fl-gestures\\April_25\\results\\MOE\\{timestamp}_MOE"
         config["models_save_dir"] = f"C:\\Users\\kdmen\\Repos\\fl-gestures\\April_25\\models\\MOE\\{timestamp}_MOE"
         ## Mutlimodal LOADING
@@ -129,22 +120,18 @@ def build_model_from_trial(trial, base_config=None):
         config["results_save_dir"] = results_save_dir
         config["models_save_dir"] = models_save_dir
         ## Mutlimodal LOADING
-        # TODO God fucking damn it I have no idea where the fuck this is
-        #/scratch/my13/kai/meta-pers-gest/data/filtered_datasets
         config["emg_imu_pkl_full_path"] = f"{CODE_DIR}//dataset//filtered_datasets//metadata_IMU_EMG_allgestures_allusers.pkl" 
         
         config["pwmd_xlsx_filepath"] = f"{CODE_DIR}//dataset//Biosignal gesture questionnaire for participants with disabilities.xlsx"
         config["pwoutmd_xlsx_filepath"] = f"{CODE_DIR}//dataset//Biosignal gesture questionnaire for participants without disabilities.xlsx"
         
-        # TODO I dont fucking know where this shit is either
-        # TODO I dont even know what this is or what it is supposed to be................
         config["dfs_save_path"] = f"{CODE_DIR}/dataset//"
         config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds//"
 
     # ----- Model layout hyperparams -----
     config["user_emb_dim"]  = trial.suggest_int("user_emb_dim", 12, 48)
     config["num_experts"]   = trial.suggest_int("num_experts", 2, 10)
-    config["top_k"]         = trial.suggest_categorical("top_k", [None, 1, 2, 3])
+    config["top_k"]         = trial.suggest_categorical("top_k", [None, 1, 2, 3])  # None means all/equal voting
 
     # Gate choice
     config["gate_type"]     = trial.suggest_categorical("gate_type", ["user_aware", "feature_only", "user_only", "film_gate"])  #, "bilinear"
@@ -220,11 +207,11 @@ def build_model_from_trial(trial, base_config=None):
     config['emg_in_ch'] = 16
     config['imu_in_ch'] = 72
     config['demo_in_dim'] = 12
-    config['num_epochs'] = 35
+    config['num_epochs'] = 40
     config['num_ft_epochs'] = 15
 
     # NEW FIELDS!
-    config["mix_demo_u_alpha"] = 0.5
+    config["mix_demo_u_alpha"] = trial.suggest_categorical("mix_demo_u_alpha", [0.0, 0.5, 1.0])
 
     # ADDING MAML SPECIFIC
     # TODO: How do all of these interact???
@@ -239,10 +226,11 @@ def build_model_from_trial(trial, base_config=None):
     # Core MAML++
     config["maml_inner_steps"] = trial.suggest_int("maml_inner_steps", 1, 3)
     # TODO: Are the first and second order plus MSL not... like almost the same thing? I guess with no MSL there is literally no inner loop??
-    config["maml_second_order"] = trial.suggest_categorical("maml_second_order", [True, False])                         # enables second-order when DOA switches on
-    config["maml_first_order_to_second_order_epoch"] = trial.suggest_categorical("maml_first_order_to_second_order_epoch", [10, 30, 60, 100])      # DOA threshold (epochs <= this are first-order)
-    config["maml_use_msl"] = trial.suggest_categorical("maml_use_msl", [True, False])                              # MSL (multi-step loss) on
-    config["maml_msl_num_epochs"] = trial.suggest_categorical("maml_msl_num_epochs", [10, 30, 60, 100])                         # use MSL during first N epochs; after that, final-step loss only
+    #config["maml_second_order"] = trial.suggest_categorical("maml_second_order", [True, False])                         # enables second-order when DOA switches on
+    config["maml_first_order_to_second_order_epoch"] = trial.suggest_categorical("maml_first_order_to_second_order_epoch", [0, 5, 10, 15, 30, 40])      # DOA threshold (epochs <= this are first-order)
+    #config["maml_use_msl"] = trial.suggest_categorical("maml_use_msl", [True, False])                              # MSL (multi-step loss) on
+    # use MSL during first N epochs; after that, final-step loss only
+    config["maml_msl_num_epochs"] = trial.suggest_categorical("maml_msl_num_epochs", [0, 5, 10, 15, 30, 40])  # Also note that currenlt the max num_epochs is 40 (plus we use ES so probably wont even hit this)
     config["maml_use_lslr"] = trial.suggest_categorical("maml_use_lslr", [True, False])                             # learn per-parameter, per-step inner LRs
     # TODO: Is this maml_alpha_init being used as a learning rate?
     ## I remember that in PerFedAvg they said beta was around 0.5 or something (IIRC)
@@ -251,7 +239,8 @@ def build_model_from_trial(trial, base_config=None):
     config["maml_alpha_init"] = 1E-3                            # fallback α (also eval α if LSLR not used at eval)
     config["enable_inner_loop_optimizable_bn_params"] = False  # by default, do NOT adapt BN in inner loop
     # Eval
-    config["maml_inner_steps_eval"] = trial.suggest_int("maml_inner_steps_eval", 1, 3)
+    # At eval this is just the inner loop with no outer, so no MSL and no Hessian. This should be much quicker. 5-10 is common here
+    config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [1, 3, 5, 10, 15])
     config["maml_alpha_init_eval"] = 1E-3
     config["use_cosine_outer_lr"] = False                       # This is cosine-based lr annealing... is this in addition to my lr scheduler....
     config["use_lslr_at_eval"] = False                         # set True if you want to use learned per-parameter step sizes at eval
@@ -276,6 +265,7 @@ def build_model_from_trial(trial, base_config=None):
     config['saved_df_timestamp'] = '20250917_1217'  
 
     # NEW FOR LSTM VERSION! I AM NOT USING THE LSTM VERSION IN THIS NB!
+    # TODO: What? Is my model literally just a CNN + MOE(MLP)? ... seems non ideal... need to find a better architecture
     # ---- backbone toggle ----
     config["temporal_backbone"] = "none"     # "none" (current TCN-only) | "lstm"
     # ---- LSTM settings (used when temporal_backbone == "lstm") ----
@@ -310,7 +300,9 @@ def build_model_from_trial(trial, base_config=None):
 # ---------- Load splits once ----------
 with open(user_split_json_filepath, "r") as f:
     ALL_SPLITS = json.load(f)
-NUM_FOLDS = len(ALL_SPLITS)
+NUM_FOLDS = 2  #len(ALL_SPLITS) --> Overwriting to just be 1 for HPO, otherwise runs legit cannot finish
+## Im going to change it to 2 so that we dont just overfit to the fixed val set...
+## I dont think 2 folds can finish in 24 hours... increase the time to 24 hours ig...
 # If you want to store per-fold metrics:
 fold_mean_accs = []
 fold_user_accs = []  # list of lists (per-fold user accs)
@@ -332,13 +324,14 @@ def objective(trial):
     all_fold_user_accs = []      # list of lists, per-fold user accuracies
     pretrain_val_accs = []       # best pretrain val acc per fold (for logging/debug)
 
-    #for fold_idx in range(NUM_FOLDS):
     # I am going to switch to just using fold 0 for computational reasons.
     ## After HPO, we should do our 4fcv on the top 3 or so trials
     ## The reasoning for not doing kfcv during HPO is;
     ## if a set of HPs perform better on one fold, they should still perform better (than a different set of HPs) on a different fold even if the absolute perforamnce changes 
     ## (ie the relative performance of HPs should not change based on the fold)
-    for fold_idx in range(1):
+    for fold_idx in range(NUM_FOLDS):
+        fold_start_time = time.time()
+
         print("=" * 80)
         print(f"[Trial {trial.number}] Starting fold {fold_idx + 1}/{NUM_FOLDS}")
         print("=" * 80)
@@ -361,7 +354,7 @@ def objective(trial):
             load_existing_dfs=True,
         )
 
-        # Do the meta pretraining
+        # Do the meta "pretraining" (is this just the meta-train phase?)
         pretrained_model, pretrain_res_dict = MAMLpp_pretrain(
             model,
             config,
@@ -374,42 +367,55 @@ def objective(trial):
 
         print(f"[Trial {trial.number} | Fold {fold_idx}] Pretraining done. Best val acc = {best_val_acc:.4f}")
 
+        model_filename = f"trial_{trial.number}_fold_{fold_idx}_best.pt"
+        save_path = os.path.join(models_save_dir, model_filename)
+        torch.save({
+            'trial_num': trial.number,
+            'fold_idx': fold_idx,
+            'model_state_dict': best_state,
+            'config': config, # Useful to save the config used to build the model!
+            'val_acc': best_val_acc
+        }, save_path)
+        print(f"Model permanently saved to {save_path}")
+
         # If you want to evaluate using the best pretrain weights:
         model.load_state_dict(best_state)
 
-        # --------- Finetuning / Adaptation per user ---------
+        # --------- Finetuning / Adaptation per Novel user ---------
+        ## NOTE: Allegedly this is the same as just calling meta_evaluate()
+        ## In the Outer Loop (Meta-Training), small batches are noisy. But in the Meta-Test phase, there is no "batch size" because there is no outer update.
+        ## You are just processing episodes one by one. Increasing the "batch size" here would just be a trick to make it run faster on your GPU by parallelizing users; it wouldn't change the accuracy at all.
         user_loaders = make_user_loaders_from_dataloaders(
             episodic_val_loader,
             episodic_test_loader,
             config,
         )
-
         user_accs = []
-
         for pid, (user_val_epi_dl, user_test_epi_dl) in user_loaders.items():
             # For FixedOneShotPerUserIterable, each dl will usually yield exactly 1 episode
+            ## TODO: Is this ^^ good or bad... does this imply I am training on (meta)batches of size 1?? 
+            # 2/4/26: switched from test_dl to val_dl (to keep test data completely separate from HPO)
 
-            if user_test_epi_dl is None:
+            if user_val_epi_dl is None:
+                raise ValueError("user_val_epi_dl is None, preventing maml_finetune_and_eval...")
                 continue
 
-            for episode in user_test_epi_dl:
-                support_batch = episode["support"]
-                query_batch   = episode["query"]
-
-                result = mamlpp_finetune_and_eval(
-                    model=model,
-                    config=config,
-                    support_batch=support_batch,
-                    query_batch=query_batch,
-                    # use_lslr_at_eval=False,
-                )
-
-                user_accs.append(result["acc"])
-                # optionally store result["adapted_params"] per pid
+            val_metrics = meta_evaluate(model, user_val_epi_dl, config)
+            final_user_val_loss, final_user_val_acc = val_metrics["loss"], val_metrics["acc"]
+            # NOTE: So we do have and maintain val_loss and val_acc logs! What happens to these? 
+            ## Maybe they are saved and I just dont know where... I dont think I've had a successful completed HPO run (since it takes too long)
+            ## Is the saving code for this already existing from the non-hpo runs??
+            #final_val_loss_log.append(final_user_val_loss)
+            #final_val_acc_log.append(final_user_val_acc)
+            user_accs.append(final_user_val_acc)
 
         mean_acc = float(np.mean(user_accs)) if len(user_accs) > 0 else float("nan")
+
+        # --- END TIMER & PRINT ---
+        fold_duration = time.time() - fold_start_time
         print(f"[Trial {trial.number} | Fold {fold_idx}] User accs: {user_accs}")
         print(f"[Trial {trial.number} | Fold {fold_idx}] Mean acc: {mean_acc*100:.2f}%")
+        print(f"[Trial {trial.number} | Fold {fold_idx}] Finished in {fold_duration:.2f} seconds.")
 
         fold_mean_accs.append(mean_acc)
         all_fold_user_accs.append(user_accs)
@@ -425,6 +431,7 @@ def objective(trial):
     print(f"[Trial {trial.number}] Overall k-fold mean acc: {overall_mean_acc*100:.2f}%")
 
     # ---- Log ancillary info for analysis ----
+    ## NOTE: This is logged as part of Optuna? How/where do I access this?... From the db??
     trial.set_user_attr("fold_mean_accs", fold_mean_accs)
     trial.set_user_attr("fold_user_accs", all_fold_user_accs)
     trial.set_user_attr("pretrain_val_accs_per_fold", pretrain_val_accs)
@@ -467,7 +474,7 @@ if __name__ == "__main__":
     storage_url = f"sqlite:///{db_path}"
 
     study_res = run_study(
-        study_name="maml_mmoe_4kfcv_hpo",
+        study_name="maml_mmoe_2fcv_hpo",
         storage=storage_url,
         n_trials=N_TRIALS,
     )

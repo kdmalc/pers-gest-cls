@@ -1,3 +1,8 @@
+# So I think this is the "traditional" altnerative to MAML
+## If I wasnt doing meta learnig then I would need to do this stuff for normal ML training, and finetuning, etc
+## I think this file tries to implement PEFT but it doesnt do it very well (None in WithUserOverride results in all zeros? Or maybe the weighted init vector? Either way useless)
+## MAML might pull some data processing funcs from here? Idk tbh
+
 import random, math, copy, numpy as np
 import torch
 import torch.nn as nn

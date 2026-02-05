@@ -27,16 +27,16 @@ SSL hooks (not implemented here)
 """
 from typing import Optional, Tuple
 
-from collections import defaultdict
-import random
+#from collections import defaultdict
+#import random
 import pandas as pd
-import pickle
-from sklearn.preprocessing import LabelEncoder
+#import pickle
+#from sklearn.preprocessing import LabelEncoder
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset, IterableDataset
+from torch.utils.data import DataLoader, TensorDataset#, IterableDataset
 
 # -------------------- Utility Blocks --------------------
 
@@ -462,6 +462,8 @@ class MultiModalMoEClassifier(nn.Module):
         else:
             self.user_table = None
 
+        ###################################################################################
+        # TODO: Another spot where MAML might be using u... figure this out
         if self.demo_encoder is not None:
             self.demo_to_u = nn.Sequential(
                 nn.LayerNorm(demo_emb_dim),
@@ -469,6 +471,7 @@ class MultiModalMoEClassifier(nn.Module):
             )
         else:
             self.demo_to_u = None
+        ###################################################################################
 
         # ---------- Misc ----------
         self.expert_keys = nn.Parameter(torch.randn(num_experts, D) * 0.1)
@@ -547,6 +550,8 @@ class MultiModalMoEClassifier(nn.Module):
         if self.pre_expert_proj is not None:
             core_embed = self.pre_expert_proj(core_embed)   # (B, expert_in_dim)
 
+        ################################################################################################
+        # TODO: Does MAML use u???
         # ---------- Build user embedding u ----------
         if self.config['u_user_and_demos'] == 'demo':
             if d_emb is None:
@@ -568,6 +573,7 @@ class MultiModalMoEClassifier(nn.Module):
             u = self.user_table(user_ids)
         else:
             raise ValueError("User embedding missing (check u_user_and_demos & inputs).")
+        ################################################################################################
 
         # ---------- Gate + Experts ----------
         # (A) Gate over the pre-widened core embedding
@@ -958,9 +964,9 @@ def build_dataloader_from_two_dfs(
     label_col="Enc_Gesture_ID",
     user_id_col="Enc_PID",
     window_len=64,
-    batch_size=64,
+    batch_size=64, # TODO: I dont like that its using this with a default value, also idk what this is doing in terms of a meta-batch...
     shuffle=True,
-    num_workers=0,
+    num_workers=0, # This ought to be pulled from the config...
     collate_fn=None,
 ):
     if emg_cols is None:
@@ -996,51 +1002,13 @@ def ensure_tensor(x, dtype=None):
     return torch.tensor(x, dtype=dtype)
 
 
-# TODO: Am I still using this? Would rather use my existing dataset class for everything...
-class _MultiModalTensorDataset(Dataset):
-    """
-    Returns dict samples:
-      {
-        'emg':  (C_emg, T) float32,
-        'imu':  (C_imu, T) float32 or None,
-        'demo': (D_demo,)  float32 or None,
-        'label': ()        int64,
-        'PIDs':  ()        int64  (=-1 if not provided)
-      }
-    """
-    def __init__(self, emg, imu, demo, labels, pids):
-        self.emg   = emg
-        self.imu   = imu
-        self.demo  = demo
-        self.label = labels
-        self.pids  = pids
-
-        n = self.emg.shape[0]
-        assert self.label.shape[0] == n, "labels length must match emg batch size"
-        if self.imu is not None:
-            assert self.imu.shape[0] == n, "imu length must match emg batch size"
-        if self.demo is not None:
-            assert self.demo.shape[0] == n, "demo length must match emg batch size"
-        assert self.pids.shape[0] == n, "PIDs length must match emg batch size"
-
-    def __len__(self):
-        return self.emg.shape[0]
-
-    def __getitem__(self, idx):
-        return {
-            'emg':   self.emg[idx],
-            'imu':   None if self.imu is None else self.imu[idx],
-            'demo':  None if self.demo is None else self.demo[idx],
-            'label': self.label[idx],
-            'PIDs':  self.pids[idx],
-        }
-
 def _reshape_2d_to_3d_if_needed(x, channels, length):
     # x: (N, C*L) -> (N, C, L)
     if x.ndim == 2:
         return x.view(-1, channels, length)
     return x
 
+# This does get used in mutlimodal_data_processing...
 def make_MOE_tensor_dataset(*args, reshape_2d_to_3d=True, participant_ids=None):
     """
     Overloaded behavior:
@@ -1159,14 +1127,13 @@ def make_MOE_tensor_dataset(*args, reshape_2d_to_3d=True, participant_ids=None):
                     raise ValueError(f"Failed to convert participant_ids to integers: {e}")
             pids_t = ensure_tensor(participant_ids, dtype=torch.long)
         else:
-            # TODO: HERE IS THE ERROR! It sets the -1 placeholder. Should be setting it to PID
+            # I dont think this branch is ever called? So this actually isnt a problem?
+            raise ValueError("PIDs not provided. Raising an error, if we don't need PIDs then figure out what we should do here")
+            # It sets the -1 placeholder. Should be setting it to PID
             ## I would have to pass PID in tho is all
-
             # Provide -1 placeholder so the key always exists
             pids_t = torch.full((emg.shape[0],), -1, dtype=torch.long)
             
-            raise ValueError("PIDs not provided. Raising an error, if we don't need PIDs then figure out what we should do here")
-
         # Length checks for demo/imu vs emg will be enforced in dataset ctor
         return _MultiModalTensorDataset(emg, imu, demo, labels, pids_t)
 
@@ -1175,3 +1142,44 @@ def make_MOE_tensor_dataset(*args, reshape_2d_to_3d=True, participant_ids=None):
             "make_MOE_tensor_dataset expected either 3 args (features, labels, config) "
             "or 5 args (emg, imu, demo, labels, config)."
         )
+
+
+# TODO: This is used below. Would rather use my existing dataset class for everything... or just 1 of these... simplify things...
+## Oh this is the private version of mine... ... is taht really necessary?
+class _MultiModalTensorDataset(Dataset):
+    """
+    Returns dict samples:
+      {
+        'emg':  (C_emg, T) float32,
+        'imu':  (C_imu, T) float32 or None,
+        'demo': (D_demo,)  float32 or None,
+        'label': ()        int64,
+        'PIDs':  ()        int64  (=-1 if not provided)
+      }
+    """
+    def __init__(self, emg, imu, demo, labels, pids):
+        self.emg   = emg
+        self.imu   = imu
+        self.demo  = demo
+        self.label = labels
+        self.pids  = pids
+
+        n = self.emg.shape[0]
+        assert self.label.shape[0] == n, "labels length must match emg batch size"
+        if self.imu is not None:
+            assert self.imu.shape[0] == n, "imu length must match emg batch size"
+        if self.demo is not None:
+            assert self.demo.shape[0] == n, "demo length must match emg batch size"
+        assert self.pids.shape[0] == n, "PIDs length must match emg batch size"
+
+    def __len__(self):
+        return self.emg.shape[0]
+
+    def __getitem__(self, idx):
+        return {
+            'emg':   self.emg[idx],
+            'imu':   None if self.imu is None else self.imu[idx],
+            'demo':  None if self.demo is None else self.demo[idx],
+            'label': self.label[idx],
+            'PIDs':  self.pids[idx],
+        }

@@ -13,7 +13,7 @@ from system.MAML_MOE.MOE_training import _model_forward_router, set_MOE_optimize
 # Functional execution helpers
 # -----------------------------
 def named_param_dict(module: nn.Module, *, require_grad_only: bool = True,
-                     exclude_bn_from_inner: bool = False) -> OrderedDict:
+                     exclude_bn_from_inner: bool = True) -> OrderedDict:
     params = OrderedDict()
     for name, p in module.named_parameters():
         if require_grad_only and not p.requires_grad:
@@ -21,6 +21,7 @@ def named_param_dict(module: nn.Module, *, require_grad_only: bool = True,
         # Exclude LSLR (and any inner-optim modules) from the inner set
         if name.startswith("_lslr.") or "._lslr." in name:
             continue
+        # TODO: So does this cover BN AND Layernorm?? ...
         if exclude_bn_from_inner and (
             'bn' in name.lower() or 'batchnorm' in name.lower() or 'norm_layer' in name.lower()
         ):
@@ -84,23 +85,23 @@ def apply_update_repo_style(params, grads, lslr, step, fallback_alpha=None):
 # -----------------------------
 # BN per-step (optional hooks)
 # -----------------------------
-def set_bn_step(mod: nn.Module, step: int):
-    """If you have BN-per-step wrappers, expose a `.set_step(int)` and we’ll call it here."""
-    for m in mod.modules():
-        if hasattr(m, 'set_step') and callable(getattr(m, 'set_step')):
-            m.set_step(step)
-
-def backup_bn_stats(mod: nn.Module):
-    """Optional: if your BN wrapper exposes `.backup()`."""
-    for m in mod.modules():
-        if hasattr(m, 'backup') and callable(getattr(m, 'backup')):
-            m.backup()
-
-def restore_bn_stats(mod: nn.Module):
-    """Optional: if your BN wrapper exposes `.restore()`."""
-    for m in mod.modules():
-        if hasattr(m, 'restore') and callable(getattr(m, 'restore')):
-            m.restore()
+#def set_bn_step(mod: nn.Module, step: int):
+#    """If you have BN-per-step wrappers, expose a `.set_step(int)` and we’ll call it here."""
+#    for m in mod.modules():
+#        if hasattr(m, 'set_step') and callable(getattr(m, 'set_step')):
+#            m.set_step(step)
+#
+#def backup_bn_stats(mod: nn.Module):
+#    """Optional: if your BN wrapper exposes `.backup()`."""
+#    for m in mod.modules():
+#        if hasattr(m, 'backup') and callable(getattr(m, 'backup')):
+#            m.backup()
+#
+#def restore_bn_stats(mod: nn.Module):
+#    """Optional: if your BN wrapper exposes `.restore()`."""
+#    for m in mod.modules():
+#        if hasattr(m, 'restore') and callable(getattr(m, 'restore')):
+#            m.restore()
 
 # -----------------------------
 # MSL weights (repo-accurate)
@@ -129,19 +130,11 @@ def inner_loop_mamlpp(
     theta0: OrderedDict,
     support_batch,
     query_batch,
-    device,
-    multimodal: bool,
-    *,
-    inner_steps: int,
-    criterion,
-    use_second_order: bool,
+    config,
     lslr: PerParamPerStepLSLR | None,
-    fallback_alpha: float,
+    *,
+    criterion,
     epoch: int,
-    total_epochs: int,
-    msl_use: bool,
-    msl_num_epochs: int,
-    exclude_bn_from_inner: bool,
 ):
     """
     Implements: DOA (via use_second_order), LSLR, BN per-step hooks, MSL (repo schedule).
@@ -152,6 +145,14 @@ def inner_loop_mamlpp(
     # early in training or only the final-step loss later.
     # We also evaluate “step 0” (before any adaptation) as in their code path.
 
+    device = config['device']
+    multimodal = config['multimodal']
+    msl_use = config['maml_msl_num_epochs'] > epoch 
+    msl_num_epochs = config['maml_msl_num_epochs']
+    use_second_order = config['maml_first_order_to_second_order_epoch'] > 0
+    fallback_alpha = config['maml_alpha_init']
+    inner_steps = config['maml_inner_steps']
+
     # MSL weights (used only if msl_use=True and epoch < msl_num_epochs)
     w = repo_msl_weights(inner_steps, epoch, msl_num_epochs, device=device)
 
@@ -160,8 +161,11 @@ def inner_loop_mamlpp(
     last_q_logits = last_q_labels = None
 
     for step in range(inner_steps + 1):
+        # Here, we do a forward pass on Query, then a forward pass on Support, then update
+        ## Doing this double forward pass is correct for MAML++ but is computationally expensive...
+
         # ---- Query loss at current params_i (for MSL) ----
-        set_bn_step(model, min(step, inner_steps))
+        #set_bn_step(model, min(step, inner_steps))
         f_q = FunctionalModel(model, params_i)
         outputs_q, labels_q, _ = _model_forward_router(f_q, query_batch, device, multimodal=multimodal)
         logits_q = outputs_q[0] if isinstance(outputs_q, tuple) else outputs_q
@@ -173,7 +177,7 @@ def inner_loop_mamlpp(
             break
 
         # ---- Support loss and inner update to get params_{i+1} ----
-        set_bn_step(model, step)
+        #set_bn_step(model, step)
         f_s = FunctionalModel(model, params_i)
         outputs_s, labels_s, _ = _model_forward_router(f_s, support_batch, device, multimodal=multimodal)
         logits_s = outputs_s[0] if isinstance(outputs_s, tuple) else outputs_s
@@ -233,10 +237,6 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
     # Per-parameter per-step learning rates (LSLR)
     use_lslr   = bool(config["maml_use_lslr"])
     alpha_init = float(config["maml_alpha_init"])
-
-    # MSL schedule controls
-    msl_use        = bool(config["maml_use_msl"])
-    msl_num_epochs = int(config["maml_msl_num_epochs"])
 
     # Episode scheduling
     episodes_per_batch = max(1, int(config["episodes_per_batch_train"]))  # meta-batch size
@@ -328,6 +328,16 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
         for step_item in episodic_loader:
             episodes = _normalize_step_item(step_item)
 
+            # --- PARTIAL BATCH FIX START ---
+            # We determine how many episodes will contribute to the NEXT update.
+            # It's usually 'episodes_per_batch', unless we are near the end 
+            # of the loader or the epoch limit.
+            remaining_in_epoch = episodes_per_epoch - n_episodes if episodes_per_epoch else float('inf')
+            
+            # This is the actual number of episodes we will process before calling meta_opt.step()
+            actual_batch_size = min(episodes_per_batch, len(episodes), remaining_in_epoch)
+            # --- PARTIAL BATCH FIX END ---
+
             for episode in episodes:
                 assert isinstance(episode, dict) and "support" in episode and "query" in episode, \
                     f"Bad episode structure: {type(episode)} keys={list(episode) if isinstance(episode, dict) else None}"
@@ -335,16 +345,13 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
                 support_batch = episode["support"]
                 query_batch   = episode["query"]
 
-                # Inner loop with the epoch-frozen theta0_full
+                # Inner loop with the epoch-frozen theta0_full                    
                 thetaN, q_logits_last, q_labels_last, meta_loss_task = inner_loop_mamlpp(
-                    model, theta0_full_epoch, support_batch, query_batch, device, multimodal,
-                    inner_steps=N, criterion=criterion, use_second_order=use_second_order,
-                    lslr=(model._lslr if use_lslr else None), fallback_alpha=alpha_init,
-                    epoch=int(epoch_idx), total_epochs=int(config["num_epochs"]),
-                    msl_use=msl_use, msl_num_epochs=msl_num_epochs,
-                    exclude_bn_from_inner=exclude_bn_from_inner,
+                    model, theta0_full_epoch, support_batch, query_batch, config, criterion=criterion, use_second_order=use_second_order,
+                    lslr=(model._lslr if use_lslr else None), epoch=int(epoch_idx)
                 )
 
+                # Metrics update
                 with torch.no_grad():
                     preds = q_logits_last.argmax(dim=1)
                     meta_correct += (preds == q_labels_last).sum().item()
@@ -352,14 +359,24 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
                     loss_sum     += float(meta_loss_task.item())
                 n_episodes += 1
 
-                (meta_loss_task / episodes_per_batch).backward()
+                # BETTER WAY: Use the actual_batch_size calculated for this specific chunk.
+                # This ensures that gradients are averaged correctly (sum / count)
+                # even if the last batch is smaller than episodes_per_batch.
+                (meta_loss_task / actual_batch_size).backward()
                 accum_count += 1
 
-                if accum_count == episodes_per_batch:
-                    # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+                # Check if we've reached our meta-batch size OR the epoch limit
+                if accum_count >= actual_batch_size:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
                     meta_opt.step()
                     meta_opt.zero_grad(set_to_none=True)
                     accum_count = 0
+                    
+                    # Re-calculate actual_batch_size for the NEXT chunk if needed
+                    remaining_in_epoch = episodes_per_epoch - n_episodes if episodes_per_epoch else float('inf')
+                    # Note: this logic assumes the next chunk is from the same 'episodes' list 
+                    # or the next iteration of episodic_loader. 
+                    actual_batch_size = min(episodes_per_batch, remaining_in_epoch)
 
                 if episodes_per_epoch and (n_episodes >= episodes_per_epoch):
                     break
@@ -377,62 +394,6 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
     avg_loss = loss_sum / max(n_episodes, 1)
     avg_acc  = meta_correct / max(meta_total, 1)
     return {"loss": avg_loss, "acc": avg_acc, "episodes": n_episodes}
-
-
-# -----------------------------
-# Meta-evaluation (no graph)
-# -----------------------------
-# TODO: How much adaptation are we doing in the test set? 
-## We dont really need to do every single possible task on our 4 test users...
-## It seems to be pretty low, meta-eval is only taking like 20s
-def meta_evaluate(model, episodic_loader, config, criterion=None):
-    device = config["device"]; model.to(device).eval()
-    multimodal = bool(config["multimodal"])
-    if criterion is None:
-        ls = float(config["label_smooth"])
-        criterion = nn.CrossEntropyLoss(label_smoothing=ls) if ls > 0 else nn.CrossEntropyLoss()
-
-    def _norm(x):
-        if isinstance(x, dict): return [x]
-        if isinstance(x, (list, tuple)): return list(x)
-        raise TypeError(f"Episode item must be dict or list/tuple; got {type(x)}")
-
-    total_loss = total_correct = total_count = n_eps = 0
-
-    for step_item in episodic_loader:
-        for ep in _norm(step_item):
-            support_batch, query_batch = ep["support"], ep["query"]
-
-            # ADAPT (needs grads)
-            with torch.enable_grad():
-                theta_adapted = mamlpp_adapt(model, config, support_batch,
-                                             use_lslr_at_eval=bool(config["use_lslr_at_eval"]))
-
-            # EVAL on query (no grads)
-            with torch.no_grad():
-                #set_bn_step(model, int(config["maml_inner_steps_eval"]))
-                N_eval = int(config["maml_inner_steps_eval"])
-                set_bn_step(model, max(N_eval - 1, 0))
-                f_q = FunctionalModel(model, theta_adapted)
-                outputs_q, labels_q, _ = _model_forward_router(f_q, query_batch, device, multimodal=multimodal)
-                logits_q = outputs_q[0] if isinstance(outputs_q, tuple) else outputs_q
-                q_loss = criterion(logits_q, labels_q)
-                preds = logits_q.argmax(dim=1)
-
-                total_loss   += float(q_loss.item())
-                total_correct += (preds == labels_q).sum().item()
-                total_count  += labels_q.numel()
-                n_eps        += 1
-
-    # NOTE: This is returning loss normalized by number of EPISODES
-    ## Whereas this returns accuracy normalized by number of SAMPLES
-    ## So they dont exactly correspond, I don't know that it matters...
-    ## This is also what train_one_epoch is doing FWIW
-    return {
-        "loss": total_loss / max(n_eps, 1),
-        "acc":  (total_correct / max(total_count, 1)) if total_count else 0.0,
-        "episodes": n_eps,
-    }
 
 
 # -----------------------------
@@ -502,9 +463,13 @@ def MAMLpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         cur_val_acc, cur_val_loss = None, None
         if episodic_val_loader is not None:
             val_start_time = time.time()
-            # This is not a user-specific evaluation. And I think that's fine here
+            # NOTE: This is not a user-specific evaluation. And I think that's fine here
+            ## The meta-train is not user-specific, I dont see any reason why I care about specific user perf during val (grouped seems fine)
             val_metrics = meta_evaluate(model, episodic_val_loader, config)
             cur_val_loss, cur_val_acc = val_metrics["loss"], val_metrics["acc"]
+            # NOTE: So we do have and maintain val_loss and val_acc logs! What happens to these? 
+            ## Maybe they are saved and I just dont know where... I dont think I've had a successful completed HPO run (since it takes too long)
+            ## Is the saving code for this already existing from the non-hpo runs??
             val_loss_log.append(cur_val_loss)
             val_acc_log.append(cur_val_acc)
 
@@ -528,6 +493,7 @@ def MAMLpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
                     scheduler.step()
                 break
         else:
+            raise ValueError("Why is Val Data Loader None?")
             # Keep list lengths aligned for consistency
             val_loss_log.append(None)
             val_acc_log.append(None)
@@ -577,6 +543,7 @@ def _replace_or_add_param_group(opt, old_params_iterable, new_params_iterable, *
 # HOW TO ADAPT OUR META MODEL
 
 def mamlpp_adapt(model, config, support_batch, *, use_lslr_at_eval=False):
+    """This function does the inner loop only, and uses .detach() and False graph bc we do NOT want to update the baes (meta) model"""
     device = config['device']; model.to(device).eval()
     multimodal = bool(config["multimodal"])
     N_eval = int(config["maml_inner_steps_eval"])
@@ -593,17 +560,17 @@ def mamlpp_adapt(model, config, support_batch, *, use_lslr_at_eval=False):
     assert all(p.requires_grad for p in theta.values()), "theta params do not require_grad (grad disabled?)"
 
     label_smooth = float(config["label_smooth"])
-    criterion = nn.CrossEntropyLoss(label_smoothing=label_smooth) if label_smooth > 0 else nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=label_smooth)
 
     use_lslr = bool(config["maml_use_lslr"]) and use_lslr_at_eval and hasattr(model, "_lslr")
     alpha_eval = float(config["maml_alpha_init_eval"])
 
-    backup_bn_stats(model)
+    #backup_bn_stats(model)
 
     # ADAPTATION MUST RUN WITH GRADS ENABLED
     with torch.enable_grad():
         for step in range(N_eval):
-            set_bn_step(model, step)
+            #set_bn_step(model, step)
             f_s = FunctionalModel(model, theta)
             outputs_s, labels_s, _ = _model_forward_router(f_s, support_batch, device, multimodal=multimodal)
             logits_s = outputs_s[0] if isinstance(outputs_s, tuple) else outputs_s
@@ -620,7 +587,7 @@ def mamlpp_adapt(model, config, support_batch, *, use_lslr_at_eval=False):
             # FOMAML: cut graph between steps, keep trainable
             theta = OrderedDict((n, p.detach().requires_grad_(True)) for n, p in theta.items())
 
-    restore_bn_stats(model)
+    #restore_bn_stats(model)
     return theta
 
 
@@ -636,7 +603,7 @@ def mamlpp_predict_with_params(model, adapted_params, batch, config):
     # If you use BN-per-step wrappers, you can select a stable bank, e.g. the last step index:
     N_eval = int(config["maml_inner_steps_eval"])
     #set_bn_step(model, N_eval)
-    set_bn_step(model, max(N_eval - 1, 0))
+    #set_bn_step(model, max(N_eval - 1, 0))
 
     fmodel = FunctionalModel(model, adapted_params)
     outputs, labels, B = _model_forward_router(fmodel, batch, device, multimodal=multimodal)
@@ -684,3 +651,46 @@ def mamlpp_finetune_and_eval(model, config, support_batch, query_batch):
 
 # # Later, for more batches from the same user (no re-adaptation):
 # logits, preds, labels, B = mamlpp_predict_with_params(model, theta_user, another_batch_from_user, config)
+
+
+# -----------------------------
+# Meta-evaluation (no graph)
+# -----------------------------
+# How much adaptation are we doing in the test set? 
+## We dont really need to do every single possible task on our 4 test users...
+## It seems to be pretty low, meta-eval is only taking like 20s
+## That is fine/expected, it is only doing a few gradient steps on the fast inner loop, no outer loop (thus no Hessian)
+def meta_evaluate(model, episodic_loader, config, criterion=None):
+    device = config["device"]; model.to(device).eval()
+    if criterion is None:
+        ls = float(config["label_smooth"])
+        criterion = nn.CrossEntropyLoss(label_smoothing=ls) if ls > 0 else nn.CrossEntropyLoss()
+
+    def _norm(x):
+        if isinstance(x, dict): return [x]
+        if isinstance(x, (list, tuple)): return list(x)
+        raise TypeError(f"Episode item must be dict or list/tuple; got {type(x)}")
+
+    total_loss = total_correct = total_count = n_eps = 0
+
+    for step_item in episodic_loader:
+        for ep in _norm(step_item):
+            # Just call the helper!
+            metrics = mamlpp_finetune_and_eval(model, config, ep["support"], ep["query"])
+            
+            # Aggregate
+            total_loss    += metrics["loss"]
+            # Note: finetune returns a ratio (acc), so you might need to grab 
+            # raw counts if you want perfect global accuracy, but averaging per-task acc is also common.
+            total_correct += (metrics["acc"] * len(ep["query"])) # approximated reverse engineering
+            total_count   += len(ep["query"])
+            n_eps         += 1
+
+    #This is actually the standard convention in Meta-Learning papers:
+    #Loss: Reported as "Mean Loss per Task." (How confused is the model usually?)
+    #Accuracy: Reported as "Global Accuracy" (Total Correct / Total Queries) OR "Mean Accuracy per Task.
+    return {
+        "loss": total_loss / max(n_eps, 1),
+        "acc":  (total_correct / max(total_count, 1)) if total_count else 0.0,
+        "episodes": n_eps,
+    }

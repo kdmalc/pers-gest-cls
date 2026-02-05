@@ -106,6 +106,7 @@ class EpisodicIterable(IterableDataset):
 
         for _ in range(self.episodes_per_epoch):
             # --- pick a user with enough eligible classes
+            ## So all my episodes are single-user? I think that is fine... prevents collisions certainly
             u = rng.choice(self.users)
             eligible = self.uc.classes_with_min_count(u, min_count=need)
             if len(eligible) < self.n_way:
@@ -120,6 +121,7 @@ class EpisodicIterable(IterableDataset):
 
             classes = rng.sample(eligible, self.n_way)  # N distinct classes
 
+            # Within-episode label shuffling
             # randomize class order -> random local IDs
             if self.shuffle_classes:
                 rng.shuffle(classes)
@@ -141,6 +143,9 @@ class EpisodicIterable(IterableDataset):
 
             # --- (optional) TASK-LEVEL META-AUGMENTATION (train only)
             # You can modify the class set and/or the actual samples here.
+            # This is the code to augment in place
+            ## It probably would be easier to just load in an augmented dataset
+            ## Would be quicker on the cluster too (probably?) so we don't have to augment in place (do have to handle more data tho?)
             if self.task_augment is not None:
                 classes, support_by_class, query_by_class = self.task_augment(
                     user_id=u,

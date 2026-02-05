@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem=10G
-#SBATCH --time=19:00:00
+#SBATCH --time=23:00:00
 #SBATCH --gres=gpu:1
 # Optional, only if your site really has those node features:
 # # SBATCH --constraint="ampere|lovelace"
