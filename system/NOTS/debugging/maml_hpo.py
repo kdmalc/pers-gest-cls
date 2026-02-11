@@ -1,8 +1,10 @@
 # NOTE: This file does NOT auto sync on the cluster!
 ## While it is on the cluster, there is a separate copy on SCRATCH that is called by slurm
 ## ... if it is on projects then I could just have slurm call this copy....... ......
+## Why do I even need a copy on SCRATCH? Why cant I just pull the PROJECTS version? ...
+# NOTE: AFAIK this is now synced? Remove the version in scratch to double check
 
-N_TRIALS = 2
+N_TRIALS = 1
 
 import os
 code_dir = os.environ["CODE_DIR"]
@@ -15,8 +17,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import optuna
-from optuna.samplers import TPESampler
-from optuna.pruners import MedianPruner
+#from optuna.samplers import TPESampler
+#from optuna.pruners import MedianPruner
+from optuna.storages import JournalStorage, JournalFileBackend
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
@@ -441,41 +444,51 @@ def objective(trial):
     return overall_mean_acc
 
 
-def run_study(study_name="maml_mmoe_ft_HPO", storage=None, n_trials=2):
+def run_study(study_name, storage_path, n_trials=1):
 
-    sampler = TPESampler(n_startup_trials=12, multivariate=True, group=True)
-    pruner  = MedianPruner(n_startup_trials=8, n_warmup_steps=0)
+    # Generate a random sleep offset
+    # This prevents the "Thundering Herd" problem on HPC filesystems
+    sleep_time = random.uniform(0, 60)
+    print(f"Staggering start: sleeping for {sleep_time:.2f} seconds...")
+    time.sleep(sleep_time)
+
+    # 1. Use JournalStorage to avoid SQLite locking issues on HPC filesystems
+    lock_obj = JournalFileBackend(storage_path)
+    storage = JournalStorage(lock_obj)
+
+    # 2. Add a small random sleep to prevent "thundering herd" race conditions
+    # when multiple jobs start at the exact same millisecond.
+    time.sleep(random.uniform(0, 10))
+
+    sampler = optuna.samplers.TPESampler(n_startup_trials=12, multivariate=True, group=True)
+    pruner = optuna.samplers.MedianPruner(n_startup_trials=8, n_warmup_steps=0)
 
     study = optuna.create_study(
         study_name=study_name,
         direction="maximize",
         sampler=sampler,
         pruner=pruner,
-        storage=storage,          # e.g., "sqlite:///optuna_moe.db"
-        load_if_exists=True,
+        storage=storage,
+        load_if_exists=True, # Critical for parallel workers
     )
+
+    # 3. Setting n_trials=1 ensures this job does one set of HPs and then finishes.
+    # This allows Slurm to manage the queue effectively.
     study.optimize(objective, n_trials=n_trials, gc_after_trial=True)
-
-    print("Best trial:")
-    bt = study.best_trial
-    print("  value (k-fold mean finetune acc):", bt.value)
-    print("  params:")
-    for k, v in bt.params.items():
-        print(f"    {k}: {v}")
-    print("  mean_pretrain_val_acc:", bt.user_attrs.get("mean_pretrain_val_acc"))
-    print("  fold_mean_accs:", bt.user_attrs.get("fold_mean_accs"))
-
+    
     return study
 
-
 if __name__ == "__main__":
-    # NOTE: This is where the SQL db is set!
-    db_path = "/scratch/my13/kai/meta-pers-gest/optuna_dbs/maml_moe_hpo.db"
-    storage_url = f"sqlite:///{db_path}"
+    # Ensure the directory for the journal exists
+    db_dir = "/scratch/my13/kai/meta-pers-gest/optuna_dbs"
+    os.makedirs(db_dir, exist_ok=True)
+    
+    # The journal file is just a log of operations (no complex SQL locking)
+    journal_path = os.path.join(db_dir, "maml_CNNMMLP_2fcv_hpo.log")
 
-    study_res = run_study(
-        study_name="maml_mmoe_2fcv_hpo",
-        storage=storage_url,
-        n_trials=N_TRIALS,
+    run_study(
+        study_name="maml_CNNMMLP_2fcv_hpo",
+        storage_path=journal_path,
+        n_trials=N_TRIALS, # Each Slurm worker does one trial (N_TRIALS=1)
     )
 

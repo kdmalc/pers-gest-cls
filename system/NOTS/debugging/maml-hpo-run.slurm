@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem=10G
-#SBATCH --time=23:00:00
+#SBATCH --time=11:45:00
 #SBATCH --gres=gpu:1
 # Optional, only if your site really has those node features:
 # # SBATCH --constraint="ampere|lovelace"
@@ -13,8 +13,11 @@
 # SBATCH --export=HOME,USER,LOGNAME,SHELL,LANG,LC_ALL,PATH,PROJECTS,WORK,SHARED_SCRATCH,LOCAL_SCRATCH
 #SBATCH --export=ALL
 
+# Launch 5 workers (Trial IDs will be managed by Optuna automatically)
+#SBATCH --array=1-5
+
 # Safer bash: exit on error/undefined vars; fail pipelines if any step fails
-echo "JOB_START host=$(hostname) date=$(date)"
+echo "JOB_START host=$(hostname) date=$(date) ArrayID=${SLURM_ARRAY_TASK_ID}"
 #set -euo pipefail
 #echo "after set -euo pipefail"
 
@@ -41,21 +44,14 @@ export DEBUG_RUN_DIR=/scratch/my13/kai/runs
 #mkdir -p "$RUN_DIR" /scratch/my13/kai/logs
 # For relative file imports (in other .py files)
 export MOE_DIR="$CODE_DIR/system/MAML_MOE"
-
-# before running python
+# before running python:
 # Put CODE_DIR (for ...) and MOE_DIR (for ...) on PYTHONPATH
 export PYTHONPATH="$CODE_DIR:$MOE_DIR:$PYTHONPATH"
 
-#echo "===== Sanity ====="
-#echo "Host: $(hostname)"
-#echo "which python: $(which python)"
-#python -V
-#python -c "import sys; print('sys.prefix:', sys.prefix)"
-#python -c "import numpy as np; print('numpy:', np.__version__)"
-#nvidia-smi || true
-#echo "=================="
-
 echo "CWD:"; pwd
+
+# Run the script
+# Each array task will run the python script, which runs 1 trial and exits.
 python -u "$CODE_DIR/system/NOTS/debugging/maml_hpo.py" \
     --data_dir "$DATA_DIR" \
     --out_dir  "$DEBUG_RUN_DIR"

@@ -165,8 +165,9 @@ def inner_loop_mamlpp(
         ## Doing this double forward pass is correct for MAML++ but is computationally expensive...
 
         # ---- Query loss at current params_i (for MSL) ----
+        # THIS IS THE INITIAL CHECK: how does the model perform on the query BEFORE we have seen/trained on the support set?
         #set_bn_step(model, min(step, inner_steps))
-        f_q = FunctionalModel(model, params_i)
+        f_q = FunctionalModel(model, params_i)  # This makes the temporary copy of the model, I think
         outputs_q, labels_q, _ = _model_forward_router(f_q, query_batch, device, multimodal=multimodal)
         logits_q = outputs_q[0] if isinstance(outputs_q, tuple) else outputs_q
         q_loss_step = criterion(logits_q, labels_q)
@@ -177,12 +178,12 @@ def inner_loop_mamlpp(
             break
 
         # ---- Support loss and inner update to get params_{i+1} ----
+        # SUPPORT EVALUATION + calculate loss and gradients
         #set_bn_step(model, step)
         f_s = FunctionalModel(model, params_i)
         outputs_s, labels_s, _ = _model_forward_router(f_s, support_batch, device, multimodal=multimodal)
         logits_s = outputs_s[0] if isinstance(outputs_s, tuple) else outputs_s
         s_loss = criterion(logits_s, labels_s)
-
         # compute grads wrt params_i
         grads = torch.autograd.grad(
             s_loss,
@@ -239,8 +240,8 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
     alpha_init = float(config["maml_alpha_init"])
 
     # Episode scheduling
-    episodes_per_batch = max(1, int(config["episodes_per_batch_train"]))  # meta-batch size
-    episodes_per_epoch = max(0, int(config["episodes_per_epoch_train"]))  # 0 → no explicit cap
+    episodes_per_batch = int(config["episodes_per_batch_train"])  # meta-batch size
+    episodes_per_epoch = int(config["episodes_per_epoch_train"])  # 0 → no explicit cap
 
     # Metrics
     meta_correct = 0
@@ -249,21 +250,22 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
     n_episodes   = 0
 
     # ---------- NEW: Freeze inner-loop param set once per epoch ----------
-    # Important: named_param_dict must already exclude _lslr.* (you added that).
-    theta0_full_epoch = named_param_dict(
-        model, require_grad_only=True,
-        exclude_bn_from_inner=exclude_bn_from_inner
-    )
-    # Optional safety: cache and assert stability of keys across epochs
-    if not hasattr(model, "_inner_keys_frozen"):
-        model._inner_keys = tuple(theta0_full_epoch.keys())
-        model._inner_keys_frozen = True
-    else:
-        # If something changed, rebuild from frozen keys to guarantee stability
-        if set(theta0_full_epoch.keys()) != set(model._inner_keys):
-            # Re-map from frozen names to current parameter objects
-            name_to_param = dict(model.named_parameters())
-            theta0_full_epoch = OrderedDict((n, name_to_param[n]) for n in model._inner_keys)
+    # NOTE: This could be causing a bug? I am moving this inside of the episodes so it freezes once per episode instead of once per epoch...
+    ## Important: named_param_dict must already exclude _lslr.* (you added that).
+    #theta0_full_epoch = named_param_dict(
+    #    model, require_grad_only=True,
+    #    exclude_bn_from_inner=exclude_bn_from_inner
+    #)
+    ## Optional safety: cache and assert stability of keys across epochs
+    #if not hasattr(model, "_inner_keys_frozen"):
+    #    model._inner_keys = tuple(theta0_full_epoch.keys())
+    #    model._inner_keys_frozen = True
+    #else:
+    #    # If something changed, rebuild from frozen keys to guarantee stability
+    #    if set(theta0_full_epoch.keys()) != set(model._inner_keys):
+    #        # Re-map from frozen names to current parameter objects
+    #        name_to_param = dict(model.named_parameters())
+    #        theta0_full_epoch = OrderedDict((n, name_to_param[n]) for n in model._inner_keys)
 
     # ---------- NEW: Ensure/sync LSLR ONCE per epoch ----------
     def _ensure_lslr_synced_once_per_epoch(theta0_full):
@@ -314,7 +316,7 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
     _ensure_lslr_synced_once_per_epoch(theta0_full_epoch)
 
     # Optional BN snapshot/restore per epoch
-    backup_bn_stats(model)
+    #backup_bn_stats(model)
 
     def _normalize_step_item(step_item):
         if isinstance(step_item, dict): return [step_item]
@@ -324,75 +326,89 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
     # -------- Training loop with optional meta-batch accumulation --------
     meta_opt.zero_grad(set_to_none=True)
     accum_count = 0
-    try:
-        for step_item in episodic_loader:
-            episodes = _normalize_step_item(step_item)
+    #try:
+    for step_item in episodic_loader:
+        episodes = _normalize_step_item(step_item)
 
-            # --- PARTIAL BATCH FIX START ---
-            # We determine how many episodes will contribute to the NEXT update.
-            # It's usually 'episodes_per_batch', unless we are near the end 
-            # of the loader or the epoch limit.
-            remaining_in_epoch = episodes_per_epoch - n_episodes if episodes_per_epoch else float('inf')
+        # --- PARTIAL BATCH FIX START ---
+        # We determine how many episodes will contribute to the NEXT update.
+        # It's usually 'episodes_per_batch', unless we are near the end of the loader or the epoch limit.
+        # We need to do this so if we do have many less eps in the batch, we scale the lr accordingly so our gradient step isnt tiny...
+        # This is related to how many episodes are... in the limit or how many are available in the data loader?...
+        remaining_in_epoch = episodes_per_epoch - n_episodes if episodes_per_epoch else float('inf')
+        
+        # This is the actual number of episodes we will process before calling meta_opt.step()
+        actual_batch_size = min(episodes_per_batch, len(episodes), remaining_in_epoch)
+
+        if n_episodes % 100 == 0:
+            print(f"--- Episode {n_episodes}/{episodes_per_epoch} | Current Meta-Batch Size: {actual_batch_size} ---")
+        # --- PARTIAL BATCH FIX END ---
+
+        for episode in episodes:
+            assert isinstance(episode, dict) and "support" in episode and "query" in episode, \
+                f"Bad episode structure: {type(episode)} keys={list(episode) if isinstance(episode, dict) else None}"
             
-            # This is the actual number of episodes we will process before calling meta_opt.step()
-            actual_batch_size = min(episodes_per_batch, len(episodes), remaining_in_epoch)
-            # --- PARTIAL BATCH FIX END ---
+            # NOTE: Moved this from once per epoch to be once per episode
+            # Capture the current global weights IMMEDIATELY before the inner loop.
+            # This ensures if meta_opt.step() just ran, we use the NEW weights.
+            current_theta0 = named_param_dict(
+                model, 
+                require_grad_only=True, 
+                exclude_bn_from_inner=exclude_bn_from_inner
+            )
 
-            for episode in episodes:
-                assert isinstance(episode, dict) and "support" in episode and "query" in episode, \
-                    f"Bad episode structure: {type(episode)} keys={list(episode) if isinstance(episode, dict) else None}"
+            support_batch = episode["support"]
+            query_batch   = episode["query"]
 
-                support_batch = episode["support"]
-                query_batch   = episode["query"]
+            # Inner loop with the epoch-frozen theta0_full                    
+            thetaN, q_logits_last, q_labels_last, meta_loss_task = inner_loop_mamlpp(
+                #model, theta0_full_epoch, support_batch, query_batch, config, criterion=criterion, use_second_order=use_second_order,
+                model, current_theta0, support_batch, query_batch, config, criterion=criterion, use_second_order=use_second_order,
+                lslr=(model._lslr if use_lslr else None), epoch=int(epoch_idx)
+            )
 
-                # Inner loop with the epoch-frozen theta0_full                    
-                thetaN, q_logits_last, q_labels_last, meta_loss_task = inner_loop_mamlpp(
-                    model, theta0_full_epoch, support_batch, query_batch, config, criterion=criterion, use_second_order=use_second_order,
-                    lslr=(model._lslr if use_lslr else None), epoch=int(epoch_idx)
-                )
+            # Metrics update
+            # NOTE: These metrics are (correctly) logged AFTER inner steps. Are these the training metrics that are printed?? Yes, later (in one_epoch func)
+            with torch.no_grad():
+                preds = q_logits_last.argmax(dim=1)
+                meta_correct += (preds == q_labels_last).sum().item()
+                meta_total   += q_labels_last.numel()
+                loss_sum     += float(meta_loss_task.item())
+            n_episodes += 1
 
-                # Metrics update
-                with torch.no_grad():
-                    preds = q_logits_last.argmax(dim=1)
-                    meta_correct += (preds == q_labels_last).sum().item()
-                    meta_total   += q_labels_last.numel()
-                    loss_sum     += float(meta_loss_task.item())
-                n_episodes += 1
+            # BETTER WAY: Use the actual_batch_size calculated for this specific chunk.
+            # This ensures that gradients are averaged correctly (sum / count)
+            # even if the last batch is smaller than episodes_per_batch.
+            (meta_loss_task / actual_batch_size).backward()
+            accum_count += 1
 
-                # BETTER WAY: Use the actual_batch_size calculated for this specific chunk.
-                # This ensures that gradients are averaged correctly (sum / count)
-                # even if the last batch is smaller than episodes_per_batch.
-                (meta_loss_task / actual_batch_size).backward()
-                accum_count += 1
-
-                # Check if we've reached our meta-batch size OR the epoch limit
-                if accum_count >= actual_batch_size:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
-                    meta_opt.step()
-                    meta_opt.zero_grad(set_to_none=True)
-                    accum_count = 0
-                    
-                    # Re-calculate actual_batch_size for the NEXT chunk if needed
-                    remaining_in_epoch = episodes_per_epoch - n_episodes if episodes_per_epoch else float('inf')
-                    # Note: this logic assumes the next chunk is from the same 'episodes' list 
-                    # or the next iteration of episodic_loader. 
-                    actual_batch_size = min(episodes_per_batch, remaining_in_epoch)
-
-                if episodes_per_epoch and (n_episodes >= episodes_per_epoch):
-                    break
+            # Check if we've reached our meta-batch size OR the epoch limit
+            if accum_count >= actual_batch_size:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+                meta_opt.step()
+                meta_opt.zero_grad(set_to_none=True)
+                accum_count = 0
+                
+                # Re-calculate actual_batch_size for the NEXT chunk if needed
+                remaining_in_epoch = episodes_per_epoch - n_episodes if episodes_per_epoch else float('inf')
+                # Note: this logic assumes the next chunk is from the same 'episodes' list 
+                # or the next iteration of episodic_loader. 
+                actual_batch_size = min(episodes_per_batch, remaining_in_epoch)
 
             if episodes_per_epoch and (n_episodes >= episodes_per_epoch):
                 break
 
-        if accum_count > 0:
-            meta_opt.step()
-            meta_opt.zero_grad(set_to_none=True)
+        if episodes_per_epoch and (n_episodes >= episodes_per_epoch):
+            break
 
-    finally:
-        restore_bn_stats(model)
+    if accum_count > 0:
+        meta_opt.step()
+        meta_opt.zero_grad(set_to_none=True)
+    #finally:
+    #    restore_bn_stats(model)
 
-    avg_loss = loss_sum / max(n_episodes, 1)
-    avg_acc  = meta_correct / max(meta_total, 1)
+    avg_loss = loss_sum / n_episodes
+    avg_acc  = meta_correct / meta_total
     return {"loss": avg_loss, "acc": avg_acc, "episodes": n_episodes}
 
 
