@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class MoELayer(nn.Module):
+class MOELayer(nn.Module):
     def __init__(self, input_dim, output_dim, num_experts, context_dim, config):
-        super(MoELayer, self).__init__()
+        super(MOELayer, self).__init__()
         self.num_experts = num_experts
         self.shared_expert_enabled = config['shared_expert']
         self.complex_experts = config['complex_experts']

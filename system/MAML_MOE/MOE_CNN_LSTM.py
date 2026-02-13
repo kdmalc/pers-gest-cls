@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from moe_shared import MoELayer
+from MOE_shared import MOELayer
 
 class ContextEncoder(nn.Module):
     """
