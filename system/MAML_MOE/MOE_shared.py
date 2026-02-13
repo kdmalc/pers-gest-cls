@@ -6,7 +6,7 @@ class MOELayer(nn.Module):
     def __init__(self, input_dim, output_dim, num_experts, context_dim, config):
         super(MOELayer, self).__init__()
         self.num_experts = num_experts
-        self.shared_expert_enabled = config['shared_expert']
+        self.use_shared_expert = config['use_shared_expert']
         self.complex_experts = config['complex_experts']
         self.gate_type = config['gate_type']
         
@@ -62,8 +62,10 @@ class MOELayer(nn.Module):
 
         # 3. Shared Expert Logic
         # If enabled, expert[0] is always active, others are weighted
-        if self.shared_expert_enabled:
+        if self.use_shared_expert:
             # We treat the first expert as "Shared"
+            # TODO: What is this doing? Why don't we just create / select a separate expert? ...
+            ## Is this the standard behaviour...
             shared_weight = 0.5 # Or make this learnable
             # Re-scale other weights to fit in the remaining 0.5
             weights = weights * (1 - shared_weight)

@@ -131,6 +131,7 @@ def build_model_from_trial(trial, base_config=None):
     # ----- Model layout hyperparams -----
     #config["user_emb_dim"]  = trial.suggest_int("user_emb_dim", 12, 48)  # TODO: This is the size u? I dont think this is used with the new model?
     config["num_experts"]   = trial.suggest_int("num_experts", 2, 10)
+    config["use_shared_expert"]   = trial.suggest_categorical("use_shared_expert", [True, False])
     config["top_k"]         = trial.suggest_categorical("top_k", [None, 1, 2, 3])  # None means all/equal voting
     config["gate_type"]     = trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
 
