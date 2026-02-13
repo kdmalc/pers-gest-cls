@@ -20,6 +20,8 @@ class MOELayer(nn.Module):
             gate_in = config['demo_emb_dim']
         elif self.gate_type == 'context_feature':
             gate_in = context_dim + input_dim
+        elif self.gate_type == 'context_feature_demo':
+            gate_in = context_dim + input_dim + config['demo_emb_dim']
         else:
             raise ValueError(f"Unknown gate type: {self.gate_type}")
 
