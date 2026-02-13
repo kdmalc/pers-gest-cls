@@ -230,10 +230,10 @@ def build_model_from_trial(trial, base_config=None):
     if config["maml_opt_order"] == "hybrid":
         config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 1, 40)      # DOA threshold (epochs <= this are first-order)
     # Theoretically this should be even be used, but just in case...
-    elif config["maml_opt_order"] == "first":
-        config["maml_first_order_to_second_order_epoch"] = 1000000  # Arbitrarily large to never trigger and switch to second
-    elif config["maml_opt_order"] == "second":
-        config["maml_first_order_to_second_order_epoch"] = 0  # Do second the whole time
+    #elif config["maml_opt_order"] == "first":
+    #    config["maml_first_order_to_second_order_epoch"] = 1000000  # Arbitrarily large to never trigger and switch to second
+    #elif config["maml_opt_order"] == "second":
+    #    config["maml_first_order_to_second_order_epoch"] = 0  # Do second the whole time
     
     # use MSL during first N epochs; after that, final-step loss only
     ## First epochs are MSL, then turns it off
@@ -241,10 +241,10 @@ def build_model_from_trial(trial, base_config=None):
     if config["use_maml_msl"] == "hybrid":
         config["maml_msl_num_epochs"] = trial.suggest_int("maml_msl_num_epochs", 1, 40)  # Also note that currently the max num_epochs is 40 (plus we use ES so may not even hit this)
     # Theoretically this should be even be used, but just in case...
-    elif config["use_maml_msl"] == True:
-        config["maml_msl_num_epochs"] = 1000000  # Arbitrarily large to never trigger and turn MSL off
-    elif config["use_maml_msl"] == False:
-        config["maml_msl_num_epochs"] = 0
+    #elif config["use_maml_msl"] == True:
+    #    config["maml_msl_num_epochs"] = 1000000  # Arbitrarily large to never trigger and turn MSL off
+    #elif config["use_maml_msl"] == False:
+    #    config["maml_msl_num_epochs"] = 0
     
     config["maml_use_lslr"] = trial.suggest_categorical("maml_use_lslr", [True, False])                             # learn per-parameter, per-step inner LRs
     # TODO: Is this maml_alpha_init being used as a learning rate?
