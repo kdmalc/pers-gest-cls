@@ -281,9 +281,9 @@ def build_model_from_trial(trial, base_config=None):
     #        exp.drop.p = config["expert_dropout"]
 
     # Swap head if cosine
-    if config["head_type"] == "cosine":
-        #swap_expert_head_to_cosine(model, emb_dim=config["emb_dim"], num_classes=config["num_classes"], init_tau=config["init_tau"])
-        model.swap_expert_head_to_cosine(init_tau=config["init_tau"])  # Default values: init_tau=10.0, learnable_tau=True)
+    #if config["head_type"] == "cosine":
+    #    #swap_expert_head_to_cosine(model, emb_dim=config["emb_dim"], num_classes=config["num_classes"], init_tau=config["init_tau"])
+    #    model.swap_expert_head_to_cosine(init_tau=config["init_tau"])  # Default values: init_tau=10.0, learnable_tau=True)
 
     model.to(device)
     return model, config
