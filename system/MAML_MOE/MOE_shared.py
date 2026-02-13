@@ -19,9 +19,9 @@ class CosineHead(nn.Module):
         # Result is cosine similarity scaled by temperature tau
         return self.tau * (h @ W.t())
 
-class MoELayer(nn.Module):
+class MOELayer(nn.Module):
     def __init__(self, input_dim, output_dim, num_experts, context_dim, config):
-        super(MoELayer, self).__init__()
+        super(MOELayer, self).__init__()
         self.num_experts = num_experts
         self.output_dim = output_dim
         self.expert_architecture = config.get('expert_architecture', 'MLP')
