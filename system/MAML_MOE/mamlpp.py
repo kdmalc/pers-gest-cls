@@ -236,9 +236,7 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
 
     # Inner loop settings
     N = int(config["maml_inner_steps"])
-    # TODO: Fix this to use hybrid or something...
-    use_second_order = bool(config["maml_second_order"]) and \
-                       (epoch_idx > int(config["maml_first_order_to_second_order_epoch"]))
+    use_second_order = (config["maml_opt_order"]=="second") or (config["maml_opt_order"]=="hybrid" and epoch_idx > int(config["maml_first_order_to_second_order_epoch"]))
     exclude_bn_from_inner = not bool(config["enable_inner_loop_optimizable_bn_params"])
 
     # Per-parameter per-step learning rates (LSLR)
