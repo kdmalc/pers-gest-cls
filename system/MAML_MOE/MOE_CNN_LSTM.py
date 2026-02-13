@@ -95,7 +95,7 @@ class MultimodalCNNLSTMMOE(nn.Module):
         )
 
         # 5. MoE Head
-        self.moe = MoELayer(input_dim=self.feature_dim, output_dim=config['num_classes'], num_experts=config['num_experts'], context_dim=config['context_emb_dim'], config=config)
+        self.moe = MOELayer(input_dim=self.feature_dim, output_dim=config['num_classes'], num_experts=config['num_experts'], context_dim=config['context_emb_dim'], config=config)
 
     def _build_cnn(self, in_channels, base_filters, num_layers, kernel_size, stride, gn_groups):
         layers = []
