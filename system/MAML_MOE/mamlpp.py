@@ -375,7 +375,7 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
             # Inner loop with the epoch-frozen theta0_full                    
             thetaN, q_logits_last, q_labels_last, meta_loss_task = inner_loop_mamlpp(
                 #model, theta0_full_epoch, support_batch, query_batch, config, criterion=criterion, use_second_order=use_second_order,
-                model, current_theta0, support_batch, query_batch, config, criterion=criterion, use_second_order=use_second_order,
+                model, current_theta0, support_batch, query_batch, config, criterion=criterion,
                 lslr=(model._lslr if use_lslr else None), epoch=int(epoch_idx)
             )
 
