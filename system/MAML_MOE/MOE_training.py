@@ -369,7 +369,7 @@ def set_MOE_optimizer(
     elif name == "SGD":
         return torch.optim.SGD(params, lr=lr, weight_decay=wd)
     else:
-        raise ValueError(f"Only ADAM, ADAMW, and SGD are supported; got {optimizer_name!r}")
+        raise ValueError(f"Only ADAM, ADAMW, and SGD are supported; got {optimizer_name}")
     
 def MOE_fine_tune_model(finetuned_model, fine_tune_loader, config: dict, timestamp: str, val_loader=None, pid=None, num_epochs=None):
     """

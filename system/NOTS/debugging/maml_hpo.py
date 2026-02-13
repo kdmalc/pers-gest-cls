@@ -132,9 +132,13 @@ def build_model_from_trial(trial, base_config=None):
     #config["user_emb_dim"]  = trial.suggest_int("user_emb_dim", 12, 48)  # TODO: This is the size u? I dont think this is used with the new model?
     config["num_experts"]   = trial.suggest_int("num_experts", 2, 10)
     config["use_shared_expert"]   = trial.suggest_categorical("use_shared_expert", [True, False])
-    config["expert_architecture"]   = trial.suggest_categorical("expert_architecture", ["MLP", "linear"])
+    config["expert_architecture"]   = trial.suggest_categorical("expert_architecture", ["MLP", "linear", "cosine"])
+    # TODO: Should I add init_tau back in? Or is it not worth HPOing over...
+    #if config["expert_architecture"] == "cosine":
+    #    config["init_tau"] = 5.0  #trial.suggest_float("init_tau", 5.0, 30.0)
     config["top_k"]         = trial.suggest_categorical("top_k", [None, 1, 2, 3])  # None means all/equal voting
     config["gate_type"]     = trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
+    #config["gate_dense_before_topk"] = True 
 
     # NEW MULTIMODAL
     # NOTE: GroupNorm uses 8 groups currently, could raise/lower that, but emb_dim must be divisible by num_groups or it will break!!
@@ -166,11 +170,8 @@ def build_model_from_trial(trial, base_config=None):
     config['num_epochs'] = 40  # TODO: Wasnt it doing 35 epochs... is this used or overwritten somewhere.......
     #config['num_ft_epochs'] = 15  # Is this used?
 
-    # TODO: UPDATE THESE! Is mixture_mode used with the new MOE? Idt so...
-    config["pool_mode"] = trial.suggest_categorical("pool_mode", ['avg', 'max', 'avgmax']) 
-    config["mixture_mode"] = 'logits'  # 'logits' | 'probs' | 'logprobs' --> I don't think this is implemented AFAIK
-    # TODO: This still exists but has been renamed surely...
-    #config["gate_requires_u_user"] = False if config["gate_type"] == "feature_only" else True
+    #config["pool_mode"] = trial.suggest_categorical("pool_mode", ['avg', 'max', 'avgmax'])  # --> I dont remember what this was or where it was...
+    config["mixture_mode"] = 'logits'  # 'logits' | 'probs' | 'logprobs' --> I didnt even add the other options
 
     # TODO: is this used?
     config['log_each_pid_results'] = False
@@ -181,15 +182,9 @@ def build_model_from_trial(trial, base_config=None):
     config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [32, 64, 128])
     config["lstm_layers"] = trial.suggest_categorical("lstm_layers", [1, 2, 3])
     #config["lstm_bidirectional"] = True  # Not used, True by default (hardcoded)
-    config["temporal_pool_mode"] = "last"    # "last" | "mean"   (pool *after* LSTM)  # TODO: This has been renamed right? Or wrapped up in use_GlobalAvgPooling?
+    #config["temporal_pool_mode"] = "last"    # "last" | "mean"   (pool *after* LSTM)  # TODO: This has been renamed right? Or wrapped up in use_GlobalAvgPooling?
     # ---- MoE placement (you can leave this as-is; we keep MoE at the head) ----
-    #config["moe_placement"] = "head"        # ("head" recommended; others optional/unused here)
-
-    # Head choice
-    # TODO: Does this stuff still get used... I dont think I have the cosine head code anymore even right?...
-    #config["head_type"]     = trial.suggest_categorical("head_type", ["linear", "cosine"])
-    #if config["head_type"] == "cosine":
-    #    config["init_tau"] = 5.0  #trial.suggest_float("init_tau", 5.0, 30.0)
+    #config["moe_placement"] = "head"        # ("head" recommended; others optional/unused here) --> This architecture is hardcoded in but ought to test other placements probably...
 
     # Dropout / regularizers
     # TODO: Does this stuff still get used...
@@ -198,9 +193,9 @@ def build_model_from_trial(trial, base_config=None):
     config["gate_balance_coef"]  = 0.1  #trial.suggest_float("gate_balance_coef", 0.0, 0.15)
 
     # Pretraining optim
-    config["learning_rate"]      = trial.suggest_float("pre_lr", 5e-6, 5e-4, log=True)
-    config["weight_decay"]       = trial.suggest_float("pre_wd", 1e-6, 3e-3, log=True)
-    config["optimizer"]          = "adamw"  #trial.suggest_categorical("pre_opt", ["adamw", "adam", "sgd"])
+    config["learning_rate"]      = trial.suggest_float("pre_lr", 0.000001, 0.01, log=True)
+    config["weight_decay"]       = trial.suggest_float("pre_wd", 1e-6, 1e-3, log=True)
+    config["optimizer"]          = trial.suggest_categorical("optimizer", ["adamw", "adam", "sgd"])
     config["lr_scheduler_factor"]= 0.1  #trial.suggest_categorical("pre_sched_factor", [0.1, 0.2])
     config["lr_scheduler_patience"]= 6  #trial.suggest_int("pre_sched_pat", 4, 10)
     config["earlystopping_patience"]= 8 #trial.suggest_int("pre_es_pat", 6, 14)
@@ -250,13 +245,8 @@ def build_model_from_trial(trial, base_config=None):
     config["use_lslr_at_eval"] = False                         # set True if you want to use learned per-parameter step sizes at eval
 
     # TODO: I think these don't exist anymore / not used
-    #config["use_u_init_warm_start"] = True
-    #config["gate_dense_before_topk"] = True 
     #config["pdrop"] = 0.1  # Was this general dropout...
-    #config["use_user_table"] = True  # TODO: I think this won't even run when False? Passing in None for users...
     #config["moddrop_p"] = 0.15  # TODO: No idea what this is --? "(probability to drop IMU at train time)"
-    #config["expert_bigger"] = False  # (if True, widen Expert hidden)
-    #config["expert_bigger_mult"] = 2
     #config["u_user_and_demos"] = trial.suggest_categorical("u_user_and_demos", ["demo", "mix", "u_user"])  # (ie table and u_user_overwriting, ie the default version) 
     #config["use_supportquery_for_ft"] = True  # Huh? With meta-learning this is required? Can I delete this?
     # TODO: Surely this isn't used with MAML? We don't do PEFT... so wtf is the user table doing then.......
@@ -265,9 +255,6 @@ def build_model_from_trial(trial, base_config=None):
     # TODO: Confirm this has no effect... for MAML it should be fully controlled by num episodes or something??
     #config["batch_size"] = 128  #trial.suggest_categorical("pre_bs", [32, 64, 128, 256, 512, 1024])
     #config["ft_batch_size"] = 10  #trial.suggest_categorical("ft_bs", [1, 2, 8, 10])
-    # User table usage (important for novel users) --> I think this needs to stay True, if False there's no backup method to learn user embeddings rn...
-    # I have literally no idea how this works for a new user. I dont remember anymore
-    #config["use_user_table"]     = True  #trial.suggest_categorical("use_user_table", [True, False])
     #config["mix_demo_u_alpha"] = trial.suggest_categorical("mix_demo_u_alpha", [0.0, 0.5, 1.0])
 
     # ----- Build model -----
@@ -279,11 +266,6 @@ def build_model_from_trial(trial, base_config=None):
     #for exp in model.experts:
     #    if isinstance(exp.drop, nn.Dropout):
     #        exp.drop.p = config["expert_dropout"]
-
-    # Swap head if cosine
-    #if config["head_type"] == "cosine":
-    #    #swap_expert_head_to_cosine(model, emb_dim=config["emb_dim"], num_classes=config["num_classes"], init_tau=config["init_tau"])
-    #    model.swap_expert_head_to_cosine(init_tau=config["init_tau"])  # Default values: init_tau=10.0, learnable_tau=True)
 
     model.to(device)
     return model, config
