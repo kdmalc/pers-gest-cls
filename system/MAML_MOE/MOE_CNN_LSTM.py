@@ -2,60 +2,6 @@ import torch
 import torch.nn as nn
 from MOE_shared import MOELayer
 
-class ContextEncoder(nn.Module):
-    """
-    Takes a batch of support gestures and creates a single 'context' vector.
-    Toggles between simple averaging and Set-style Cross-Attention.
-    """
-    def __init__(self, feature_dim, context_dim, pool_type='mean', num_heads=4):
-        super().__init__()
-        self.pool_type = pool_type
-        
-        self.projector = nn.Sequential(
-            nn.Linear(feature_dim, context_dim),
-            nn.LayerNorm(context_dim),
-            nn.GELU()
-        )
-
-        if self.pool_type == 'attn':
-            self.query = nn.Parameter(torch.randn(1, 1, context_dim))
-            self.kv_proj = nn.Linear(feature_dim, context_dim)
-            self.mha = nn.MultiheadAttention(embed_dim=context_dim, num_heads=num_heads, batch_first=True)
-
-    def forward(self, support_features):
-        if self.pool_type == 'mean':
-            summary = torch.mean(support_features, dim=0, keepdim=True)
-            return self.projector(summary)
-        elif self.pool_type == 'attn':
-            x = support_features.unsqueeze(0) # (1, N, Feat)
-            kv = self.kv_proj(x)
-            attn_out, _ = self.mha(self.query, kv, kv)
-            return attn_out.squeeze(1)
-        else:
-            raise ValueError(f"Unknown pool_type: {self.pool_type}")
-
-class DemographicsEncoder(nn.Module):
-    def __init__(self, in_dim: int, demo_emb_dim: int = 16):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.LayerNorm(in_dim),
-            nn.Linear(in_dim, max(16, demo_emb_dim)),
-            nn.GELU(),
-            nn.Linear(max(16, demo_emb_dim), demo_emb_dim),
-        )
-    def forward(self, d):
-        return self.net(d)
-
-class FiLMConditioner(nn.Module):
-    def __init__(self, feat_dim: int, cond_dim: int):
-        super().__init__()
-        self.gamma = nn.Linear(cond_dim, feat_dim)
-        self.beta = nn.Linear(cond_dim, feat_dim)
-    def forward(self, h, c):
-        # h: (B, C, T), c: (B, cond_dim)
-        gamma = self.gamma(c).unsqueeze(-1)
-        beta = self.beta(c).unsqueeze(-1)
-        return h * (1 + gamma) + beta
 
 class MultimodalCNNLSTMMOE(nn.Module):
     def __init__(self, config):
@@ -181,3 +127,61 @@ class MultimodalCNNLSTMMOE(nn.Module):
 
         # 4. Mixture of Experts classification
         return self.moe(x_features, u, d=d_emb)
+    
+
+class ContextEncoder(nn.Module):
+    """
+    Takes a batch of support gestures and creates a single 'context' vector.
+    Toggles between simple averaging and Set-style Cross-Attention.
+    """
+    def __init__(self, feature_dim, context_dim, pool_type='mean', num_heads=4):
+        super().__init__()
+        self.pool_type = pool_type
+        
+        self.projector = nn.Sequential(
+            nn.Linear(feature_dim, context_dim),
+            nn.LayerNorm(context_dim),
+            nn.GELU()
+        )
+
+        if self.pool_type == 'attn':
+            self.query = nn.Parameter(torch.randn(1, 1, context_dim))
+            self.kv_proj = nn.Linear(feature_dim, context_dim)
+            self.mha = nn.MultiheadAttention(embed_dim=context_dim, num_heads=num_heads, batch_first=True)
+
+    def forward(self, support_features):
+        if self.pool_type == 'mean':
+            summary = torch.mean(support_features, dim=0, keepdim=True)
+            return self.projector(summary)
+        elif self.pool_type == 'attn':
+            x = support_features.unsqueeze(0) # (1, N, Feat)
+            kv = self.kv_proj(x)
+            attn_out, _ = self.mha(self.query, kv, kv)
+            return attn_out.squeeze(1)
+        else:
+            raise ValueError(f"Unknown pool_type: {self.pool_type}")
+
+
+class DemographicsEncoder(nn.Module):
+    def __init__(self, in_dim: int, demo_emb_dim: int = 16):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.LayerNorm(in_dim),
+            nn.Linear(in_dim, max(16, demo_emb_dim)),
+            nn.GELU(),
+            nn.Linear(max(16, demo_emb_dim), demo_emb_dim),
+        )
+    def forward(self, d):
+        return self.net(d)
+
+
+class FiLMConditioner(nn.Module):
+    def __init__(self, feat_dim: int, cond_dim: int):
+        super().__init__()
+        self.gamma = nn.Linear(cond_dim, feat_dim)
+        self.beta = nn.Linear(cond_dim, feat_dim)
+    def forward(self, h, c):
+        # h: (B, C, T), c: (B, cond_dim)
+        gamma = self.gamma(c).unsqueeze(-1)
+        beta = self.beta(c).unsqueeze(-1)
+        return h * (1 + gamma) + beta

@@ -276,9 +276,9 @@ def build_model_from_trial(trial, base_config=None):
     device = config["device"]
 
     # Tweak Expert’s dropout inline (uses Expert.drop)
-    for exp in model.experts:
-        if isinstance(exp.drop, nn.Dropout):
-            exp.drop.p = config["expert_dropout"]
+    #for exp in model.experts:
+    #    if isinstance(exp.drop, nn.Dropout):
+    #        exp.drop.p = config["expert_dropout"]
 
     # Swap head if cosine
     if config["head_type"] == "cosine":

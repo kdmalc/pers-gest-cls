@@ -313,7 +313,15 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
                     "lr": float(config["learning_rate"])
                 })
 
-    _ensure_lslr_synced_once_per_epoch(theta0_full_epoch)
+    # --- Generate a temp dict just for the LSLR setup ---
+    # We just need the keys and the shape of the tensors to sync the LSLR parameters
+    temp_theta_for_lslr = named_param_dict(
+        model, 
+        require_grad_only=True, 
+        exclude_bn_from_inner=exclude_bn_from_inner
+    )
+
+    _ensure_lslr_synced_once_per_epoch(temp_theta_for_lslr)
 
     # Optional BN snapshot/restore per epoch
     #backup_bn_stats(model)
