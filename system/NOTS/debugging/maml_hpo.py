@@ -225,11 +225,13 @@ def build_model_from_trial(trial, base_config=None):
     # Core MAML++
     config["maml_inner_steps"] = trial.suggest_int("maml_inner_steps", 1, 3)
     # TODO: Are the first and second order plus MSL not... like almost the same thing? I guess with no MSL there is literally no inner loop??
-    #config["maml_second_order"] = trial.suggest_categorical("maml_second_order", [True, False])                         # enables second-order when DOA switches on
-    config["maml_first_order_to_second_order_epoch"] = trial.suggest_categorical("maml_first_order_to_second_order_epoch", [0, 5, 10, 15, 30, 40])      # DOA threshold (epochs <= this are first-order)
-    #config["maml_use_msl"] = trial.suggest_categorical("maml_use_msl", [True, False])                              # MSL (multi-step loss) on
+    config["maml_opt_order"] = trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
+    if config["maml_opt_order"] == "hybrid":
+        config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 1, 40)      # DOA threshold (epochs <= this are first-order)
     # use MSL during first N epochs; after that, final-step loss only
-    config["maml_msl_num_epochs"] = trial.suggest_categorical("maml_msl_num_epochs", [0, 5, 10, 15, 30, 40])  # Also note that currenlt the max num_epochs is 40 (plus we use ES so probably wont even hit this)
+    config["use_maml_msl"] = trial.suggest_categorical("use_maml_msl", [True, False, "hybrid"])                              # MSL (multi-step loss) on
+    if config["maml_msl"] == "hybrid":
+        config["maml_msl_num_epochs"] = trial.suggest_int("maml_msl_num_epochs", 1, 40)  # Also note that currently the max num_epochs is 40 (plus we use ES so probably wont even hit this)
     config["maml_use_lslr"] = trial.suggest_categorical("maml_use_lslr", [True, False])                             # learn per-parameter, per-step inner LRs
     # TODO: Is this maml_alpha_init being used as a learning rate?
     ## I remember that in PerFedAvg they said beta was around 0.5 or something (IIRC)

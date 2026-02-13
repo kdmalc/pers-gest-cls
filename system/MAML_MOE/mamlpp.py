@@ -147,9 +147,14 @@ def inner_loop_mamlpp(
 
     device = config['device']
     multimodal = config['multimodal']
-    msl_use = config['maml_msl_num_epochs'] > epoch 
-    msl_num_epochs = config['maml_msl_num_epochs']
-    use_second_order = config['maml_first_order_to_second_order_epoch'] > 0
+    msl_use = (config['use_maml_msl']==True) or (config['use_maml_msl']=="hybrid" and epoch >= config['maml_msl_num_epochs']) 
+    if msl_use==True:
+        msl_num_epochs = config['maml_msl_num_epochs']
+    else:
+        msl_num_epochs = -1  # MSL is used for the FIRST N epochs. So by setting to -1 in the False case it will not be used
+
+    use_second_order = (config['maml_opt_order']=="second") or (config['maml_opt_order']=="hybrid" and epoch >= config['maml_first_order_to_second_order_epoch']) 
+
     fallback_alpha = config['maml_alpha_init']
     inner_steps = config['maml_inner_steps']
 
@@ -231,6 +236,7 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
 
     # Inner loop settings
     N = int(config["maml_inner_steps"])
+    # TODO: Fix this to use hybrid or something...
     use_second_order = bool(config["maml_second_order"]) and \
                        (epoch_idx > int(config["maml_first_order_to_second_order_epoch"]))
     exclude_bn_from_inner = not bool(config["enable_inner_loop_optimizable_bn_params"])
