@@ -456,14 +456,16 @@ def run_study(study_name, storage_path, n_trials=1):
     # when multiple jobs start at the exact same millisecond.
     time.sleep(random.uniform(0, 10))
 
-    sampler = optuna.samplers.TPESampler(n_startup_trials=12, multivariate=True, group=True)
-    pruner = optuna.samplers.MedianPruner(n_startup_trials=8, n_warmup_steps=0)
+    # TODO: Not sure how startup trials works since I am only using 1 per job...
+    ## Plus I dont have intermediate values turned on right now (should probably use fold 1 performance?)
+    #sampler = TPESampler(n_startup_trials=12, multivariate=True, group=True)
+    #pruner = MedianPruner(n_startup_trials=8, n_warmup_steps=0)
 
     study = optuna.create_study(
         study_name=study_name,
         direction="maximize",
-        sampler=sampler,
-        pruner=pruner,
+        #sampler=sampler,
+        #pruner=pruner,
         storage=storage,
         load_if_exists=True, # Critical for parallel workers
     )
