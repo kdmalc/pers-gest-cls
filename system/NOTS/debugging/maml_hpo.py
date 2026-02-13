@@ -479,10 +479,10 @@ if __name__ == "__main__":
     os.makedirs(db_dir, exist_ok=True)
     
     # The journal file is just a log of operations (no complex SQL locking)
-    journal_path = os.path.join(db_dir, "maml_CNNMMLP_2fcv_hpo.log")
+    journal_path = os.path.join(db_dir, "maml_CNNLSTMMLP_2fcv_hpo.log")
 
     run_study(
-        study_name="maml_CNNMMLP_2fcv_hpo",
+        study_name="maml_CNNLSTMMLP_2fcv_hpo",
         storage_path=journal_path,
         n_trials=N_TRIALS, # Each Slurm worker does one trial (N_TRIALS=1)
     )
