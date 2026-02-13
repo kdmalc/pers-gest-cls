@@ -28,6 +28,7 @@ class MOELayer(nn.Module):
         self.gate_type = config.get('gate_type', 'context_feature_demo')
         self.mixture_mode = config.get('mixture_mode', 'logits')
         self.use_shared_expert = config.get('use_shared_expert', False)
+        self.return_aux = config['return_aux']
         
         # 1. Determine Gate Input Dimension
         gate_in_dim = self._get_gate_in_dim(input_dim, context_dim, config)
@@ -84,7 +85,7 @@ class MOELayer(nn.Module):
             return torch.cat([u, x, d], dim=1)
         return torch.cat([u, x], dim=1)
 
-    def forward(self, x, u, demographics_emb=None, return_aux=True):
+    def forward(self, x, u, demographics_emb=None):
         """
         x: Query features (B, input_dim)
         u: Context embedding (B, context_dim)
@@ -119,7 +120,7 @@ class MOELayer(nn.Module):
 
         # 5. Logging Auxiliary Data
         aux = {}
-        if return_aux:
+        if self.return_aux:
             # Record how often each expert is used
             aux["gate_usage"] = weights.mean(dim=0).detach()
             # Record which expert was 'dominant' for each sample

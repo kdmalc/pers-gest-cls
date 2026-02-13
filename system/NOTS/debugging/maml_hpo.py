@@ -139,6 +139,9 @@ def build_model_from_trial(trial, base_config=None):
     config["top_k"]         = trial.suggest_categorical("top_k", [None, 1, 2, 3])  # None means all/equal voting
     config["gate_type"]     = trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
     #config["gate_dense_before_topk"] = True 
+    #config["pool_mode"] = trial.suggest_categorical("pool_mode", ['avg', 'max', 'avgmax'])  # --> I dont remember what this was or where it was...
+    config["mixture_mode"] = 'logits'  # 'logits' | 'probs' | 'logprobs' --> I didnt even add the other options
+    config["return_aux"] = True  # Have the MOE layer return which expert got which sample. I am not 100% sure this is working correctly lol
 
     # NEW MULTIMODAL
     # NOTE: GroupNorm uses 8 groups currently, could raise/lower that, but emb_dim must be divisible by num_groups or it will break!!
@@ -169,9 +172,6 @@ def build_model_from_trial(trial, base_config=None):
     config['demo_in_dim'] = 12
     config['num_epochs'] = 40  # TODO: Wasnt it doing 35 epochs... is this used or overwritten somewhere.......
     #config['num_ft_epochs'] = 15  # Is this used?
-
-    #config["pool_mode"] = trial.suggest_categorical("pool_mode", ['avg', 'max', 'avgmax'])  # --> I dont remember what this was or where it was...
-    config["mixture_mode"] = 'logits'  # 'logits' | 'probs' | 'logprobs' --> I didnt even add the other options
 
     # TODO: is this used?
     config['log_each_pid_results'] = False

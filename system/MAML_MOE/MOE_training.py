@@ -125,7 +125,7 @@ def _to_device(x, device):
 def _model_forward_router(model, batch, device, multimodal: bool):
     """
     Returns: (logits_or_tuple, labels_tensor, batch_size)
-    - If `multimodal` is True we call model with named args and return_aux=True.
+    - If `multimodal` is True we call model with named args.
       Otherwise we call model(features) like the old path. --> This is quite old and can probably be removed...
     """
     # Dict batch (new or old)
@@ -150,7 +150,7 @@ def _model_forward_router(model, batch, device, multimodal: bool):
                 x_imu=imu,
                 demographics=demo,
                 #user_ids=pids,           # MultiModalMoEClassifier expects this name, but MultimodalCNNLSTMMLP does not!!
-                return_aux=True,         # training/eval can consume (logits, aux)
+                #return_aux=True,         # training/eval can consume (logits, aux) --> This is now part of config!
             )
             return outputs, labels, B
         else:
@@ -684,7 +684,7 @@ def uservec_from_support_mean(model, support_loader, config):
             )
             # Expect (logits, aux) where aux has 'fused_h'
             if not (isinstance(outputs, tuple) and len(outputs) >= 2):
-                raise RuntimeError("Model must return (logits, aux) when multimodal=True and return_aux=True.")
+                raise RuntimeError("Model must return (logits, aux) when multimodal=True.")
             _logits, aux = outputs
             if not isinstance(aux, dict) or "fused_h" not in aux:
                 raise RuntimeError("aux dictionary missing 'fused_h'. Please return aux['fused_h']=<feature tensor>.")
@@ -852,7 +852,7 @@ def debug_one_batch(model, loader, device="cuda", num_classes=None, num_users_tr
         if user_ids is not None:
             print(f"[debug] user_ids range [{int(user_ids.min())}, {int(user_ids.max())}] "
                   f"(num_users_train={num_users_train})")
-        logits, aux = model(x, user_ids=user_ids, user_embed_override=None, return_aux=True)
+        logits, aux = model(x, user_ids=user_ids, user_embed_override=None)#, return_aux=True)
         print(f"[debug] logits {tuple(logits.shape)}  gate_usage {tuple(aux['gate_usage'].shape)} "
               f"sum={aux['gate_usage'].sum().item():.3f}")
         break
