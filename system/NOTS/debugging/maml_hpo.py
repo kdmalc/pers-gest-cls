@@ -11,7 +11,8 @@ code_dir = os.environ["CODE_DIR"]
 data_dir = os.environ["DATA_DIR"]
 run_dir  = os.environ["RUN_DIR"]
 
-import copy, json, time, datetime#, joblib, sys
+import copy, json, time#, joblib, sys
+from datetime import datetime
 
 import numpy as np
 import torch
