@@ -129,13 +129,10 @@ def build_model_from_trial(trial, base_config=None):
         config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds//"
 
     # ----- Model layout hyperparams -----
-    config["user_emb_dim"]  = trial.suggest_int("user_emb_dim", 12, 48)  # TODO: This is the size u? I dont think this is used with the new model?
+    #config["user_emb_dim"]  = trial.suggest_int("user_emb_dim", 12, 48)  # TODO: This is the size u? I dont think this is used with the new model?
     config["num_experts"]   = trial.suggest_int("num_experts", 2, 10)
     config["top_k"]         = trial.suggest_categorical("top_k", [None, 1, 2, 3])  # None means all/equal voting
-
-    # Gate choice
     config["gate_type"]     = trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
-    #config["gate_requires_u_user"] = False if config["gate_type"] == "feature_only" else True
 
     # NEW MULTIMODAL
     # NOTE: GroupNorm uses 8 groups currently, could raise/lower that, but emb_dim must be divisible by num_groups or it will break!!
@@ -144,14 +141,13 @@ def build_model_from_trial(trial, base_config=None):
     config["imu_base_cnn_filters"]       = trial.suggest_categorical("imu_emb_dim", [16, 32, 64, 96, 128, 256])
     # Actually I'm gonna keep these the same. Simplifies the network. If IMU >> EMG in the emb dim, it might just overfit to IMU
     #config["emb_dim"]       = trial.suggest_categorical("emb_dim", [72, 96, 120, 192, 216, 288, 360])
-
     # Idk if my model will still work if I increase the stride... nmight need to get the shapes to match....
     ## Hmm I wonder if the strides need to be the same actually so the feature maps have the same seq lens... not sure...
     config['emg_stride'] = 1  #trial.suggest_int("emg_stride2", 1, 2)
     config['imu_stride'] = 1  #trial.suggest_int("imu_stride2", 1, 2)
     config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel_size", [3, 5, 7])
-    config["imu_cnn_layers"] = trial.suggest_categorical("imu_cnn_layers", [1, 2, 3, 4])
-    config["emg_cnn_layers"] = trial.suggest_categorical("emg_cnn_layers", [1, 2, 3, 4])
+    config["imu_cnn_layers"] = trial.suggest_categorical("imu_cnn_layers", [1, 2, 3])
+    config["emg_cnn_layers"] = trial.suggest_categorical("emg_cnn_layers", [1, 2, 3])
     config["use_film_x_demo"] = trial.suggest_categorical("use_film_x_demo", [True, False])
     config["use_imu"] = True 
     config["use_demographics"] = True  # Is it worth testing turning this off?
@@ -172,7 +168,7 @@ def build_model_from_trial(trial, base_config=None):
     config["pool_mode"] = trial.suggest_categorical("pool_mode", ['avg', 'max', 'avgmax']) 
     config["mixture_mode"] = 'logits'  # 'logits' | 'probs' | 'logprobs' --> I don't think this is implemented AFAIK
     # TODO: This still exists but has been renamed surely...
-    config["gate_requires_u_user"] = False if config["gate_type"] == "feature_only" else True
+    #config["gate_requires_u_user"] = False if config["gate_type"] == "feature_only" else True
 
     # TODO: is this used?
     config['log_each_pid_results'] = False
@@ -273,7 +269,8 @@ def build_model_from_trial(trial, base_config=None):
     #config["mix_demo_u_alpha"] = trial.suggest_categorical("mix_demo_u_alpha", [0.0, 0.5, 1.0])
 
     # ----- Build model -----
-    model = MultiModalMoEClassifier(config)
+    #model = MultiModalMoEClassifier(config)  # This was the OLD model that had all the MAML toggles and was used in the earlier MOE stuff
+    model = MultimodalCNNLSTMMOE(config)
     device = config["device"]
 
     # Tweak Expert’s dropout inline (uses Expert.drop)

@@ -57,9 +57,9 @@ class FiLMConditioner(nn.Module):
         beta = self.beta(c).unsqueeze(-1)
         return h * (1 + gamma) + beta
 
-class MultimodalCnnLstmMoE(nn.Module):
+class MultimodalCNNLSTMMOE(nn.Module):
     def __init__(self, config):
-        super(MultimodalCnnLstmMoE, self).__init__()
+        super(MultimodalCNNLSTMMOE, self).__init__()
         self.config = config
         
         # 1. Encoders (CNN)
