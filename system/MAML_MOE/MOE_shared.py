@@ -7,7 +7,7 @@ class MOELayer(nn.Module):
         super(MOELayer, self).__init__()
         self.num_experts = num_experts
         self.use_shared_expert = config['use_shared_expert']
-        self.complex_experts = config['complex_experts']
+        self.expert_architecture = config['expert_architecture']
         self.gate_type = config['gate_type']
         
         # --- 1. Gating Network ---
@@ -28,15 +28,17 @@ class MOELayer(nn.Module):
         # --- 2. Experts ---
         expert_list = []
         for i in range(num_experts):
-            if self.complex_experts:
+            if self.expert_architecture=="MLP":
                 # 2-Layer MLP Expert
                 expert = nn.Sequential(
                     nn.Linear(input_dim, input_dim // 2),
                     nn.ReLU(),
                     nn.Linear(input_dim // 2, output_dim)
                 )
-            else:
+            elif self.expert_architecture=="linear":
                 expert = nn.Linear(input_dim, output_dim)
+            else:
+                raise ValueError("self.expert_architecture must be either MLP or linear!")
             expert_list.append(expert)
         
         self.experts = nn.ModuleList(expert_list)
