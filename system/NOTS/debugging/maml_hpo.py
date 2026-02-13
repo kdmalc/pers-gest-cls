@@ -19,7 +19,8 @@ import torch.nn as nn
 import optuna
 #from optuna.samplers import TPESampler
 #from optuna.pruners import MedianPruner
-from optuna.storages import JournalStorage, JournalFileBackend
+#from optuna.storages import JournalStorage, JournalFileBackend
+from optuna.storages.journal import JournalStorage, JournalFileBackend
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
