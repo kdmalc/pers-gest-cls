@@ -526,10 +526,10 @@ def MAMLpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         print(f"[MAML++] loaded best model (val acc={best_val_acc:.3f})")
 
     return model, {
-        "train_loss": train_loss_log,
-        "train_acc":  train_acc_log,
-        "val_loss":   val_loss_log if episodic_val_loader is not None else None,
-        "val_acc":    val_acc_log  if episodic_val_loader is not None else None,
+        "train_loss_log": train_loss_log,
+        "train_acc_log":  train_acc_log,
+        "val_loss_log":   val_loss_log if episodic_val_loader is not None else None,
+        "val_acc_log":    val_acc_log  if episodic_val_loader is not None else None,
         "model": model,
         "best_state": best_state,
         "best_val_acc": best_val_acc,

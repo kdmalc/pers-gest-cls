@@ -57,16 +57,13 @@ def apply_fold_to_config(config, all_splits, fold_idx):
     config["num_testft_users"] = len(config["val_PIDs"])
 ###########################
 
-#code_dir.April_25.MOE. --> Said not to use this... code_dir isn't an actual package...
-# Make sure I don't have files named the same thing...
-from system.MAML_MOE.MOE_multimodal_model_classes import *
-#from system.MAML_MOE.MOE_quick_cls_heads import *
-#from system.MAML_MOE.MOE_training import *  # SmoothedEarlyStopping is in here...
-## ^^ Also has some generic MOE funcs: gate_stats, accuracy, gate_balance_loss, make_ce
-#from system.MAML_MOE.MOE_configs import *
 from system.MAML_MOE.multimodal_data_processing import *  # Needed for load_multimodal_dataloaders()
 from system.MAML_MOE.mamlpp import *
 from system.MAML_MOE.maml_multimodal_dataloaders import *
+
+#from system.MAML_MOE.MOE_multimodal_model_classes import *
+#from system.MAML_MOE.MOE_shared import *
+from system.MAML_MOE.MOE_CNN_LSTM import *
 
 current_directory = os.getcwd()
 print(f"The current working directory is: {current_directory}")
@@ -83,19 +80,17 @@ def build_model_from_trial(trial, base_config=None):
     else:
         config = dict()
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
-    #config["cluster_iter_str"] = None
     config["feature_engr"] = "None"
-    config["time_steps"] = 1
-    config["sequence_length"] = 64
+    config["time_steps"] = 1  # TODO: Idk if this is used... its not called by the new model...
+    config["sequence_length"] = 64  # TODO: Idk if this is used... its not called by the new model...
     config["num_train_gesture_trials"] = 9
     config["num_ft_gesture_trials"] = 1
     config["padding"] = 0 
-    config["use_batch_norm"] = False
+    config["use_batch_norm"] = False  # NEVER USE! Our batches are small!
     config["timestamp"] = timestamp
-    config["fc_dropout"] = 0.0
+    config["dropout"] = trial.suggest_categorical("dropout", [0.0, 0.1, 0.25])
     config["num_classes"] = 10
     config["use_earlystopping"] = True
-    config["reset_ft_layers"] = False 
     config["verbose"] = False
     config["num_total_users"] = 32
     config["train_gesture_range"] = [1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -132,25 +127,72 @@ def build_model_from_trial(trial, base_config=None):
         config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds//"
 
     # ----- Model layout hyperparams -----
-    config["user_emb_dim"]  = trial.suggest_int("user_emb_dim", 12, 48)
+    config["user_emb_dim"]  = trial.suggest_int("user_emb_dim", 12, 48)  # TODO: This is the size u? I dont think this is used with the new model?
     config["num_experts"]   = trial.suggest_int("num_experts", 2, 10)
     config["top_k"]         = trial.suggest_categorical("top_k", [None, 1, 2, 3])  # None means all/equal voting
 
     # Gate choice
-    config["gate_type"]     = trial.suggest_categorical("gate_type", ["user_aware", "feature_only", "user_only", "film_gate"])  #, "bilinear"
+    config["gate_type"]     = trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
+    #config["gate_requires_u_user"] = False if config["gate_type"] == "feature_only" else True
+
+    # NEW MULTIMODAL
+    # NOTE: GroupNorm uses 8 groups currently, could raise/lower that, but emb_dim must be divisible by num_groups or it will break!!
+    config["groupnorm_num_groups"] = trial.suggest_categorical("groupnorm_num_groups", [4, 8])
+    config["emg_base_cnn_filters"]       = trial.suggest_categorical("emg_emb_dim", [16, 32, 64, 96, 128, 256])
+    config["imu_base_cnn_filters"]       = trial.suggest_categorical("imu_emb_dim", [16, 32, 64, 96, 128, 256])
+    # Actually I'm gonna keep these the same. Simplifies the network. If IMU >> EMG in the emb dim, it might just overfit to IMU
+    #config["emb_dim"]       = trial.suggest_categorical("emb_dim", [72, 96, 120, 192, 216, 288, 360])
+
+    # Idk if my model will still work if I increase the stride... nmight need to get the shapes to match....
+    ## Hmm I wonder if the strides need to be the same actually so the feature maps have the same seq lens... not sure...
+    config['emg_stride'] = 1  #trial.suggest_int("emg_stride2", 1, 2)
+    config['imu_stride'] = 1  #trial.suggest_int("imu_stride2", 1, 2)
+    config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel_size", [3, 5, 7])
+    config["imu_cnn_layers"] = trial.suggest_categorical("imu_cnn_layers", [1, 2, 3, 4])
+    config["emg_cnn_layers"] = trial.suggest_categorical("emg_cnn_layers", [1, 2, 3, 4])
+    config["use_film_x_demo"] = trial.suggest_categorical("use_film_x_demo", [True, False])
+    config["use_imu"] = True 
+    config["use_demographics"] = True  # Is it worth testing turning this off?
+    config["context_emb_dim"] = trial.suggest_categorical("context_emb_dim", [4, 8, 12, 16])
+    config["context_pool_type"] = trial.suggest_categorical("context_pool_type", ['mean', 'attn'])  
+    config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
+    config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [4, 8, 16])
+    #config["demo_conditioning"] = trial.suggest_categorical("demo_conditioning", ['concat', 'film'])
+
+    config["multimodal"] = True
+    config['emg_in_ch'] = 16
+    config['imu_in_ch'] = 72
+    config['demo_in_dim'] = 12
+    config['num_epochs'] = 40  # TODO: Wasnt it doing 35 epochs... is this used or overwritten somewhere.......
+    #config['num_ft_epochs'] = 15  # Is this used?
+
+    # TODO: UPDATE THESE! Is mixture_mode used with the new MOE? Idt so...
+    config["pool_mode"] = trial.suggest_categorical("pool_mode", ['avg', 'max', 'avgmax']) 
+    config["mixture_mode"] = 'logits'  # 'logits' | 'probs' | 'logprobs' --> I don't think this is implemented AFAIK
+    # TODO: This still exists but has been renamed surely...
     config["gate_requires_u_user"] = False if config["gate_type"] == "feature_only" else True
-    config["use_u_init_warm_start"] = True #trial.suggest_categorical("use_u_init_warm_start", [True, False])
-    # ^ False is broken right now because WithUserOverride doesn't accept None as the init vector
-    #if config["gate_type"]=="bilinear":
-    #    # Using min here will def break this in Optuna right? ...
-    #    config["rank"] = trial.suggest_int("bilinear_rank", 4, min(config["emb_dim"], 16))
+
+    # TODO: is this used?
+    config['log_each_pid_results'] = False
+    # TODO: No idea where/how this is used. I am pretty sure it is used tho... review this......
+    config['saved_df_timestamp'] = '20250917_1217'  
+
+    config["use_lstm"] = trial.suggest_categorical("use_lstm", [True, False])
+    config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [32, 64, 128])
+    config["lstm_layers"] = trial.suggest_categorical("lstm_layers", [1, 2, 3])
+    #config["lstm_bidirectional"] = True  # Not used, True by default (hardcoded)
+    config["temporal_pool_mode"] = "last"    # "last" | "mean"   (pool *after* LSTM)  # TODO: This has been renamed right? Or wrapped up in use_GlobalAvgPooling?
+    # ---- MoE placement (you can leave this as-is; we keep MoE at the head) ----
+    #config["moe_placement"] = "head"        # ("head" recommended; others optional/unused here)
 
     # Head choice
-    config["head_type"]     = trial.suggest_categorical("head_type", ["linear", "cosine"])
-    if config["head_type"] == "cosine":
-        config["init_tau"] = 5.0  #trial.suggest_float("init_tau", 5.0, 30.0)
+    # TODO: Does this stuff still get used... I dont think I have the cosine head code anymore even right?...
+    #config["head_type"]     = trial.suggest_categorical("head_type", ["linear", "cosine"])
+    #if config["head_type"] == "cosine":
+    #    config["init_tau"] = 5.0  #trial.suggest_float("init_tau", 5.0, 30.0)
 
     # Dropout / regularizers
+    # TODO: Does this stuff still get used...
     config["expert_dropout"]     = 0.25  #trial.suggest_float("expert_dropout", 0.0, 0.40)
     config["label_smooth"]       = 0.1  #trial.suggest_float("label_smooth", 0.0, 0.15)
     config["gate_balance_coef"]  = 0.1  #trial.suggest_float("gate_balance_coef", 0.0, 0.15)
@@ -164,57 +206,16 @@ def build_model_from_trial(trial, base_config=None):
     config["earlystopping_patience"]= 8 #trial.suggest_int("pre_es_pat", 6, 14)
     config["earlystopping_min_delta"]= 0.005 #trial.suggest_float("pre_es_delta", 0.001, 0.01)
 
+    # TODO: None of these are used with MAML? (no explicit finetuning phase)
     # Finetuning regime
-    config["finetune_strategy"]  = 'adaptation' #trial.suggest_categorical("finetune_strategy", ["experts_only", "experts_plus_gate", "full"])  #"linear_probing", 
-    config["use_dropout_during_peft"] = False  #trial.suggest_categorical("use_dropout_during_peft", [False, True])
-    config["ft_learning_rate"]   = trial.suggest_float("ft_lr", 1e-4, 5e-2, log=True)
-    config["ft_weight_decay"]    = trial.suggest_float("ft_wd", 1e-6, 5e-3, log=True)
-    config["ft_lr_scheduler_factor"]= 0.1  #trial.suggest_categorical("ft_sched_factor", [0.1, 0.25, 0.5])
-    config["ft_lr_scheduler_patience"]= 4  #trial.suggest_int("ft_sched_pat", 4, 10)
-    config["ft_earlystopping_patience"]= 10  #trial.suggest_int("ft_es_pat", 6, 14)
-    config["ft_earlystopping_min_delta"]= 0.008  #trial.suggest_float("ft_es_delta", 0.0005, 0.01)
-
-    # TODO: Surely this isn't used with MAML? We don't do PEFT... so wtf is the user table doing then.......
-    #config["alt_or_seq_MOE_user_emb_ft"]= trial.suggest_categorical("alt_or_seq_MOE_user_emb_ft", ["sequential", "alternating"])
-
-    # Batch sizes (keep pretrain stable; you can expose if needed)
-    ## TODO: Confirm this has no effect... for MAML it should be fully controlled by num episodes or something??
-    config["batch_size"] = 128  #trial.suggest_categorical("pre_bs", [32, 64, 128, 256, 512, 1024])
-    config["ft_batch_size"] = 10  #trial.suggest_categorical("ft_bs", [1, 2, 8, 10])
-
-    # User table usage (important for novel users) --> I think this needs to stay True, if False there's no backup method to learn user embeddings rn...
-    # TODO: I have literally no idea how this works for a new user. I dont remember anymore
-    config["use_user_table"]     = True  #trial.suggest_categorical("use_user_table", [True, False])
-
-    # NEW MULTIMODAL
-    # NOTE: GroupNorm uses 8 groups currently, could raise/lower that, but emb_dim must be divisible by num_groups or it will break!!
-    config["groupnorm_num_groups"] = trial.suggest_categorical("groupnorm_num_groups", [4, 6, 8, 12])
-    #config["emg_emb_dim"]       = trial.suggest_categorical("emg_emb_dim", [72, 96, 120, 192, 216, 288, 360])
-    #config["imu_emb_dim"]       = trial.suggest_categorical("imu_emb_dim", [72, 96, 120, 192, 216, 288, 360])
-    # Actually I'm gonna keep these the same. Simplifies the network. If IMU >> EMG in the emb dim, it might just overfit to IMU
-    config["emb_dim"]       = trial.suggest_categorical("emb_dim", [72, 96, 120, 192, 216, 288, 360])
-
-    # It is probably only worth trying strides of 221 and 211. My data is already downsampled to 64 so no reason to use higher stride idt
-    ## Hmm I wonder if the strides need to be the same actually so the feature maps have the same seq lens... not sure...
-    config['emg_stride2'] = trial.suggest_int("emg_stride2", 1, 2)
-    config['imu_stride2'] = trial.suggest_int("imu_stride2", 1, 2)
-
-    # Eh I'll just scale by 2...
-    #config['emg_CNN_capacity'] = trial.suggest_categorical("emg_CNN_capacity", [72, 96, 120, 192, 216, 288, 360])
-    #config['imu_CNN_capacity'] = trial.suggest_categorical("imu_CNN_capacity", [72, 96, 120, 192, 216, 288, 360])
-    # Setting them equal for now since for this model the emg and imu are the same length
-    config['emg_CNN_capacity_scaling'] = trial.suggest_categorical("emg_CNN_capacity_scaling", [1, 2, 3])
-    config['imu_CNN_capacity_scaling'] = config['emg_CNN_capacity_scaling']  #trial.suggest_categorical("imu_CNN_capacity_scaling", [1, 2, 3])
-
-    config["multimodal"] = True
-    config['emg_in_ch'] = 16
-    config['imu_in_ch'] = 72
-    config['demo_in_dim'] = 12
-    config['num_epochs'] = 40
-    config['num_ft_epochs'] = 15
-
-    # NEW FIELDS!
-    config["mix_demo_u_alpha"] = trial.suggest_categorical("mix_demo_u_alpha", [0.0, 0.5, 1.0])
+    #config["finetune_strategy"]  = 'adaptation' #trial.suggest_categorical("finetune_strategy", ["experts_only", "experts_plus_gate", "full"])  #"linear_probing", 
+    #config["use_dropout_during_peft"] = False  #trial.suggest_categorical("use_dropout_during_peft", [False, True])
+    #config["ft_learning_rate"]   = trial.suggest_float("ft_lr", 1e-4, 5e-2, log=True)
+    #config["ft_weight_decay"]    = trial.suggest_float("ft_wd", 1e-6, 5e-3, log=True)
+    #config["ft_lr_scheduler_factor"]= 0.1  #trial.suggest_categorical("ft_sched_factor", [0.1, 0.25, 0.5])
+    #config["ft_lr_scheduler_patience"]= 4  #trial.suggest_int("ft_sched_pat", 4, 10)
+    #config["ft_earlystopping_patience"]= 10  #trial.suggest_int("ft_es_pat", 6, 14)
+    #config["ft_earlystopping_min_delta"]= 0.008  #trial.suggest_float("ft_es_delta", 0.0005, 0.01)
 
     # ADDING MAML SPECIFIC
     # TODO: How do all of these interact???
@@ -248,38 +249,26 @@ def build_model_from_trial(trial, base_config=None):
     config["use_cosine_outer_lr"] = False                       # This is cosine-based lr annealing... is this in addition to my lr scheduler....
     config["use_lslr_at_eval"] = False                         # set True if you want to use learned per-parameter step sizes at eval
 
-    # OPTUNA
-    config["pool_mode"] = trial.suggest_categorical("pool_mode", ['avg', 'max', 'avgmax']) 
-    config["pdrop"] = 0.1  # TODO: No idea what this is...
-    config["mixture_mode"] = 'logits'  # 'logits' | 'probs' | 'logprobs' --> I don't think this is implemented AFAIK
-    config["use_user_table"] = True  # TODO: I think this won't even run when False? Passing in None for users...
-    config["moddrop_p"] = 0.15  # TODO: No idea what this is --? "(probability to drop IMU at train time)"
-    config["demo_emb_dim"] = 16
-    config["demo_conditioning"] = trial.suggest_categorical("demo_conditioning", ['concat', 'film'])
-    config["expert_bigger"] = False  # (if True, widen Expert hidden)
-    config["expert_bigger_mult"] = 2
-    config["u_user_and_demos"] = trial.suggest_categorical("u_user_and_demos", ["demo", "mix", "u_user"])  # (ie table and u_user_overwriting, ie the default version) 
-
-    # Thse should be in there but don't seem to be printed? Idk...
-    config["use_u_init_warm_start"] = True
-    config["gate_dense_before_topk"] = True 
-    config["gate_requires_u_user"] = False if config["gate_type"] == "feature_only" else True
-    config['log_each_pid_results'] = False
-    config['saved_df_timestamp'] = '20250917_1217'  
-
-    # NEW FOR LSTM VERSION! I AM NOT USING THE LSTM VERSION IN THIS NB!
-    # TODO: What? Is my model literally just a CNN + MOE(MLP)? ... seems non ideal... need to find a better architecture
-    # ---- backbone toggle ----
-    config["temporal_backbone"] = "none"     # "none" (current TCN-only) | "lstm"
-    # ---- LSTM settings (used when temporal_backbone == "lstm") ----
-    #config["lstm_hidden"] = 128
-    #config["lstm_layers"] = 2
-    #config["lstm_bidirectional"] = False
-    #config["temporal_pool_mode"] = "last"    # "last" | "mean"   (pool *after* LSTM)
-    # ---- MoE placement (you can leave this as-is; we keep MoE at the head) ----
-    #config["moe_placement"] = "head"        # ("head" recommended; others optional/unused here)
-
-    config["use_supportquery_for_ft"] = True
+    # TODO: I think these don't exist anymore / not used
+    #config["use_u_init_warm_start"] = True
+    #config["gate_dense_before_topk"] = True 
+    #config["pdrop"] = 0.1  # Was this general dropout...
+    #config["use_user_table"] = True  # TODO: I think this won't even run when False? Passing in None for users...
+    #config["moddrop_p"] = 0.15  # TODO: No idea what this is --? "(probability to drop IMU at train time)"
+    #config["expert_bigger"] = False  # (if True, widen Expert hidden)
+    #config["expert_bigger_mult"] = 2
+    #config["u_user_and_demos"] = trial.suggest_categorical("u_user_and_demos", ["demo", "mix", "u_user"])  # (ie table and u_user_overwriting, ie the default version) 
+    #config["use_supportquery_for_ft"] = True  # Huh? With meta-learning this is required? Can I delete this?
+    # TODO: Surely this isn't used with MAML? We don't do PEFT... so wtf is the user table doing then.......
+    #config["alt_or_seq_MOE_user_emb_ft"]= trial.suggest_categorical("alt_or_seq_MOE_user_emb_ft", ["sequential", "alternating"])
+    # Batch sizes (keep pretrain stable; you can expose if needed)
+    # TODO: Confirm this has no effect... for MAML it should be fully controlled by num episodes or something??
+    #config["batch_size"] = 128  #trial.suggest_categorical("pre_bs", [32, 64, 128, 256, 512, 1024])
+    #config["ft_batch_size"] = 10  #trial.suggest_categorical("ft_bs", [1, 2, 8, 10])
+    # User table usage (important for novel users) --> I think this needs to stay True, if False there's no backup method to learn user embeddings rn...
+    # I have literally no idea how this works for a new user. I dont remember anymore
+    #config["use_user_table"]     = True  #trial.suggest_categorical("use_user_table", [True, False])
+    #config["mix_demo_u_alpha"] = trial.suggest_categorical("mix_demo_u_alpha", [0.0, 0.5, 1.0])
 
     # ----- Build model -----
     model = MultiModalMoEClassifier(config)
@@ -358,6 +347,7 @@ def objective(trial):
         )
 
         # Do the meta "pretraining" (is this just the meta-train phase?)
+        ## MAMLpp_pretrain returns: train_loss_log, train_acc_log, val_loss_log, val_acc_log, model, best_state, best_val_acc,
         pretrained_model, pretrain_res_dict = MAMLpp_pretrain(
             model,
             config,
@@ -377,7 +367,11 @@ def objective(trial):
             'fold_idx': fold_idx,
             'model_state_dict': best_state,
             'config': config, # Useful to save the config used to build the model!
-            'val_acc': best_val_acc
+            'best_val_acc': best_val_acc, 
+            'train_loss_log': pretrain_res_dict["train_loss_log"], 
+            'train_acc_log': pretrain_res_dict["train_acc_log"],
+            'val_loss_log': pretrain_res_dict["val_loss_log"],
+            'val_acc_log': pretrain_res_dict["val_acc_log"]
         }, save_path)
         print(f"Model permanently saved to {save_path}")
 
