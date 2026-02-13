@@ -85,14 +85,14 @@ class MOELayer(nn.Module):
             return torch.cat([u, x, d], dim=1)
         return torch.cat([u, x], dim=1)
 
-    def forward(self, x, u, demographics_emb=None):
+    def forward(self, x, u, d=None):
         """
         x: Query features (B, input_dim)
         u: Context embedding (B, context_dim)
-        demographics_emb: Embedded demographic vector (B, demo_dim)
+        d: Embedded demographic vector (B, demo_dim) --> How is this used? ONLY for the routing function? Not actually passed through the MOE layer? 
         """
         # 1. Get routing weights
-        g_in = self._prepare_gate_input(x, u, demographics_emb)
+        g_in = self._prepare_gate_input(x, u, d)
         gate_logits = self.gate(g_in)
         weights = F.softmax(gate_logits, dim=1)
 

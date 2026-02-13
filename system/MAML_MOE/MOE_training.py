@@ -149,12 +149,10 @@ def _model_forward_router(model, batch, device, multimodal: bool):
                 x_emg=emg,
                 x_imu=imu,
                 demographics=demo,
-                #user_ids=pids,           # MultiModalMoEClassifier expects this name, but MultimodalCNNLSTMMLP does not!!
-                #return_aux=True,         # training/eval can consume (logits, aux) --> This is now part of config!
             )
             return outputs, labels, B
         else:
-            # Unimodal legacy path (old MOE or other single-input models)
+            # Unimodal (EMG-only) legacy path (old MOE or other single-input models)
             x = _to_device(batch["emg"], device)
             # TODO: Should this be logits, aux?
             outputs = model(x)
