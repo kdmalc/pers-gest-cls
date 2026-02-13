@@ -125,12 +125,8 @@ def _to_device(x, device):
 def _model_forward_router(model, batch, device, multimodal: bool):
     """
     Returns: (logits_or_tuple, labels_tensor, batch_size)
-    - Supports:
-        * New multimodal dict batches: {emg, imu?, demo?, label, PIDs}
-        * Old dict batches (unimodal): {emg, label}
-        * Old tuple/list batches: (features, labels)
     - If `multimodal` is True we call model with named args and return_aux=True.
-      Otherwise we call model(features) like the old path.
+      Otherwise we call model(features) like the old path. --> This is quite old and can probably be removed...
     """
     # Dict batch (new or old)
     if isinstance(batch, dict):
@@ -144,15 +140,16 @@ def _model_forward_router(model, batch, device, multimodal: bool):
         if multimodal:
             emg = _to_device(batch["emg"], device)
             # TODO: Is this how I want to handle this if IMU / DEMO are missing... not sure... fail quietly...
+            # I dont have config here...
             imu = _to_device(batch["imu"], device) if batch.get("imu", None) is not None else None
             demo = _to_device(batch["demo"], device) if batch.get("demo", None) is not None else None
-            pids = _to_device(batch["PIDs"], device) if batch.get("PIDs", None) is not None else None
+            #pids = _to_device(batch["PIDs"], device) if batch.get("PIDs", None) is not None else None
 
             outputs = model(
                 x_emg=emg,
                 x_imu=imu,
                 demographics=demo,
-                user_ids=pids,           # MultiModalMoEClassifier expects this name
+                #user_ids=pids,           # MultiModalMoEClassifier expects this name, but MultimodalCNNLSTMMLP does not!!
                 return_aux=True,         # training/eval can consume (logits, aux)
             )
             return outputs, labels, B
