@@ -124,39 +124,30 @@ def build_model_from_trial(trial, base_config=None):
         config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds//"
 
     # ----- Model layout hyperparams -----
-    #config["user_emb_dim"]  = trial.suggest_int("user_emb_dim", 12, 48)  # TODO: This is the size u? I dont think this is used with the new model? There must be a different var that contorls this...
-    config["num_experts"]   = trial.suggest_int("num_experts", 2, 10)
-    config["use_shared_expert"]   = trial.suggest_categorical("use_shared_expert", [True, False])
-    config["expert_architecture"]   = trial.suggest_categorical("expert_architecture", ["MLP", "linear", "cosine"])
-    # TODO: Should I add init_tau back in? Or is it not worth HPOing over... note that this is not synced right now
-    #if config["expert_architecture"] == "cosine":
-    #    config["init_tau"] = 5.0  #trial.suggest_float("init_tau", 5.0, 30.0)
-    config["top_k"]         = trial.suggest_categorical("top_k", [None, 1, 2, 3])  # None means all/equal voting --> TODO: Does None still mean that...
-    config["gate_type"]     = trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
-    #config["gate_dense_before_topk"] = True 
-    #config["pool_mode"] = trial.suggest_categorical("pool_mode", ['avg', 'max', 'avgmax'])  # --> I dont remember what this was or where it was...
-    config["mixture_mode"] = 'logits'  # 'logits' | 'probs' | 'logprobs' --> I didnt even add the other options
-    config["return_aux"] = True  # Have the MOE layer return which expert got which sample. I am not 100% sure this is working correctly lol
+    config["num_experts"]   = 2
+    config["use_shared_expert"]   = False
+    config["expert_architecture"]   = "linear"
+    config["top_k"]         = 1
+    config["gate_type"]     = "context_only"
+    config["mixture_mode"] = 'logits'  
+    config["return_aux"] = True 
 
     # NEW MULTIMODAL
-    # NOTE: The latent dimensionality must be divisible by num_groups or it will break!!
-    config["groupnorm_num_groups"] = trial.suggest_categorical("groupnorm_num_groups", [4, 8])
-    config["emg_base_cnn_filters"]       = trial.suggest_categorical("emg_emb_dim", [16, 32, 64, 96, 128, 256])
-    config["imu_base_cnn_filters"]       = trial.suggest_categorical("imu_emb_dim", [16, 32, 64, 96, 128, 256])
-    # Idk if my model will still work if I increase the stride... nmight need to get the shapes to match....
-    ## Hmm I wonder if the strides need to be the same actually so the feature maps have the same seq lens... not sure...
-    config['emg_stride'] = 1  #trial.suggest_int("emg_stride2", 1, 2)
-    config['imu_stride'] = 1  #trial.suggest_int("imu_stride2", 1, 2)
-    config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel_size", [3, 5, 7])
-    config["imu_cnn_layers"] = trial.suggest_categorical("imu_cnn_layers", [1, 2, 3])
-    config["emg_cnn_layers"] = trial.suggest_categorical("emg_cnn_layers", [1, 2, 3])
-    config["use_film_x_demo"] = trial.suggest_categorical("use_film_x_demo", [True, False])
+    config["groupnorm_num_groups"] = 4
+    config["emg_base_cnn_filters"]       = 16
+    config["imu_base_cnn_filters"]       = 16
+    config['emg_stride'] = 1  
+    config['imu_stride'] = 1  
+    config["cnn_kernel_size"] = 3
+    config["imu_cnn_layers"] = 1
+    config["emg_cnn_layers"] = 1
+    config["use_film_x_demo"] = False
     config["use_imu"] = True 
-    config["use_demographics"] = True  # Is it worth testing turning this off?
-    config["context_emb_dim"] = trial.suggest_categorical("context_emb_dim", [4, 8, 12, 16])
-    config["context_pool_type"] = trial.suggest_categorical("context_pool_type", ['mean', 'attn'])  
-    config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [4, 8, 16])
-    #config["demo_conditioning"] = trial.suggest_categorical("demo_conditioning", ['concat', 'film'])
+    config["use_demographics"] = True  
+    config["context_emb_dim"] = 8
+    config["context_pool_type"] = 'mean'
+    config["use_GlobalAvgPooling"] = True
+    config["demo_emb_dim"] = 16
 
     config["multimodal"] = True
     config['emg_in_ch'] = 16
@@ -164,19 +155,12 @@ def build_model_from_trial(trial, base_config=None):
     config['demo_in_dim'] = 12
     config['num_epochs'] = 40  
 
-    # TODO: is this used?
-    #config['log_each_pid_results'] = False
-    # TODO: No idea where/how this is used. I am pretty sure it is used tho... review this......
+    config['log_each_pid_results'] = False
     config['saved_df_timestamp'] = '20250917_1217'  
 
-    config["use_lstm"] = trial.suggest_categorical("use_lstm", [True, False])
-    if config["use_lstm"]:
-        config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [32, 64, 128])
-        config["lstm_layers"] = trial.suggest_categorical("lstm_layers", [1, 2, 3])
-        #config["lstm_bidirectional"] = True  # Not used, True by default (hardcoded)
-        config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
-    # ---- MoE placement (you can leave this as-is; we keep MoE at the head) ----
-    #config["moe_placement"] = "head"        # ("head" recommended; others optional/unused here) --> This architecture is hardcoded in but ought to test other placements probably...
+    config["use_lstm"] = True
+    config["lstm_hidden"] = 32
+    config["lstm_layers"] = 1
 
     # Dropout / regularizers
     # TODO: Does this stuff still get used... I would like to have it used....
@@ -185,29 +169,27 @@ def build_model_from_trial(trial, base_config=None):
     #config["gate_balance_coef"]  = 0.1  #trial.suggest_float("gate_balance_coef", 0.0, 0.15)
 
     # Pretraining optim
-    config["learning_rate"]      = trial.suggest_float("pre_lr", 0.000001, 0.01, log=True)
-    config["weight_decay"]       = trial.suggest_float("pre_wd", 1e-6, 1e-3, log=True)
-    config["optimizer"]          = trial.suggest_categorical("optimizer", ["adamw", "adam", "sgd"])
-    config["lr_scheduler_factor"]= 0.1  #trial.suggest_categorical("pre_sched_factor", [0.1, 0.2])
-    config["lr_scheduler_patience"]= 6  #trial.suggest_int("pre_sched_pat", 4, 10)
-    config["earlystopping_patience"]= 8 #trial.suggest_int("pre_es_pat", 6, 14)
-    config["earlystopping_min_delta"]= 0.005 #trial.suggest_float("pre_es_delta", 0.001, 0.01)
+    config["learning_rate"]      = 0.01
+    config["weight_decay"]       = 1e-6
+    config["optimizer"]          = "adamw"
+    config["lr_scheduler_factor"]= 0.1
+    config["lr_scheduler_patience"]= 6  
+    config["earlystopping_patience"]= 8 
+    config["earlystopping_min_delta"]= 0.005
 
     # ADDING MAML SPECIFIC
-    # TODO: How do all of these interact???
     config["meta_learning"] = True
     config["n_way"] = 10
     config["k_shot"] = 1
-    config["q_query"] = 9  # TODO: Does this need to be 9? If it set it lower does that just make it faster? Does that impact the model? Slightly noiser eval??
-    # TODO: Do the below eps/batch and eps/epoch need to be multiple of each other?
-    config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [4, 8, 16, 32, 64])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
-    config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500, 1000])  # TODO: I have no idea what this should be... this is the max on the number of tasks per EPOCH. So this limits training, if the iterable is way too  (obvi true)
+    config["q_query"] = 9  
+    config["meta_batchsize"] = 32  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
+    config["episodes_per_epoch_train"] = 100
     config["num_workers"] = 8  # This is the dataloader, something about how many processes the CPU can use (more is faster generally)
     # Core MAML++
-    config["maml_inner_steps"] = trial.suggest_int("maml_inner_steps", 1, 3)
+    config["maml_inner_steps"] = 1
     
     # First epochs are first order, then switches to second, if using hybrid
-    config["maml_opt_order"] = trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
+    config["maml_opt_order"] = "first"
     if config["maml_opt_order"] == "hybrid":
         config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 1, 40)      # DOA threshold (epochs <= this are first-order)
     # Theoretically this should be even be used, but just in case...
@@ -218,7 +200,7 @@ def build_model_from_trial(trial, base_config=None):
     
     # use MSL during first N epochs; after that, final-step loss only
     ## First epochs are MSL, then turns it off
-    config["use_maml_msl"] = trial.suggest_categorical("use_maml_msl", [True, False, "hybrid"])                              # MSL (multi-step loss) on
+    config["use_maml_msl"] = False                            # MSL (multi-step loss) on
     if config["use_maml_msl"] == "hybrid":
         config["maml_msl_num_epochs"] = trial.suggest_int("maml_msl_num_epochs", 1, 40)  # Also note that currently the max num_epochs is 40 (plus we use ES so may not even hit this)
     # Theoretically this should be even be used, but just in case...
@@ -227,16 +209,12 @@ def build_model_from_trial(trial, base_config=None):
     elif config["use_maml_msl"] == False:
         config["maml_msl_num_epochs"] = 0
     
-    config["maml_use_lslr"] = trial.suggest_categorical("maml_use_lslr", [True, False])                             # learn per-parameter, per-step inner LRs
-    # TODO: Is this maml_alpha_init being used as a learning rate?
-    ## I remember that in PerFedAvg they said beta was around 0.5 or something (IIRC)
-    ## Yes this is being used as a learning rate
-    ## Gotta sort this out with the other one, idek if the other one is being used anymore...
+    config["maml_use_lslr"] = False                          # learn per-parameter, per-step inner LRs
     config["maml_alpha_init"] = 1E-3                            # fallback α (also eval α if LSLR not used at eval)
     config["enable_inner_loop_optimizable_bn_params"] = False  # by default, do NOT adapt BN in inner loop --> I should not be using BN at all AFAIK
     # Eval
     # At eval this is just the inner loop with no outer, so no MSL and no Hessian. This should be much quicker. 5-10 is common here
-    config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [1, 3, 5, 10, 15])
+    config["maml_inner_steps_eval"] = 1
     config["maml_alpha_init_eval"] = 1E-3
     config["use_cosine_outer_lr"] = False                       # This is cosine-based lr annealing... is this in addition to my lr scheduler....
     config["use_lslr_at_eval"] = False                         # set True if you want to use learned per-parameter step sizes at eval

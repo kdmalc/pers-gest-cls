@@ -392,6 +392,8 @@ def mamlpp_adapt_and_eval(model, config, support_batch, query_batch):
     return {"loss": q_loss, "acc": acc, "adapted_params": theta_prime}
 
 def meta_evaluate(model, episodic_loader, config, criterion=None):
+    if criterion is not None:
+        raise ValueError("Inputting a criterion is currently not supported! It is not used at all rn")
     device = config["device"]
     model.to(device).eval()
 
