@@ -354,20 +354,9 @@ def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, config):
     Creates user-specific dataloaders from the provided ft/val/test dataloaders.
 
     Axes handled:
-      1. meta_learning vs non-meta_learning       (config['meta_learning'])
-      2. multimodal vs non-multimodal             (config['multimodal'])
-      3. FT episodic (support/query) vs flat      (config['use_supportquery_for_ft'])
+      1. multimodal vs non-multimodal             (config['multimodal']) --> I know specifically have use_imu and use_demographics in the config... those are not integrated with multimodal yet...
 
     Semantics:
-
-      NON-META (config['meta_learning'] == False)
-      ----------------------------------------
-      - Assumes ft_dl_all and nv_dl_all are SUPPORT and QUERY splits (of the same split, ie of the test split)
-        over the SAME users (PIDs overlap).
-      - Returns paired flat loaders:
-            user_loaders[pid] = (ft_dl_for_pid, nv_dl_for_pid)
-        Only PIDs that appear in BOTH dls are included.
-
       META (config['meta_learning'] == True)
       -----------------------------------
       - ft_dl_all and nv_dl_all may be DIFFERENT splits (e.g., val vs test),
@@ -378,12 +367,7 @@ def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, config):
           * If pid only in ft_dl_all: (ft_dl, None)
           * If pid only in nv_dl_all: (None, nv_dl)
           * If pid appears in both:   (ft_dl, nv_dl)
-
-      Episodic vs flat FT:
-        - config['use_supportquery_for_ft'] == False:
-            * Flatten FT and NV loaders into per-user flat loaders
-              (support+query combined within each split).
-        - config['use_supportquery_for_ft'] == True AND meta_learning == True:
+        - datasets/loaders: support/query structure
             * Expects ft_dl_all.dataset and nv_dl_all.dataset to be
               FixedOneShotPerUserIterable (or same interface).
             * Returns per-user episodic loaders:
@@ -392,7 +376,6 @@ def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, config):
 
     multimodal_version    = config['multimodal']
     metalearning_version  = config['meta_learning']
-    use_sq_ft             = config['use_supportquery_for_ft']
 
     # Ensure we have some FT batch size for flat loaders
     ft_bs = int(config.get('ft_batch_size', config.get('batch_size', 32)))
@@ -416,8 +399,6 @@ def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, config):
         else:
             xs, ys, pids = [], [], []
 
-        has_dict = False
-
         for batch in dl:
             # --------------------------------------------------------
             # META-LEARNING EPISODIC FORMAT:
@@ -429,8 +410,6 @@ def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, config):
                 and "support" in batch
                 and "query" in batch
             ):
-                has_dict = True
-
                 for split_name in ("support", "query"):
                     split = batch[split_name]
 
@@ -499,54 +478,8 @@ def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, config):
                         ys.append(y.cpu())
                         pids.append(pid.cpu() if torch.is_tensor(pid) else pid)
 
-            # --------------------------------------------------------
-            # OLD MULTIMODAL (NON-META) FORMAT:
-            #   batch = {"emg", "imu", "demo", "label", "PIDs"}
-            # --------------------------------------------------------
-            elif isinstance(batch, dict) and multimodal_version:
-                has_dict = True
-
-                emg   = batch['emg']
-                imu   = batch['imu']
-                demo  = batch['demo']
-                label = batch['label']
-                pid   = batch['PIDs']
-
-                if pid is None:
-                    raise RuntimeError("Missing participant_id; provide via 'PIDs' in batch dict.")
-
-                emgs.append(emg.cpu())
-                imus.append(imu.cpu())
-                demos.append(demo.cpu())
-                labels.append(label.cpu())
-                pids.append(pid.cpu() if torch.is_tensor(pid) else pid)
-
-            # --------------------------------------------------------
-            # NON-MULTIMODAL TUPLE FORMAT:
-            #   (x, y) or (x, y, pid)
-            # --------------------------------------------------------
             else:
-                # assume (x, y) or (x, y, pid)
-                if len(batch) == 3:
-                    x, y, pid = batch
-                else:
-                    x, y = batch
-                    pid = None
-                    # try attribute on dataset as last resort
-                    if hasattr(dl.dataset, 'participant_ids'):
-                        raise RuntimeError(
-                            "participant_ids attribute fallback requires deterministic ordering; "
-                            "set shuffle=False for this pass."
-                        )
-                    else:
-                        raise RuntimeError("Cannot determine participant IDs from fallback path.")
-
-                if pid is None:
-                    raise RuntimeError("Missing participant_id in non-multimodal batch.")
-
-                xs.append(x.cpu())
-                ys.append(y.cpu())
-                pids.append(pid.cpu() if torch.is_tensor(pid) else pid)
+                raise ValueError("This should never run! Something must be missing / messed up in the above if condition")
 
         # ------------------------------------------------------------
         # Concatenate across all batches
@@ -581,14 +514,14 @@ def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, config):
     # ----------------------------------------------------------------------
     user_loaders = {}
 
-    if metalearning_version and use_sq_ft:
+    if metalearning_version:
         # We expect ft_dl_all.dataset and nv_dl_all.dataset to be FixedOneShotPerUserIterable
         ft_epi = ft_dl_all.dataset
         nv_epi = nv_dl_all.dataset
 
         if not isinstance(ft_epi, FixedOneShotPerUserIterable) or not isinstance(nv_epi, FixedOneShotPerUserIterable):
             raise RuntimeError(
-                "use_supportquery_for_ft=True expects ft_dl_all.dataset and nv_dl_all.dataset "
+                "This function expects ft_dl_all.dataset and nv_dl_all.dataset "
                 "to be FixedOneShotPerUserIterable (or at least to share its interface)."
             )
 
@@ -635,105 +568,7 @@ def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, config):
 
         return user_loaders
 
-    # ----------------------------------------------------------------------
-    # CASES 1 & 2: flat per-user loaders
-    #
-    #   - meta_learning == False (non-meta)
-    #   - meta_learning == True, use_supportquery_for_ft == False
-    #
-    # These cases flatten everything and then group by PID.
-    # Non-meta: only overlapping PIDs get paired.
-    # Meta:     all PIDs in union get entries; halves may be None.
-    # ----------------------------------------------------------------------
-    ft_dl_all_shuffle  = getattr(ft_dl_all, 'shuffle', False)
-    nv_dl_all_shuffle  = getattr(nv_dl_all, 'shuffle', False)
-
-    if ft_dl_all_shuffle or nv_dl_all_shuffle:
-        # Rewrap without shuffling to safely reconstruct per-user tensors
-        ft_ds = ft_dl_all.dataset
-        nv_ds = nv_dl_all.dataset
-        ft_dl_all = DataLoader(ft_ds, batch_size=ft_bs, shuffle=False)
-        nv_dl_all = DataLoader(nv_ds, batch_size=ft_bs, shuffle=False)
-
-    ft_map = {}
-    nv_map = {}
-
-    if multimodal_version:
-        EMG_ft, IMU_ft, DEMO_ft, LABEL_ft, PID_ft = _extract_all(
-            ft_dl_all,
-            multimodal_version=True,
-            metalearning_version=metalearning_version
-        )
-        EMG_nv, IMU_nv, DEMO_nv, LABEL_nv, PID_nv = _extract_all(
-            nv_dl_all,
-            multimodal_version=True,
-            metalearning_version=metalearning_version
-        )
-
-        # Build per-user FT datasets
-        for pid in PID_ft.unique().tolist():
-            mask = (PID_ft == pid)
-            ft_ds = make_MOE_tensor_dataset(
-                EMG_ft[mask], IMU_ft[mask], DEMO_ft[mask], LABEL_ft[mask],
-                config, participant_ids=PID_ft[mask]
-            )
-            ft_dl = DataLoader(ft_ds, batch_size=ft_bs, shuffle=True)
-            ft_map[pid] = ft_dl
-
-        # Build per-user NV datasets
-        for pid in PID_nv.unique().tolist():
-            mask = (PID_nv == pid)
-            nv_ds = make_MOE_tensor_dataset(
-                EMG_nv[mask], IMU_nv[mask], DEMO_nv[mask], LABEL_nv[mask],
-                config, participant_ids=PID_nv[mask]
-            )
-            nv_dl = DataLoader(nv_ds, batch_size=ft_bs, shuffle=False)
-            nv_map[pid] = nv_dl
-
-    else:
-        X_ft, y_ft, pid_ft = _extract_all(
-            ft_dl_all,
-            multimodal_version=False,
-            metalearning_version=metalearning_version
-        )
-        X_nv, y_nv, pid_nv = _extract_all(
-            nv_dl_all,
-            multimodal_version=False,
-            metalearning_version=metalearning_version
-        )
-
-        for pid in pid_ft.unique().tolist():
-            mask = (pid_ft == pid)
-            ft_ds = make_tensor_dataset(X_ft[mask], y_ft[mask], config)
-            ft_dl = DataLoader(ft_ds, batch_size=ft_bs, shuffle=True)
-            ft_map[pid] = ft_dl
-
-        for pid in pid_nv.unique().tolist():
-            mask = (pid_nv == pid)
-            nv_ds = make_tensor_dataset(X_nv[mask], y_nv[mask], config)
-            nv_dl = DataLoader(nv_ds, batch_size=ft_bs, shuffle=False)
-            nv_map[pid] = nv_dl
-
-    # Pair or union depending on meta vs non-meta
-    if not metalearning_version:
-        # NON-META: only PIDs appearing in BOTH maps
-        common_pids = sorted(set(ft_map.keys()) & set(nv_map.keys()))
-        for pid in common_pids:
-            user_loaders[pid] = (ft_map[pid], nv_map[pid])
-    else:
-        # META: union of PIDs; one side may be None (val vs test users)
-        all_pids = sorted(set(ft_map.keys()) | set(nv_map.keys()))
-        for pid in all_pids:
-            ft_dl = ft_map.get(pid, None)
-            nv_dl = nv_map.get(pid, None)
-            user_loaders[pid] = (ft_dl, nv_dl)
-
-    if not user_loaders:
-        raise RuntimeError(
-            "Could not build per-user loaders from provided dataloaders. "
-            "Check PIDs or meta/non-meta settings."
-        )
-
+    raise ValueError("Function should never reach here...")
     return user_loaders
 
 
