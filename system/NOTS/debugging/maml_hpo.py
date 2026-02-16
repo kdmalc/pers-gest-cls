@@ -214,7 +214,7 @@ def build_model_from_trial(trial, base_config=None):
     config["k_shot"] = 1
     config["q_query"] = 9  # TODO: Does this need to be 9? If it set it lower does that just make it faster? Does that impact the model? Slightly noiser eval??
     # TODO: Do the below eps/batch and eps/epoch need to be multiple of each other?
-    config["episodes_per_batch_train"] = trial.suggest_categorical("episodes_per_batch_train", [50, 100, 250])  # Meta learning batch size
+    config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [4, 8, 16, 32, 64])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
     config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500, 1000])  # TODO: I have no idea what this should be... this is the max on the number of tasks per EPOCH. So this limits training, if the iterable is way too  (obvi true)
     config["num_workers"] = 8  # This is the dataloader, something about how many processes the CPU can use (more is faster generally)
     # Core MAML++
@@ -247,7 +247,7 @@ def build_model_from_trial(trial, base_config=None):
     ## Yes this is being used as a learning rate
     ## Gotta sort this out with the other one, idek if the other one is being used anymore...
     config["maml_alpha_init"] = 1E-3                            # fallback α (also eval α if LSLR not used at eval)
-    config["enable_inner_loop_optimizable_bn_params"] = False  # by default, do NOT adapt BN in inner loop
+    config["enable_inner_loop_optimizable_bn_params"] = False  # by default, do NOT adapt BN in inner loop --> I should not be using BN at all AFAIK
     # Eval
     # At eval this is just the inner loop with no outer, so no MSL and no Hessian. This should be much quicker. 5-10 is common here
     config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [1, 3, 5, 10, 15])

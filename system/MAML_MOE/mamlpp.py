@@ -199,9 +199,10 @@ def inner_loop_mamlpp(
         )
         # apply LSLR update
         params_i = apply_update_repo_style(params_i, grads, lslr, step, fallback_alpha=fallback_alpha)
-        if not use_second_order:
-            # Break graph between inner steps (FOMAML)
-            params_i = OrderedDict((n, p.detach().requires_grad_(True)) for n, p in params_i.items())
+        # TODO: May not need this? If use_second_order is False then that is already taken care of in the above autograd call?...
+        #if not use_second_order:
+        #    # Break graph between inner steps (FOMAML)
+        #    params_i = OrderedDict((n, p.detach().requires_grad_(True)) for n, p in params_i.items())
 
     # ---- MSL aggregation (only early epochs), else final-only loss ----
     if msl_use and (epoch < msl_num_epochs):
@@ -221,9 +222,9 @@ def inner_loop_mamlpp(
 def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, criterion=None):
     """
     Train one epoch of MAML(++) with either:
-      • Single-episode updates (episodes_per_batch_train = 1), or
+      • Single-episode updates (meta_batchsize = 1), or
       • Meta-batched updates averaging over M episodes per optimizer step
-        (episodes_per_batch_train = M > 1).
+        (meta_batchsize = M > 1).
     """
     device = config['device']
     model.to(device).train()
@@ -244,7 +245,7 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
     alpha_init = float(config["maml_alpha_init"])
 
     # Episode scheduling
-    episodes_per_batch = int(config["episodes_per_batch_train"])  # meta-batch size
+    meta_batchsize = int(config["meta_batchsize"])  # meta-batch size
     episodes_per_epoch = int(config["episodes_per_epoch_train"])  # 0 → no explicit cap
 
     # Metrics
@@ -344,13 +345,13 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
 
         # --- PARTIAL BATCH FIX START ---
         # We determine how many episodes will contribute to the NEXT update.
-        # It's usually 'episodes_per_batch', unless we are near the end of the loader or the epoch limit.
+        # It's usually 'meta_batchsize', unless we are near the end of the loader or the epoch limit.
         # We need to do this so if we do have many less eps in the batch, we scale the lr accordingly so our gradient step isnt tiny...
         # This is related to how many episodes are... in the limit or how many are available in the data loader?...
         remaining_in_epoch = episodes_per_epoch - n_episodes if episodes_per_epoch else float('inf')
         
         # This is the actual number of episodes we will process before calling meta_opt.step()
-        actual_batch_size = min(episodes_per_batch, len(episodes), remaining_in_epoch)
+        actual_batch_size = min(meta_batchsize, len(episodes), remaining_in_epoch)
 
         if n_episodes % 100 == 0:
             print(f"--- Episode {n_episodes}/{episodes_per_epoch} | Current Meta-Batch Size: {actual_batch_size} ---")
@@ -390,7 +391,7 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
 
             # BETTER WAY: Use the actual_batch_size calculated for this specific chunk.
             # This ensures that gradients are averaged correctly (sum / count)
-            # even if the last batch is smaller than episodes_per_batch.
+            # even if the last batch is smaller than meta_batchsize.
             (meta_loss_task / actual_batch_size).backward()
             accum_count += 1
 
@@ -405,7 +406,7 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
                 remaining_in_epoch = episodes_per_epoch - n_episodes if episodes_per_epoch else float('inf')
                 # Note: this logic assumes the next chunk is from the same 'episodes' list 
                 # or the next iteration of episodic_loader. 
-                actual_batch_size = min(episodes_per_batch, remaining_in_epoch)
+                actual_batch_size = min(meta_batchsize, remaining_in_epoch)
 
             if episodes_per_epoch and (n_episodes >= episodes_per_epoch):
                 break
