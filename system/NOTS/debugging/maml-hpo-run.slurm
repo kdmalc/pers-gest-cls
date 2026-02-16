@@ -17,7 +17,8 @@
 #SBATCH --array=1-5
 
 # Safer bash: exit on error/undefined vars; fail pipelines if any step fails
-echo "JOB_START host=$(hostname) date=$(date) ArrayID=${SLURM_ARRAY_TASK_ID}"
+echo "JOB_START host=$(hostname) date=$(date)"
+# ArrayID=${SLURM_ARRAY_TASK_ID}" idk if this is defined? Unless it is automatically created...
 #set -euo pipefail
 #echo "after set -euo pipefail"
 
@@ -39,7 +40,7 @@ mamba activate /projects/my13/kai/meta-pers-gest/envs/fl-torch
 ######## 4) Paths & run ########
 export CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
 export DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
-export RUN_DIR=/scratch/my13/kai/runs/${SLURM_JOB_NAME}_${SLURM_JOB_ID}
+export RUN_DIR=/scratch/my13/kai/runs/logs/${SLURM_JOB_NAME}_${SLURM_JOB_ID}
 export DEBUG_RUN_DIR=/scratch/my13/kai/runs
 #mkdir -p "$RUN_DIR" /scratch/my13/kai/logs
 # For relative file imports (in other .py files)
@@ -53,5 +54,6 @@ echo "CWD:"; pwd
 # Run the script
 # Each array task will run the python script, which runs 1 trial and exits.
 python -u "$CODE_DIR/system/NOTS/debugging/maml_hpo.py" \
-    --data_dir "$DATA_DIR" \
-    --out_dir  "$DEBUG_RUN_DIR"
+    --data_dir "$DATA_DIR" #\
+#    --out_dir  "$DEBUG_RUN_DIR"
+# ^ Would maybe rather just let it write to its log dir? Is this why the created dirs are always empty presumably?
