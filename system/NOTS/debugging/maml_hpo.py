@@ -1,10 +1,5 @@
-# NOTE: This file does NOT auto sync on the cluster!
-## While it is on the cluster, there is a separate copy on SCRATCH that is called by slurm
-## ... if it is on projects then I could just have slurm call this copy....... ......
-## Why do I even need a copy on SCRATCH? Why cant I just pull the PROJECTS version? ...
-# NOTE: AFAIK this is now synced? Remove the version in scratch to double check
-
 N_TRIALS = 1
+FIXED_SEED = 42
 
 import os
 code_dir = os.environ["CODE_DIR"]
@@ -477,6 +472,12 @@ if __name__ == "__main__":
     # Ensure the directory for the journal exists
     db_dir = "/scratch/my13/kai/meta-pers-gest/optuna_dbs"
     os.makedirs(db_dir, exist_ok=True)
+
+    random.seed(FIXED_SEED)
+    np.random.seed(FIXED_SEED)
+    torch.manual_seed(FIXED_SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(FIXED_SEED)
     
     # The journal file is just a log of operations (no complex SQL locking)
     journal_path = os.path.join(db_dir, "maml_CNNLSTMMLP_2fcv_hpo.log")
