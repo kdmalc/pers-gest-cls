@@ -55,7 +55,7 @@ def apply_fold_to_config(config, all_splits, fold_idx):
 ###########################
 
 from system.MAML_MOE.multimodal_data_processing import *  # Needed for load_multimodal_dataloaders()
-from system.MAML_MOE.mamlpp import *
+from system.MAML_MOE.OLD_mamlpp import *
 from system.MAML_MOE.maml_multimodal_dataloaders import *
 
 #from system.MAML_MOE.MOE_multimodal_model_classes import *
