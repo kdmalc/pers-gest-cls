@@ -191,6 +191,8 @@ class FixedOneShotPerUserIterable(IterableDataset):
     Behaviors:
       - Per-episode label remapping to local 0..(n_way-1), DETERMINISTIC order.
       - NO meta-augmentation (clean eval).
+
+    TLDR: Iterate through all the withheld users deterministically, always returning the same 1-shot support set (make eval standard)
     """
     def __init__(self, support_ds, query_ds, users_subset, collate_fn, n_way=10):
         super().__init__()

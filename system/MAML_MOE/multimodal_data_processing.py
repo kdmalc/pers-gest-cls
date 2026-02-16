@@ -24,6 +24,8 @@ def load_multimodal_data_loaders(config,
     """
     if use_emg is False or use_imu is False or use_demographics is False:
         raise ValueError("Currently, emg, imu, and demographics all must be used.")
+    # NOTE: use_imu and such are part of the config now too, and they are not integrated with this
+    ## There is some minor utility in allowing us to pass in False... I'm not sure when that would ever be helpful tho ngl
 
     emg_imu_pkl_full_path = config["emg_imu_pkl_full_path"]
     pwmd_xlsx_filepath = config["pwmd_xlsx_filepath"]
@@ -152,42 +154,7 @@ def load_multimodal_data_loaders(config,
         with open(f"{dfs_load_path}{saved_df_timestamp}_columns.pkl", "rb") as f:
             emg_cols, imu_cols, demo_cols = pickle.load(f)
 
-    # ----------------
-    # Classic supervised loaders (original behavior)
-    # ----------------
-    if not config['meta_learning']:
-        _, train_support_dl = build_dataloader_from_two_dfs(
-            time_df=train_support_df, demo_df=demoENC_df,
-            emg_cols=emg_cols, imu_cols=imu_cols, demo_cols=demo_cols,
-            batch_size=config['batch_size']
-        )
-        _, train_query_dl = build_dataloader_from_two_dfs(
-            time_df=train_query_df, demo_df=demoENC_df,
-            emg_cols=emg_cols, imu_cols=imu_cols, demo_cols=demo_cols,
-            batch_size=config['batch_size']
-        )
-        _, val_support_dl = build_dataloader_from_two_dfs(
-            time_df=val_support_df, demo_df=demoENC_df,
-            emg_cols=emg_cols, imu_cols=imu_cols, demo_cols=demo_cols,
-            batch_size=config['ft_batch_size']
-        )
-        _, val_query_dl = build_dataloader_from_two_dfs(
-            time_df=val_query_df, demo_df=demoENC_df,
-            emg_cols=emg_cols, imu_cols=imu_cols, demo_cols=demo_cols,
-            batch_size=config['ft_batch_size']
-        )
-        _, test_support_dl = build_dataloader_from_two_dfs(
-            time_df=test_support_df, demo_df=demoENC_df,
-            emg_cols=emg_cols, imu_cols=imu_cols, demo_cols=demo_cols,
-            batch_size=config['ft_batch_size']
-        )
-        _, test_query_dl = build_dataloader_from_two_dfs(
-            time_df=test_query_df, demo_df=demoENC_df,
-            emg_cols=emg_cols, imu_cols=imu_cols, demo_cols=demo_cols,
-            batch_size=config['ft_batch_size']
-        )
-        return (train_support_dl, train_query_dl, val_support_dl, val_query_dl, test_support_dl, test_query_dl)
-    elif config["meta_learning"]:
+    if config["meta_learning"]:
         # ----------------
         # Meta-learning episodic loaders
         # ----------------
@@ -262,6 +229,8 @@ def load_multimodal_data_loaders(config,
         test_dl  = DataLoader(test_epi,  batch_size=None, num_workers=num_workers, pin_memory=torch.cuda.is_available())
 
         return train_dl, val_dl, test_dl
+    else:
+        raise ValueError("load_multimodal_data_loaders only supports Meta Learning")
 
 
 def _B_normalize_block(block_np, demean=True, eps=1e-8):
@@ -325,7 +294,6 @@ def preprocess_df_B_by_gesture(
 
 # NOT USING THIS ONE FOR NOW
 ## This needs to be trained on the train set and then applied to the test set... too complicated to deal with rn
-
 class PerChannelZScore:
     """
     Fit per-channel (column) scalers on training data.
@@ -349,261 +317,51 @@ class PerChannelZScore:
         return pd.DataFrame(X, columns=df.columns, index=df.index)
 
 
-def make_user_loaders_from_dataloaders(ft_dl_all, nv_dl_all, config):
+def make_user_loaders_from_dataloaders(val_dl_all, test_dl_all, config):
     """
-    Creates user-specific dataloaders from the provided ft/val/test dataloaders.
-
-    Axes handled:
-      1. multimodal vs non-multimodal             (config['multimodal']) --> I know specifically have use_imu and use_demographics in the config... those are not integrated with multimodal yet...
-
-    Semantics:
-      META (config['meta_learning'] == True)
-      -----------------------------------
-      - ft_dl_all and nv_dl_all may be DIFFERENT splits (e.g., val vs test),
-        with DISJOINT user sets.
-      - Returns a unified mapping over the UNION of users:
-            user_loaders[pid] = (ft_dl_or_None, nv_dl_or_None)
-        where:
-          * If pid only in ft_dl_all: (ft_dl, None)
-          * If pid only in nv_dl_all: (None, nv_dl)
-          * If pid appears in both:   (ft_dl, nv_dl)
-        - datasets/loaders: support/query structure
-            * Expects ft_dl_all.dataset and nv_dl_all.dataset to be
-              FixedOneShotPerUserIterable (or same interface).
-            * Returns per-user episodic loaders:
-                user_loaders[pid] = (ft_epi_dl_or_None, nv_epi_dl_or_None)
+    Creates user-specific episodic dataloaders for Meta-Validation and Meta-Test.
+    
+    This function specifically handles the episodic structure (FixedOneShotPerUserIterable) 
+    and returns two separate dictionaries mapping PID -> DataLoader.
     """
+    # 1. Clean up and validate episodic datasets
+    # We expect .dataset to be FixedOneShotPerUserIterable
+    val_epi_base = val_dl_all.dataset
+    test_epi_base = test_dl_all.dataset
 
-    multimodal_version    = config['multimodal']
-    metalearning_version  = config['meta_learning']
-
-    # Ensure we have some FT batch size for flat loaders
-    ft_bs = int(config.get('ft_batch_size', config.get('batch_size', 32)))
-    config['ft_batch_size'] = ft_bs
-
-    # ----------------------------------------------------------------------
-    # Helper: Flatten all samples out of a loader, grouped later by PID
-    # ----------------------------------------------------------------------
-    def _extract_all(dl, multimodal_version=False, metalearning_version=False):
-        """
-        Flattens all batches in `dl` into big tensors:
-          - multimodal: (EMG, IMU, DEMO, LABEL, PIDs)
-          - non-multimodal: (X, Y, PIDs)
-
-        If metalearning_version=True and batches are episodic dicts with
-        'support'/'query', this will flatten support + query into a global pool.
-        """
-
-        if multimodal_version:
-            emgs, imus, demos, labels, pids = [], [], [], [], []
-        else:
-            xs, ys, pids = [], [], []
-
-        for batch in dl:
-            # --------------------------------------------------------
-            # META-LEARNING EPISODIC FORMAT:
-            #   batch = {"support": {...}, "query": {...}}
-            # --------------------------------------------------------
-            if (
-                metalearning_version
-                and isinstance(batch, dict)
-                and "support" in batch
-                and "query" in batch
-            ):
-                for split_name in ("support", "query"):
-                    split = batch[split_name]
-
-                    if multimodal_version:
-                        # Expect multimodal dict: emg/imu/demo/label/PIDs
-                        emg   = split["emg"]
-                        imu   = split["imu"]
-                        demo  = split["demo"]
-                        label = split["label"]
-                        pid   = split["PIDs"]
-
-                        # If episodes are [N_tasks, K, ...], flatten to [N_tasks*K, ...]
-                        if emg.dim() > 2 and hasattr(pid, "dim") and pid.dim() > 1:
-                            B = emg.shape[0] * emg.shape[1]
-                            emg   = emg.view(B, *emg.shape[2:])
-                            imu   = imu.view(B, *imu.shape[2:])
-                            demo  = demo.view(B, *demo.shape[2:])
-                            label = label.view(-1)
-                            pid   = pid.view(-1)
-
-                        emgs.append(emg.cpu())
-                        imus.append(imu.cpu())
-                        demos.append(demo.cpu())
-                        labels.append(label.cpu())
-                        if pid is None:
-                            raise RuntimeError(
-                                "Missing participant_id in episodic batch; expected 'PIDs' key."
-                            )
-                        pids.append(pid.cpu() if torch.is_tensor(pid) else pid)
-
-                    else:
-                        # Non-multimodal meta-learning case (if ever used)
-                        if not isinstance(split, dict):
-                            raise RuntimeError(
-                                "Expected dict splits for non-multimodal meta-learning; "
-                                f"got {type(split)} instead."
-                            )
-
-                        # Try common key names
-                        if "x" in split and "y" in split:
-                            x = split["x"]
-                            y = split["y"]
-                        elif "inputs" in split and "labels" in split:
-                            x = split["inputs"]
-                            y = split["labels"]
-                        else:
-                            raise RuntimeError(
-                                "Cannot find (x, y) or (inputs, labels) in meta-learning split."
-                            )
-
-                        pid = split.get("PIDs", split.get("pid", None))
-                        if pid is None:
-                            raise RuntimeError(
-                                "Missing participant_id in meta-learning split; "
-                                "expected 'PIDs' or 'pid'."
-                            )
-
-                        # Flatten episodes if [N_tasks, K, ...]
-                        if x.dim() > 2 and hasattr(pid, "dim") and pid.dim() > 1:
-                            B = x.shape[0] * x.shape[1]
-                            x   = x.view(B, *x.shape[2:])
-                            y   = y.view(-1)
-                            pid = pid.view(-1)
-
-                        xs.append(x.cpu())
-                        ys.append(y.cpu())
-                        pids.append(pid.cpu() if torch.is_tensor(pid) else pid)
-
-            else:
-                raise ValueError("This should never run! Something must be missing / messed up in the above if condition")
-
-        # ------------------------------------------------------------
-        # Concatenate across all batches
-        # ------------------------------------------------------------
-        if multimodal_version:
-            EMG   = torch.cat(emgs)
-            IMU   = torch.cat(imus)
-            DEMO  = torch.cat(demos)
-            LABEL = torch.cat(labels)
-
-            if len(pids) and torch.is_tensor(pids[0]):
-                P = torch.cat(pids)
-            else:
-                P = torch.tensor(pids)
-
-            return EMG, IMU, DEMO, LABEL, P
-        else:
-            X = torch.cat(xs)
-            Y = torch.cat(ys)
-
-            if len(pids) and torch.is_tensor(pids[0]):
-                P = torch.cat(pids)
-            else:
-                P = torch.tensor(pids)
-
-            return X, Y, P
-
-    # ----------------------------------------------------------------------
-    # CASE 3: meta_learning == True AND use_supportquery_for_ft == True
-    #         -> per-user episodic FT loaders using FixedOneShotPerUserIterable,
-    #            allowing disjoint user sets between ft_dl_all and nv_dl_all.
-    # ----------------------------------------------------------------------
-    user_loaders = {}
-
-    if metalearning_version:
-        # We expect ft_dl_all.dataset and nv_dl_all.dataset to be FixedOneShotPerUserIterable
-        ft_epi = ft_dl_all.dataset
-        nv_epi = nv_dl_all.dataset
-
-        if not isinstance(ft_epi, FixedOneShotPerUserIterable) or not isinstance(nv_epi, FixedOneShotPerUserIterable):
-            raise RuntimeError(
-                "This function expects ft_dl_all.dataset and nv_dl_all.dataset "
-                "to be FixedOneShotPerUserIterable (or at least to share its interface)."
-            )
-
-        ft_users = set(ft_epi.users)
-        nv_users = set(nv_epi.users)
-        all_pids = sorted(ft_users | nv_users)  # UNION (val ∪ test, etc.)
-
-        if not all_pids:
-            raise RuntimeError("No users found in episodic FT/NV datasets.")
-
-        num_workers = int(config['num_workers'])
-
-        for pid in all_pids:
-            ft_dl = None
-            nv_dl = None
-
-            if pid in ft_users:
-                ft_iter = FixedOneShotPerUserIterable(
-                    support_ds=ft_epi.support_ds,
-                    query_ds=ft_epi.query_ds,
-                    users_subset=[pid],
-                    collate_fn=ft_epi.collate_fn,
-                    n_way=ft_epi.n_way
-                )
-                ft_dl = DataLoader(
-                    ft_iter, batch_size=None, shuffle=False,
-                    num_workers=num_workers, pin_memory=torch.cuda.is_available()
-                )
-
-            if pid in nv_users:
-                nv_iter = FixedOneShotPerUserIterable(
-                    support_ds=nv_epi.support_ds,
-                    query_ds=nv_epi.query_ds,
-                    users_subset=[pid],
-                    collate_fn=nv_epi.collate_fn,
-                    n_way=nv_epi.n_way
-                )
-                nv_dl = DataLoader(
-                    nv_iter, batch_size=None, shuffle=False,
-                    num_workers=num_workers, pin_memory=torch.cuda.is_available()
-                )
-
-            user_loaders[pid] = (ft_dl, nv_dl)
-
-        return user_loaders
-
-    raise ValueError("Function should never reach here...")
-    return user_loaders
-
-
-# This also appears in utils.gesture_dataset_classes. Should be the same here, I didn't edit it. Ought to sort that out...
-## I guess this file actually has all the functions that that file did
-def make_tensor_dataset(features, labels, config, reshape_2d_to_3d=True, participant_ids=None):
-    """
-    Converts features and labels to tensors and validates shape.
-    If features are 2D and reshape_2d_to_3d is True, reshapes to (N, C, L).
-    Optionally includes participant_ids in the returned TensorDataset.
-    """
-    features = ensure_tensor(features, dtype=torch.float32)
-    labels = ensure_tensor(labels, dtype=torch.long)
-
-    if features.ndim == 2 and reshape_2d_to_3d:
-        num_channels = config["num_channels"]
-        sequence_length = config["sequence_length"]
-        features = features.view(-1, num_channels, sequence_length)
-
-    assert features.ndim == 3, f"Expected 3D tensor (batch, channels, sequence), got {features.ndim}D with shape {features.shape}"
-    assert features.shape[1] == config["num_channels"]
-    assert features.shape[2] == config["sequence_length"]
-
-    if participant_ids is not None:
-        if isinstance(participant_ids[0], str):
-            print("make_tensor_dataset(): Why is participants a list of unencoded strings?")
-            try:
-                participant_ids = [int(pid[1:]) for pid in participant_ids]
-            except ValueError as e:
-                raise ValueError(f"Failed to convert participant_ids to integers: {e}")
-
-        participant_ids = ensure_tensor(participant_ids, dtype=torch.long)
-        assert participant_ids.shape[0] == features.shape[0], (
-            f"participant_ids length {participant_ids.shape[0]} does not match number of samples {features.shape[0]}"
+    if not isinstance(val_epi_base, FixedOneShotPerUserIterable) or \
+       not isinstance(test_epi_base, FixedOneShotPerUserIterable):
+        raise RuntimeError(
+            "Expected episodic datasets (FixedOneShotPerUserIterable) for val and test."
         )
-        return TensorDataset(features, labels, participant_ids)
 
-    return TensorDataset(features, labels)
+    num_workers = int(config.get('num_workers', 0))
+    pin_mem = torch.cuda.is_available()
+
+    # --- Helper to create a dict of per-user loaders ---
+    def _create_user_map(epi_dataset):
+        user_map = {}
+        for pid in epi_dataset.users:
+            # Create a new iterator instance restricted to just this user
+            user_specific_iter = FixedOneShotPerUserIterable(
+                support_ds=epi_dataset.support_ds,
+                query_ds=epi_dataset.query_ds,
+                users_subset=[pid],
+                collate_fn=epi_dataset.collate_fn,
+                n_way=epi_dataset.n_way
+            )
+            # Each yield from this loader is a full 1-shot episode for this specific user
+            user_map[pid] = DataLoader(
+                user_specific_iter, 
+                batch_size=None, 
+                shuffle=False,
+                num_workers=num_workers, 
+                pin_memory=pin_mem
+            )
+        return user_map
+
+    # 2. Generate separate dictionaries to avoid None-value collisions
+    val_user_loaders = _create_user_map(val_epi_base)
+    test_user_loaders = _create_user_map(test_epi_base)
+
+    return val_user_loaders, test_user_loaders
