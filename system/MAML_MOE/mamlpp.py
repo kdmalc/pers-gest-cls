@@ -354,7 +354,7 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
         actual_batch_size = min(meta_batchsize, len(episodes), remaining_in_epoch)
 
         if n_episodes % 100 == 0:
-            print(f"--- Episode {n_episodes}/{episodes_per_epoch} | Current Meta-Batch Size: {actual_batch_size} ---")
+            print(f"--- Episode {n_episodes}/{episodes_per_epoch} | Current Meta-Batch Size: {actual_batch_size} \n[from num eps in step item: {len(episodes)}, meta_bs: {meta_batchsize}, and remaining in ep: {remaining_in_epoch}] ---")
         # --- PARTIAL BATCH FIX END ---
 
         for episode in episodes:
@@ -364,6 +364,7 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
             # NOTE: Moved this from once per epoch to be once per episode
             # Capture the current global weights IMMEDIATELY before the inner loop.
             # This ensures if meta_opt.step() just ran, we use the NEW weights.
+            # TODO: Technically this should only need to run after we update the weights right, not every episode within the epoch?...
             current_theta0 = named_param_dict(
                 model, 
                 require_grad_only=True, 
