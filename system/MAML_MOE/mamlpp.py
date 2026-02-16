@@ -402,8 +402,20 @@ def meta_evaluate(model, episodic_loader, config, criterion=None):
 
     total_loss = total_correct = total_count = n_eps = 0
 
+    print("META_EVALUATE START")
+    step_counter = 0
+    ep_counter = 0
+    # I am not totally sure how this is working...
+    ## Each dataloader probably only returns 1 episode (1 per user)
+    ## But we have multiple users... so... do we have multiple dataloaders, or does this dataloader return more than 1... ...
     for step_item in episodic_loader:
-        for ep in _norm(step_item):
+        step_counter += 1
+        print(f"Step counted! Now on step: {step_counter}")
+
+        for ep in _norm(step_item): 
+            ep_counter += 1
+            print(f"Ep counted! Now on ep: {ep_counter}")
+
             # 1. Run inference
             metrics = mamlpp_adapt_and_eval(model, config, ep["support"], ep["query"])
             
