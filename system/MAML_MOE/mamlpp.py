@@ -227,7 +227,8 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
 
             # 5. Outer Optimizer Step
             if accum_count == meta_batchsize:
-                print(f"Meta batchsize hit on ep {n_episodes}! Parameters updating!")
+                if n_episodes==meta_batchsize:  # Ie, only print on the first hit
+                    print(f"Meta batchsize hit on ep {n_episodes}! Parameters updating!")
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
                 meta_opt.step()
                 meta_opt.zero_grad(set_to_none=True)

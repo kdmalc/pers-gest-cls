@@ -382,22 +382,16 @@ def objective(trial):
             config,
         )
         user_accs = []
-        for pid, (user_val_epi_dl, user_test_epi_dl) in user_loaders.items():
-            # For FixedOneShotPerUserIterable, each dl will usually yield exactly 1 episode
-            ## TODO: Is this ^^ good or bad... does this imply I am training on (meta)batches of size 1?? 
-            # 2/4/26: switched from test_dl to val_dl (to keep test data completely separate from HPO)
-
-            if user_val_epi_dl is None:
-                raise ValueError("user_val_epi_dl is None, preventing maml_finetune_and_eval...")
+        val_dls = user_loaders[0]
+        test_dls = user_loaders[1]
+        #for pid, (user_val_epi_dl, user_test_epi_dl) in user_loaders.items():
+        for user_val_dl in val_dls:
+            if user_val_dl is None:
+                raise ValueError("user_val_dl is None, preventing maml_finetune_and_eval...")
                 continue
 
-            val_metrics = meta_evaluate(model, user_val_epi_dl, config)
+            val_metrics = meta_evaluate(model, user_val_dl, config)
             final_user_val_loss, final_user_val_acc = val_metrics["loss"], val_metrics["acc"]
-            # NOTE: So we do have and maintain val_loss and val_acc logs! What happens to these? 
-            ## Maybe they are saved and I just dont know where... I dont think I've had a successful completed HPO run (since it takes too long)
-            ## Is the saving code for this already existing from the non-hpo runs??
-            #final_val_loss_log.append(final_user_val_loss)
-            #final_val_acc_log.append(final_user_val_acc)
             user_accs.append(final_user_val_acc)
 
         mean_acc = float(np.mean(user_accs)) if len(user_accs) > 0 else float("nan")
