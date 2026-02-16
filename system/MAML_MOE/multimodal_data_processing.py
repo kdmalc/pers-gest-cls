@@ -223,7 +223,7 @@ def load_multimodal_data_loaders(config,
             n_way=int(config.get('test_n_way', n_way))  # typically 10
         )
 
-        # DataLoaders for episodic iterables: batch_size=None because each yield is a full episode
+        # DataLoaders for episodic iterables: batch_size=None because each yield is a full episode (eg 1. This is safest. Means we have to batch manually via looping if we want batches)
         train_dl = DataLoader(train_epi, batch_size=None, num_workers=num_workers, pin_memory=torch.cuda.is_available())
         val_dl   = DataLoader(val_epi,   batch_size=None, num_workers=num_workers, pin_memory=torch.cuda.is_available())
         test_dl  = DataLoader(test_epi,  batch_size=None, num_workers=num_workers, pin_memory=torch.cuda.is_available())

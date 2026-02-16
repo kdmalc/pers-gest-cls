@@ -392,10 +392,8 @@ def mamlpp_adapt_and_eval(model, config, support_batch, query_batch):
     return {"loss": q_loss, "acc": acc, "adapted_params": theta_prime}
 
 def meta_evaluate(model, episodic_loader, config, criterion=None):
-    if criterion is not None:
-        raise ValueError("Criterion is not supported in the current iteration!")
-
-    device = config["device"]; model.to(device).eval()
+    device = config["device"]
+    model.to(device).eval()
 
     def _norm(x):
         if isinstance(x, dict): return [x]
@@ -406,11 +404,20 @@ def meta_evaluate(model, episodic_loader, config, criterion=None):
 
     for step_item in episodic_loader:
         for ep in _norm(step_item):
+            # 1. Run inference
             metrics = mamlpp_adapt_and_eval(model, config, ep["support"], ep["query"])
             
+            # 2. Get the specific count for THIS episode
+            if isinstance(ep["query"], dict) and "labels" in ep["query"]:
+                current_q_count = len(ep["query"]["labels"])
+            else:
+                #current_q_count = 1 
+                raise ValueError("ep['query'] is NOT a dict for some reason. Check on that")
+
+            # 3. Aggregate correctly
             total_loss += metrics["loss"]
-            total_count += len(ep["query"]["labels"]) if isinstance(ep["query"], dict) and "labels" in ep["query"] else 1 
-            total_correct += (metrics["acc"] * total_count)
+            total_correct += (metrics["acc"] * current_q_count) # Multiply by current episode size
+            total_count += current_q_count
             n_eps += 1
 
     return {
