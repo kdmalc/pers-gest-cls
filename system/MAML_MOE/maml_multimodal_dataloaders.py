@@ -219,7 +219,7 @@ class FixedOneShotPerUserIterable(IterableDataset):
         mp = {}
         for i in range(len(ds)):
             s = ds[i]
-            u = int(s["PIDs"]); c = int(s["s"])
+            u = int(s["PIDs"]); c = int(s["labels"])
             if u not in mp: mp[u] = {}
             if c not in mp[u]: mp[u][c] = []
             mp[u][c].append(i)
