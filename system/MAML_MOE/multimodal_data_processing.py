@@ -166,7 +166,7 @@ def load_multimodal_data_loaders(config,
             batch_size=32, shuffle=False, num_workers=int(config['num_workers']),  # batch_size unused for episodic, allegedly...
             collate_fn=default_mm_collate_fixed
         )
-        train_uc = UserClassIndex(train_ds, user_key="PIDs", label_key="label")
+        train_uc = UserClassIndex(train_ds, user_key="PIDs", label_key="labels")
         train_users = train_uc.users
 
         # Meta config knobs
@@ -194,7 +194,7 @@ def load_multimodal_data_loaders(config,
             emg_cols=emg_cols, imu_cols=imu_cols, demo_cols=demo_cols,
             batch_size=32, shuffle=False, num_workers=num_workers, collate_fn=default_mm_collate_fixed
         )
-        val_uc_sup = UserClassIndex(val_support_ds, user_key="PIDs", label_key="label")
+        val_uc_sup = UserClassIndex(val_support_ds, user_key="PIDs", label_key="labels")
         val_users  = val_uc_sup.users
 
         val_epi = FixedOneShotPerUserIterable(
@@ -214,7 +214,7 @@ def load_multimodal_data_loaders(config,
             emg_cols=emg_cols, imu_cols=imu_cols, demo_cols=demo_cols,
             batch_size=32, shuffle=False, num_workers=num_workers, collate_fn=default_mm_collate_fixed
         )
-        test_uc_sup = UserClassIndex(test_support_ds, user_key="PIDs", label_key="label")
+        test_uc_sup = UserClassIndex(test_support_ds, user_key="PIDs", label_key="labels")
         test_users  = test_uc_sup.users
 
         test_epi = FixedOneShotPerUserIterable(

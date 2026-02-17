@@ -11,7 +11,7 @@ class UserClassIndex:
     Builds user -> class -> [indices] map from a base dataset whose __getitem__
     returns dicts with at least keys {user_key, label_key}.
     """
-    def __init__(self, base_ds, user_key="PIDs", label_key="label"):
+    def __init__(self, base_ds, user_key="PIDs", label_key="labels"):
         groups = defaultdict(lambda: defaultdict(list))  # user -> class -> [idx]
         for idx in range(len(base_ds)):
             s = base_ds[idx]
@@ -93,7 +93,7 @@ class EpisodicIterable(IterableDataset):
         self.shuffle_classes = shuffle_classes
         self.task_augment = task_augment
 
-    def _copy_and_set_label(self, sample_dict, new_label, orig_key="orig_label", label_key="label"):
+    def _copy_and_set_label(self, sample_dict, new_label, orig_key="orig_label", label_key="labels"):
         s = dict(sample_dict)  # shallow copy; avoid mutating base dataset
         s[orig_key] = int(s[label_key])
         s[label_key] = int(new_label)
@@ -219,7 +219,7 @@ class FixedOneShotPerUserIterable(IterableDataset):
         mp = {}
         for i in range(len(ds)):
             s = ds[i]
-            u = int(s["PIDs"]); c = int(s["label"])
+            u = int(s["PIDs"]); c = int(s["s"])
             if u not in mp: mp[u] = {}
             if c not in mp[u]: mp[u][c] = []
             mp[u][c].append(i)
@@ -230,7 +230,7 @@ class FixedOneShotPerUserIterable(IterableDataset):
                     mp[u][c] = mp[u][c][0]  # first index deterministically
         return mp
 
-    def _copy_and_set_label(self, sample_dict, new_label, orig_key="orig_label", label_key="label"):
+    def _copy_and_set_label(self, sample_dict, new_label, orig_key="orig_label", label_key="labels"):
         s = dict(sample_dict)
         s[orig_key] = int(s[label_key])
         s[label_key] = int(new_label)
@@ -252,13 +252,13 @@ class FixedOneShotPerUserIterable(IterableDataset):
                     qry_idx.extend(self.qry_map[u][c])
 
             # Materialize & relabel to local 0..N-1
-            support_samples = [self._copy_and_set_label(self.support_ds[i], label_map[int(self.support_ds[i]["label"])])
+            support_samples = [self._copy_and_set_label(self.support_ds[i], label_map[int(self.support_ds[i]["labels"])])
                                for i in sup_idx]
 
             query_samples = []
             for i in qry_idx:
                 s = self.query_ds[i]
-                gl = int(s["label"])
+                gl = int(s["labels"])
                 if gl in label_map:  # skip stray classes, just in case
                     query_samples.append(self._copy_and_set_label(s, label_map[gl]))
 
