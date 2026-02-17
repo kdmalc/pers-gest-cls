@@ -163,7 +163,7 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
     model.to(device).train()
 
     if criterion is None:
-        label_smooth = float(config.get("label_smooth", 0.0))
+        label_smooth = float(config["label_smooth"])
         criterion = nn.CrossEntropyLoss(label_smoothing=label_smooth) if label_smooth > 0 else nn.CrossEntropyLoss()
 
     N = int(config["maml_inner_steps"])
@@ -344,7 +344,7 @@ def mamlpp_adapt(model, config, support_batch, *, use_lslr_at_eval=False):
     theta = named_param_dict(model, require_grad_only=True)
     theta = OrderedDict((n, p.detach().requires_grad_(True)) for n, p in theta.items())
 
-    label_smooth = float(config.get("label_smooth", 0.0))
+    label_smooth = float(config["label_smooth"])
     criterion = nn.CrossEntropyLoss(label_smoothing=label_smooth) if label_smooth > 0 else nn.CrossEntropyLoss()
     use_lslr = bool(config["maml_use_lslr"]) and use_lslr_at_eval and hasattr(model, "_lslr")
     alpha_eval = float(config["maml_alpha_init_eval"])
@@ -383,7 +383,7 @@ def mamlpp_adapt_and_eval(model, config, support_batch, query_batch):
     theta_prime = mamlpp_adapt(model, config, support_batch)
     logits, preds, labels, B = mamlpp_predict_with_params(model, theta_prime, query_batch, config)
 
-    label_smooth = float(config.get("label_smooth", 0.0))
+    label_smooth = float(config["label_smooth"])
     criterion = nn.CrossEntropyLoss(label_smoothing=label_smooth) if label_smooth > 0 else nn.CrossEntropyLoss()
     
     q_loss = criterion(logits, labels).item()

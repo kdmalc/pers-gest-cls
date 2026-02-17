@@ -178,10 +178,10 @@ def build_model_from_trial(trial, base_config=None):
     # ---- MoE placement (you can leave this as-is; we keep MoE at the head) ----
     #config["moe_placement"] = "head"        # ("head" recommended; others optional/unused here) --> This architecture is hardcoded in but ought to test other placements probably...
 
-    # Dropout / regularizers
-    # TODO: Does this stuff still get used... I would like to have it used....
+    # MOE Hyperparams
+    config["label_smooth"]       = 0.1  #trial.suggest_float("label_smooth", 0.0, 0.15)
+    # TODO: These are not used at all atm
     #config["expert_dropout"]     = 0.25  #trial.suggest_float("expert_dropout", 0.0, 0.40)
-    #config["label_smooth"]       = 0.1  #trial.suggest_float("label_smooth", 0.0, 0.15)
     #config["gate_balance_coef"]  = 0.1  #trial.suggest_float("gate_balance_coef", 0.0, 0.15)
 
     # Pretraining optim
