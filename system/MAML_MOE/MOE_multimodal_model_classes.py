@@ -744,7 +744,7 @@ class TwoDFSequenceDataset(Dataset):
       emg:   (C_emg, T)  float32
       imu:   (C_imu, T)  float32 or None
       demo:  (D_demo,)   float32
-      label: ()          int64   (class index)
+      labels: ()          int64   (class index)
       PIDs:  ()          int64   (numeric user index for embeddings)
     """
     # --------- Constructors for clarity (optional to use) ----------
@@ -906,7 +906,7 @@ class TwoDFSequenceDataset(Dataset):
                 demo_vals = demo_row[self.demo_cols].to_numpy()
             demo = torch.as_tensor(np.asarray(demo_vals, dtype=np.float32).reshape(-1), dtype=torch.float32)
 
-            return {"emg": emg, "imu": imu, "demo": demo, "label": label, "PIDs": PIDs}
+            return {"emg": emg, "imu": imu, "demo": demo, "labels": label, "PIDs": PIDs}
 
         else:
             # Tensor-backed path
@@ -915,7 +915,7 @@ class TwoDFSequenceDataset(Dataset):
             demo  = None if self._demo_t is None else self._demo_t[idx]
             label = self._labels_t[idx]
             pids  = self._pids_t[idx]
-            return {"emg": emg, "imu": imu, "demo": demo, "label": label, "PIDs": pids}
+            return {"emg": emg, "imu": imu, "demo": demo, "labels": label, "PIDs": pids}
 
 
 # ---- Collate (unimodal or multimodal) ---------------------------------------
@@ -927,7 +927,7 @@ def default_mm_collate_fixed(batch):
       emg:   (B, C_emg, T)
       imu:   (B, C_imu, T) or None
       demo:  (B, D_demo)
-      label: (B,)          int64
+      labels: (B,)          int64
       PIDs:  (B,)          int64
     """
     # EMG (C,T) -> (B,C,T)
@@ -946,10 +946,10 @@ def default_mm_collate_fixed(batch):
     demo = torch.stack([b["demo"] for b in batch], dim=0).float()
 
     # Labels / PIDs: robust to ints / numpy scalars / 0-D tensors
-    label = torch.as_tensor([int(b["label"]) for b in batch], dtype=torch.long)
+    label = torch.as_tensor([int(b["labels"]) for b in batch], dtype=torch.long)
     PIDs  = torch.as_tensor([int(b["PIDs"])  for b in batch], dtype=torch.long)
 
-    return {"emg": emg, "imu": imu, "demo": demo, "label": label, "PIDs": PIDs}
+    return {"emg": emg, "imu": imu, "demo": demo, "labels": label, "PIDs": PIDs}
 
 
 # ---- Dataloader builder ------------------------------------------------------
@@ -957,7 +957,6 @@ def build_dataloader_from_two_dfs(
     time_df: pd.DataFrame,
     demo_df: pd.DataFrame,
     *,  # TODO: I hate that it uses *. Remove this if possible
-    sample_keys=None,   # unused
     emg_cols=None,
     imu_cols=None,
     demo_cols=None,
