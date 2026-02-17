@@ -426,10 +426,14 @@ def meta_evaluate(model, episodic_loader, config, criterion=None):
                 current_q_count = len(ep["query"]["labels"])
             else:
                 #current_q_count = 1 
-                print("ep[query] is NOT a dictionary!")
-                print(f"type: {type(ep['query'])}")
-                print(f"len: {len(ep['query'])}")
-                print(f"first ele: {ep['query'][0]}")
+                if not isinstance(ep["query"], dict):
+                    print("ep[query] is NOT a dictionary!")
+                    print(f"type: {type(ep['query'])}")
+                    print(f"len: {len(ep['query'])}")
+                    print(f"first ele: {ep['query'][0]}")
+                elif "labels" not in ep["query"]:
+                    print("ep[query] IS a dict but labels not in dictionary!")
+                    print(f"Keys: {ep['query'].keys}")
                 raise ValueError("ep['query'] is NOT a dict for some reason. Check on that")
 
             # 3. Aggregate correctly
