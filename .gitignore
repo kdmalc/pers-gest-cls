@@ -2,3 +2,6 @@
 *.xlsx
 *.h5
 April_25/results/
+
+*.pyc
+__pycache__/
