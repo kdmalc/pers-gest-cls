@@ -420,6 +420,10 @@ def meta_evaluate(model, episodic_loader, config, criterion=None):
             ep_counter += 1
             print(f"Ep counted! Now on ep: {ep_counter}")
 
+            print(f"ep keys: {ep.keys()}")
+
+            print(f"User: {ep['user']}")
+
             # 1. Run inference
             metrics = mamlpp_adapt_and_eval(model, config, ep["support"], ep["query"])
             
