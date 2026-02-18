@@ -102,6 +102,9 @@ class EpisodicIterable(IterableDataset):
     def __iter__(self):
         # Fresh RNG per worker/epoch
         rng = random.Random(self.seed + int(torch.randint(0, 2**31-1, ()).item()))
+        # TODO: What is this doing? Is this literally need = 1 + 9 = 10? ...
+        ## So do we have any control on within-label splits, or is it just sampling 10 completely random samples from the entire user-specific database?
+        ## Maybe -- rng.sample(eligible, self.n_way)  # N distinct classes -- takes care of this?
         need = self.k_shot + self.q_query
 
         for _ in range(self.episodes_per_epoch):

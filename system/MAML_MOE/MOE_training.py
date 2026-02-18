@@ -131,16 +131,17 @@ def _model_forward_router(model, batch, device, multimodal: bool):
     # Dict batch (new or old)
     if isinstance(batch, dict):
         # labels
-        labels = batch.get("label", batch.get("labels"))
+        labels = batch['labels']
         if labels is None:
-            raise KeyError("Batch missing 'label' / 'labels'.")
+            raise KeyError("Batch missing 'labels' key.")
         labels = _to_device(labels.long(), device)
         B = labels.size(0)
 
         if multimodal:
             emg = _to_device(batch["emg"], device)
             # TODO: Is this how I want to handle this if IMU / DEMO are missing... not sure... fail quietly...
-            # I dont have config here...
+            # TODO: pass in config and then add print outs if demo or imu (or emg) are empty/None but use_imu/etc are turned on
+            # NOTE: These should NOT be pulling use_imu and use_demographic (not directly anyways); batch['imu'] is its own thing
             imu = _to_device(batch["imu"], device) if batch.get("imu", None) is not None else None
             demo = _to_device(batch["demo"], device) if batch.get("demo", None) is not None else None
             #pids = _to_device(batch["PIDs"], device) if batch.get("PIDs", None) is not None else None

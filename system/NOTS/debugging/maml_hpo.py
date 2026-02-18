@@ -173,7 +173,7 @@ def build_model_from_trial(trial, base_config=None):
     if config["use_lstm"]:
         config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [32, 64, 128])
         config["lstm_layers"] = trial.suggest_categorical("lstm_layers", [1, 2, 3])
-        #config["lstm_bidirectional"] = True  # Not used, True by default (hardcoded)
+        #config["lstm_bidirectional"] = True  # Not implemented, hardcoded as True by default
         config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
     # ---- MoE placement (you can leave this as-is; we keep MoE at the head) ----
     #config["moe_placement"] = "head"        # ("head" recommended; others optional/unused here) --> This architecture is hardcoded in but ought to test other placements probably...
@@ -185,8 +185,7 @@ def build_model_from_trial(trial, base_config=None):
     #config["gate_balance_coef"]  = 0.1  #trial.suggest_float("gate_balance_coef", 0.0, 0.15)
 
     # Pretraining optim
-    config["learning_rate"]      = trial.suggest_float("pre_lr", 0.000001, 0.01, log=True)
-    config["weight_decay"]       = trial.suggest_float("pre_wd", 1e-6, 1e-3, log=True)
+    config["weight_decay"]       = trial.suggest_float("pre_wd", 1e-6, 1e-3, log=True)  # TODO: Is weight_decay used right now lol
     config["optimizer"]          = trial.suggest_categorical("optimizer", ["adamw", "adam", "sgd"])
     config["lr_scheduler_factor"]= 0.1  #trial.suggest_categorical("pre_sched_factor", [0.1, 0.2])
     config["lr_scheduler_patience"]= 6  #trial.suggest_int("pre_sched_pat", 4, 10)
@@ -227,17 +226,24 @@ def build_model_from_trial(trial, base_config=None):
     elif config["use_maml_msl"] == False:
         config["maml_msl_num_epochs"] = 0
     
+    # If LSLR is used, then alpha is only used as a fallback/init (and then we learn the learning rate). I am not sure if beta gets used at all. I think it does?
     config["maml_use_lslr"] = trial.suggest_categorical("maml_use_lslr", [True, False])                             # learn per-parameter, per-step inner LRs
-    # TODO: Is this maml_alpha_init being used as a learning rate?
+    # AKA Beta. This is the outer loop learning rate (the one that actually gets used directly in the optimizer)
+    config["learning_rate"]      = trial.suggest_float("pre_lr", 0.00001, 0.05)
+    # Alpha is the inner loop learning rate
     ## I remember that in PerFedAvg they said beta was around 0.5 or something (IIRC)
-    ## Yes this is being used as a learning rate
-    ## Gotta sort this out with the other one, idek if the other one is being used anymore...
-    config["maml_alpha_init"] = 1E-3                            # fallback α (also eval α if LSLR not used at eval)
+    if config["maml_use_lslr"] == True:
+        # These are only getting used as inits so it doesn't really matter I dont think...
+        config["maml_alpha_init"] = 1E-3                            # fallback α (also eval α if LSLR not used at eval)
+        config["maml_alpha_init_eval"] = 1E-3
+    elif config["maml_use_lslr"] == False:
+        # TODO: HPO over these vals
+        config["maml_alpha_init"] = trial.suggest_float("maml_alpha_init", 0.00001, 0.05)
+        config["maml_alpha_init_eval"] = trial.suggest_float("maml_alpha_init_eval", 0.00001, 0.05)
     config["enable_inner_loop_optimizable_bn_params"] = False  # by default, do NOT adapt BN in inner loop --> I should not be using BN at all AFAIK
     # Eval
     # At eval this is just the inner loop with no outer, so no MSL and no Hessian. This should be much quicker. 5-10 is common here
-    config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [1, 3, 5, 10, 15])
-    config["maml_alpha_init_eval"] = 1E-3
+    config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [3, 5, 10, 15, 20, 30])
     config["use_cosine_outer_lr"] = False                       # This is cosine-based lr annealing... is this in addition to my lr scheduler....
     config["use_lslr_at_eval"] = False                         # set True if you want to use learned per-parameter step sizes at eval
 

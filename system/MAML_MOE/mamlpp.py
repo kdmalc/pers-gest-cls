@@ -269,7 +269,7 @@ def MAMLpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
     )
 
     scheduler = None
-    if bool(config.get("use_cosine_outer_lr", False)):
+    if bool(config.get("use_cosine_outer_lr", False)):  # TODO: Does this exist?
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(meta_opt, T_max=int(config["num_epochs"]))
 
     use_es = episodic_val_loader is not None and bool(config["use_earlystopping"])
@@ -313,6 +313,8 @@ def MAMLpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
                 print(f"[EarlyStopping] epoch {ep}: val loss stalled. Stopping.")
                 if scheduler: scheduler.step()
                 break
+        else:
+            print("No val loader found! Skipping during-training val evals")
 
         if scheduler: scheduler.step()
         print(f"Epoch completed in {time.time() - epoch_start_time:.2f}s\n")

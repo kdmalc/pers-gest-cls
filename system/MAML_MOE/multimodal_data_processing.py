@@ -155,6 +155,11 @@ def load_multimodal_data_loaders(config,
             emg_cols, imu_cols, demo_cols = pickle.load(f)
 
     if config["meta_learning"]:
+        """So in this branch, we load in our separated support and query dfs, merge them together, create a ds and dl, toss the dl, then create two dls from the ds
+        For the actual support/query breakdown, they are non-overlapping (good) but fully complementary (all samples are used, non-ideal)"""
+
+
+
         # ----------------
         # Meta-learning episodic loaders
         # ----------------
