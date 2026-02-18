@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=maml-debug
+#SBATCH --job-name=mamlpp-debug
 #SBATCH --partition=debug
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -56,6 +56,6 @@ export PYTHONPATH="$CODE_DIR:$MOE_DIR:$PYTHONPATH"
 #echo "=================="
 
 echo "CWD:"; pwd
-python -u "$CODE_DIR/system/NOTS/debugging/maml_hpo.py" \
+python -u "$CODE_DIR/system/NOTS/debugging/mamlpp_hpo.py" \
     --data_dir "$DATA_DIR" \
     --out_dir  "$DEBUG_RUN_DIR"
