@@ -18,8 +18,24 @@ def meta_evaluate(model, episodic_loader, config, adapt_and_eval_fn):
         for ep in episodes:
             ep_counter += 1
             print(f"step / ep: {step_counter} / {ep_counter}")
-
             print(f"Meta eval user_id: {ep['user_id']}")
+
+            # Inside: for ep in episodes:
+            support_labels = ep["support"]["labels"] 
+            #emg_data_shape = ep["support"]["emg"] --> Torch.tensor of size [10, 16, 64]
+            #print(f"Support emg type: {type(ep['support']['emg'])}")
+            #print(f"Support emg shape: {ep['support']['emg'].shape}")
+            # Just print the first 5 labels to see if they change between steps for the same user
+            print(f"User: {ep['user_id']} | Support Labels (first 5): {support_labels[:5]}")
+
+            # Compute norm and mean of the first sample in the batch
+            # These are all the same... all have norm 32.0 and mean 0.0...
+            #first_sample = ep["support"]["emg"][0].detach().float()
+            #sample_norm = torch.norm(first_sample).item()
+            #sample_mean = first_sample.mean().item()
+            #print(f"First Sample Norm: {sample_norm:.4f} | Mean: {sample_mean:.4f}")
+            #print(f"Num unique values in sample: {len(torch.unique(ep['support']['emg'][0]))}") --> 1024
+            print(f"First 5 values in first sample: {ep['support']['emg'][0, 0, :5]}")
 
             metrics = adapt_and_eval_fn(model, config, ep["support"], ep["query"])
             

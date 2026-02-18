@@ -346,13 +346,12 @@ def objective(trial):
             config,
         )
         user_accs = []
-        val_dls = user_loaders[0]
+        val_dls = user_loaders[0]  # val_dls is a dictionary of dataloaders, keys are user_ids and values are the user-specific dataloaders
         #test_dls = user_loaders[1]
         #for pid, (user_val_epi_dl, user_test_epi_dl) in user_loaders.items():
         for user_id, user_val_dl in val_dls.items():
             if user_val_dl is None:
                 raise ValueError("user_val_dl is None, preventing maml_finetune_and_eval...")
-                continue
 
             val_metrics = meta_evaluate(model, user_val_dl, config, mamlpp_adapt_and_eval)
             final_user_val_loss, final_user_val_acc = val_metrics["loss"], val_metrics["acc"]
