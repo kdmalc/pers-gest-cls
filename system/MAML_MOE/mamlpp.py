@@ -7,6 +7,7 @@ import numpy as np
 import time
 
 from system.MAML_MOE.MOE_training import _model_forward_router, set_MOE_optimizer, SmoothedEarlyStopping
+from system.MAML_MOE.shared_maml import *
 
 # -----------------------------
 # Functional execution helpers
@@ -298,7 +299,7 @@ def MAMLpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         # Val
         if episodic_val_loader is not None:
             val_start_time = time.time()
-            val_metrics = meta_evaluate(model, episodic_val_loader, config)
+            val_metrics = meta_evaluate(model, episodic_val_loader, config, mamlpp_adapt_and_eval)
             cur_val_loss, cur_val_acc = val_metrics["loss"], val_metrics["acc"]
             val_loss_log.append(cur_val_loss)
             val_acc_log.append(cur_val_acc)
@@ -337,8 +338,15 @@ def MAMLpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
 # Test Time Adaptation
 # -----------------------------
 def mamlpp_adapt(model, config, support_batch, *, use_lslr_at_eval=False):
-    """Adaptation during Meta-Evaluation. MUST detach graph between steps to avoid modifying base weights."""
-    device = config['device']; model.to(device).eval()
+    """
+    Adaptation during Meta-Evaluation. 
+    CRITICAL: Must use model.train() to allow RNN gradient computation (cuDNN requirement).
+    """
+    device = config['device']
+    
+    # FIX: Explicitly set to train mode for the inner loop updates
+    model.to(device).train() 
+    
     multimodal = bool(config["multimodal"])
     N_eval = int(config["maml_inner_steps_eval"])
 
@@ -348,6 +356,8 @@ def mamlpp_adapt(model, config, support_batch, *, use_lslr_at_eval=False):
 
     label_smooth = float(config["label_smooth"])
     criterion = nn.CrossEntropyLoss(label_smoothing=label_smooth) if label_smooth > 0 else nn.CrossEntropyLoss()
+    
+    # LSLR Logic
     use_lslr = bool(config["maml_use_lslr"]) and use_lslr_at_eval and hasattr(model, "_lslr")
     alpha_eval = float(config["maml_alpha_init_eval"])
 
@@ -358,12 +368,10 @@ def mamlpp_adapt(model, config, support_batch, *, use_lslr_at_eval=False):
             logits_s = outputs_s[0] if isinstance(outputs_s, tuple) else outputs_s
             s_loss = criterion(logits_s, labels_s)
 
-            # create_graph=False because we don't backprop to theta0
+            # create_graph=False because we don't backprop to theta0 during EVALUATION
             grads = torch.autograd.grad(s_loss, list(theta.values()), create_graph=False, allow_unused=True)
-
             lslr = model._lslr if use_lslr else None
             theta = apply_update_repo_style(theta, grads, lslr=lslr, step=step, fallback_alpha=alpha_eval)
-
             # Detach after step to reset the temporary computation graph
             theta = OrderedDict((n, p.detach().requires_grad_(True)) for n, p in theta.items())
 
@@ -371,7 +379,15 @@ def mamlpp_adapt(model, config, support_batch, *, use_lslr_at_eval=False):
 
 @torch.no_grad()
 def mamlpp_predict_with_params(model, adapted_params, batch, config):
-    device = config['device']; model.to(device).eval()
+    """
+    Prediction on Query Set.
+    We switch to eval() here to disable Dropout/BN stats updates for the final prediction.
+    """
+    device = config['device']
+    
+    # It is safe to switch to eval() here because we are done with gradients for this episode
+    model.to(device).eval() 
+    
     multimodal = bool(config["multimodal"])
 
     fmodel = FunctionalModel(model, adapted_params)
@@ -382,7 +398,10 @@ def mamlpp_predict_with_params(model, adapted_params, batch, config):
     return logits, preds, labels, B
 
 def mamlpp_adapt_and_eval(model, config, support_batch, query_batch):
+    # 1. Adapt (Will set model to TRAIN mode)
     theta_prime = mamlpp_adapt(model, config, support_batch)
+    
+    # 2. Predict (Will set model to EVAL mode)
     logits, preds, labels, B = mamlpp_predict_with_params(model, theta_prime, query_batch, config)
 
     label_smooth = float(config["label_smooth"])
@@ -392,64 +411,3 @@ def mamlpp_adapt_and_eval(model, config, support_batch, query_batch):
     acc = (preds == labels).sum().item() / max(1, B)
 
     return {"loss": q_loss, "acc": acc, "adapted_params": theta_prime}
-
-def meta_evaluate(model, episodic_loader, config, criterion=None):
-    if criterion is not None:
-        raise ValueError("Inputting a criterion is currently not supported! It is not used at all rn")
-    device = config["device"]
-    model.to(device).eval()
-
-    def _norm(x):
-        if isinstance(x, dict): return [x]
-        if isinstance(x, (list, tuple)): return list(x)
-        raise TypeError()
-
-    total_loss = total_correct = total_count = n_eps = 0
-
-    print("META_EVALUATE START")
-    step_counter = 0
-    ep_counter = 0
-    # I am not totally sure how this is working...
-    ## Each dataloader probably only returns 1 episode (1 per user)
-    ## But we have multiple users... so... do we have multiple dataloaders, or does this dataloader return more than 1... ...
-    for step_item in episodic_loader:
-        step_counter += 1
-        print(f"Step counted! Now on step: {step_counter}")
-
-        for ep in _norm(step_item): 
-            ep_counter += 1
-            print(f"Ep counted! Now on ep: {ep_counter}")
-
-            print(f"ep keys: {ep.keys()}")
-
-            print(f"User: {ep['user']}")
-
-            # 1. Run inference
-            metrics = mamlpp_adapt_and_eval(model, config, ep["support"], ep["query"])
-            
-            # 2. Get the specific count for THIS episode
-            if isinstance(ep["query"], dict) and "labels" in ep["query"]:
-                current_q_count = len(ep["query"]["labels"])
-            else:
-                #current_q_count = 1 
-                if not isinstance(ep["query"], dict):
-                    print("ep[query] is NOT a dictionary!")
-                    print(f"type: {type(ep['query'])}")
-                    print(f"len: {len(ep['query'])}")
-                    print(f"first ele: {ep['query'][0]}")
-                elif "labels" not in ep["query"]:
-                    print("ep[query] IS a dict but labels not in dictionary!")
-                    print(f"Keys: {ep['query'].keys()}")
-                raise ValueError("ep['query'] is NOT a dict for some reason. Check on that")
-
-            # 3. Aggregate correctly
-            total_loss += metrics["loss"]
-            total_correct += (metrics["acc"] * current_q_count) # Multiply by current episode size
-            total_count += current_q_count
-            n_eps += 1
-
-    return {
-        "loss": total_loss / max(n_eps, 1),
-        "acc": (total_correct / max(total_count, 1)) if total_count else 0.0,
-        "episodes": n_eps,
-    }

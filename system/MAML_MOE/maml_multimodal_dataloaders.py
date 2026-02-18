@@ -174,6 +174,9 @@ class EpisodicIterable(IterableDataset):
             support = self.collate_fn(support_samples)
             query   = self.collate_fn(query_samples)
 
+            # label_map and classes_global are basically encodings of the labels
+            # classes_global are the actual gesture labels (ie, 'move')
+            # label_map is the encoding that converts a numeric value into the corresponding gesture class string
             yield {
                 'support': support,
                 'query': query,

@@ -7,6 +7,7 @@ import time
 
 # Reusing your existing project-specific routers and logic
 from system.MAML_MOE.MOE_training import _model_forward_router, set_MOE_optimizer, SmoothedEarlyStopping
+from system.MAML_MOE.shared_maml import *
 
 # -----------------------------
 # Functional execution helpers
@@ -181,7 +182,7 @@ def MAML_pretrain(model, config, episodic_train_loader, episodic_val_loader=None
 
         # Validation
         if episodic_val_loader:
-            v_metrics = meta_evaluate(model, episodic_val_loader, config)
+            v_metrics = meta_evaluate(model, episodic_val_loader, config, maml_adapt_and_eval)
             metrics_log["val_loss"].append(v_metrics["loss"])
             metrics_log["val_acc"].append(v_metrics["acc"])
             print(f"Val Loss: {v_metrics['loss']:.4f} | Acc: {v_metrics['acc']*100:.2f}%")
@@ -206,42 +207,71 @@ def MAML_pretrain(model, config, episodic_train_loader, episodic_val_loader=None
 def maml_predict(model, adapted_params, batch, config):
     """Simple prediction using adapted parameters."""
     device = config['device']
+    
+    # It is safe to switch to eval() here because we are done with gradients for this episode
+    model.to(device).eval() 
+
     fmodel = FunctionalModel(model, adapted_params)
     outputs, labels, B = _model_forward_router(fmodel, batch, device, multimodal=config.get('multimodal', False))
     logits = outputs[0] if isinstance(outputs, tuple) else outputs
     return logits, torch.argmax(logits, dim=1), labels, B
 
-def meta_evaluate(model, episodic_loader, config):
-    model.eval()
-    device = config["device"]
-    criterion = nn.CrossEntropyLoss()
+def maml_adapt(model, config, support_batch, criterion=None):
+    """
+    Inner loop adaptation for standard MAML.
+    """
+    # CRITICAL: Keep model in train mode for LSTM gradient support
+    model.train() 
+    device = config['device']
+    multimodal = config["multimodal"]
     
-    total_loss = total_correct = total_count = n_eps = 0
+    # Hyperparams for eval adaptation
+    steps = config.get('maml_inner_steps_eval', config.get('maml_inner_steps', 1))
+    alpha = config.get('maml_alpha_init_eval', config.get('maml_alpha_init', 0.01))
 
-    for step_item in episodic_loader:
-        episodes = [step_item] if isinstance(step_item, dict) else step_item
-        for ep in episodes:
-            # 1. Adapt (Inner Loop - with torch.enable_grad() so we can compute support grads)
-            with torch.enable_grad():
-                theta0 = named_param_dict(model)
-                # We usually use more steps or a different LR at eval; check config
-                # It is overwriting so that we can call inner_loop_maml and have it use the eval params without needing additional branching logic
-                eval_config = config.copy()
-                eval_config['maml_inner_steps'] = config.get('maml_inner_steps_eval', config['maml_inner_steps'])
-                eval_config['maml_alpha_init'] = config.get('maml_alpha_init_eval', config['maml_alpha_init'])
-                
-                theta_prime = inner_loop_maml(model, theta0, ep["support"], eval_config, criterion=criterion)
+    # Initial weights
+    theta = named_param_dict(model)
 
-            # 2. Predict on Query
-            logits, preds, labels, B = maml_predict(model, theta_prime, ep["query"], config)
-            
-            total_loss += criterion(logits, labels).item()
-            total_correct += (preds == labels).sum().item()
-            total_count += B
-            n_eps += 1
+    if criterion is None:
+        label_smooth = float(config["label_smooth"])
+        criterion = nn.CrossEntropyLoss(label_smoothing=label_smooth) if label_smooth > 0 else nn.CrossEntropyLoss()
+
+    for _ in range(steps):
+        # Create the functional wrapper
+        f_model = FunctionalModel(model, theta)
+        # Forward pass on support set
+        outputs_s, labels_s, _ = _model_forward_router(f_model, support_batch, device, multimodal=multimodal)
+        logits_s = outputs_s[0] if isinstance(outputs_s, tuple) else outputs_s
+        
+        loss = criterion(logits_s, labels_s)
+        # Compute gradients wrt current theta
+        grads = torch.autograd.grad(loss, list(theta.values()), create_graph=False, allow_unused=True)
+        # Update theta: theta' = theta - alpha * grads
+        theta = apply_gradient_update(theta, grads, alpha)
+        
+    return theta
+
+def maml_adapt_and_eval(model, config, support_batch, query_batch):
+    """
+    Adapts and evaluates for standard MAML. 
+    Matches the signature of mamlpp_adapt_and_eval.
+    """
+    label_smooth = float(config.get("label_smooth", 0.0))
+    criterion = nn.CrossEntropyLoss(label_smoothing=label_smooth) if label_smooth > 0 else nn.CrossEntropyLoss()
+
+    # 1. Adapt on support set
+    theta_prime = maml_adapt(model, config, support_batch, criterion)
+
+    # 2. Predict on query set
+    # Using the maml_predict function you already wrote
+    logits, preds, labels, B = maml_predict(model, theta_prime, query_batch, config)
+
+    # 3. Calculate metrics
+    q_loss = criterion(logits, labels).item()
+    acc = (preds == labels).sum().item() / max(1, B)
 
     return {
-        "loss": total_loss / max(n_eps, 1),
-        "acc": total_correct / max(total_count, 1),
-        "episodes": n_eps
+        "loss": q_loss, 
+        "acc": acc, 
+        "adapted_params": theta_prime
     }

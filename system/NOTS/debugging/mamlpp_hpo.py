@@ -57,9 +57,7 @@ def apply_fold_to_config(config, all_splits, fold_idx):
 from system.MAML_MOE.multimodal_data_processing import *  # Needed for load_multimodal_dataloaders()
 from system.MAML_MOE.mamlpp import *
 from system.MAML_MOE.maml_multimodal_dataloaders import *
-
-#from system.MAML_MOE.MOE_multimodal_model_classes import *
-#from system.MAML_MOE.MOE_shared import *
+from system.MAML_MOE.shared_maml import *
 from system.MAML_MOE.MOE_CNN_LSTM import *
 
 current_directory = os.getcwd()
@@ -95,20 +93,15 @@ def build_model_from_trial(trial, base_config=None):
 
     config["NOTS"] = True
     if config["NOTS"]==False:
-        # TODO: These are not updated yet...
-        raise ValueError("You are running the NOTS=False (non-cluster) version! Filepaths must be fixed for new repo.")
-
-        # Presumably this will never be used since this .py file should only be called by a slurm file?
-        ## SAVING
-        config["user_split_json_filepath"] = "C:\\Users\\kdmen\\Repos\\fl-gestures\\April_25\\fixed_user_splits\\4kfcv_splits_shared_test.json"
-        config["results_save_dir"] = f"C:\\Users\\kdmen\\Repos\\fl-gestures\\April_25\\results\\MOE\\{timestamp}_MOE"
-        config["models_save_dir"] = f"C:\\Users\\kdmen\\Repos\\fl-gestures\\April_25\\models\\MOE\\{timestamp}_MOE"
-        ## Mutlimodal LOADING
-        config["emg_imu_pkl_full_path"] = 'C:\\Users\\kdmen\\Box\\Yamagami Lab\\Data\\Meta_Gesture_Project\\filtered_datasets\\metadata_IMU_EMG_allgestures_allusers.pkl'
-        config["pwmd_xlsx_filepath"] = "C:\\Users\\kdmen\\Repos\\fl-gestures\\Biosignal gesture questionnaire for participants with disabilities.xlsx"
-        config["pwoutmd_xlsx_filepath"] = "C:\\Users\\kdmen\\Repos\\fl-gestures\\Biosignal gesture questionnaire for participants without disabilities.xlsx" 
-        config["dfs_save_path"] = "C:\\Users\\kdmen\\Repos\\fl-gestures\\April_25\\MOE\\full_datasplit_dfs\\"
-        config["dfs_load_path"] = "C:\\Users\\kdmen\\Repos\\fl-gestures\\April_25\\MOE\\full_datasplit_dfs\\Initial_Multimodal\\"
+        #config["emg_imu_pkl_full_path"] = 'C:\\Users\\kdmen\\Box\\Yamagami Lab\\Data\\Meta_Gesture_Project\\filtered_datasets\\metadata_IMU_EMG_allgestures_allusers.pkl'
+        config["pwmd_xlsx_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\Biosignal gesture questionnaire for participants with disabilities.xlsx"
+        config["pwoutmd_xlsx_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\Biosignal gesture questionnaire for participants without disabilities.xlsx"
+        config["dfs_save_path"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\"
+        config["dfs_load_path"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\"
+        config["saved_df_timestamp"] = '20250917_1217'
+        config["user_split_json_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\fixed_user_splits\\4kfcv_splits_shared_test.json"
+        config["results_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\results\\local_{timestamp}"
+        config["models_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\models\\local_{timestamp}"
     elif config["NOTS"]==True:
         ## SAVING
         config["user_split_json_filepath"] = user_split_json_filepath
@@ -354,16 +347,17 @@ def objective(trial):
         )
         user_accs = []
         val_dls = user_loaders[0]
-        test_dls = user_loaders[1]
+        #test_dls = user_loaders[1]
         #for pid, (user_val_epi_dl, user_test_epi_dl) in user_loaders.items():
-        for user_val_dl in val_dls:
+        for user_id, user_val_dl in val_dls.items():
             if user_val_dl is None:
                 raise ValueError("user_val_dl is None, preventing maml_finetune_and_eval...")
                 continue
 
-            val_metrics = meta_evaluate(model, user_val_dl, config)
+            val_metrics = meta_evaluate(model, user_val_dl, config, mamlpp_adapt_and_eval)
             final_user_val_loss, final_user_val_acc = val_metrics["loss"], val_metrics["acc"]
             user_accs.append(final_user_val_acc)
+            print(f"Final user{user_id} loss: {final_user_val_acc*100:.2f}%")
 
         mean_acc = float(np.mean(user_accs)) if len(user_accs) > 0 else float("nan")
 
