@@ -257,7 +257,7 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
 # -----------------------------
 # Outer loop (pretrain)
 # -----------------------------
-def MAMLpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=None):
+def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=None):
     device = config["device"]
     model.to(device)
 
@@ -286,7 +286,7 @@ def MAMLpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
     num_epochs = int(config["num_epochs"])
 
     for ep in range(1, num_epochs + 1):
-        print(f"MAML Pretraining: Epoch {ep} of {num_epochs}")
+        print(f"MAML++ Pretraining: Epoch {ep} of {num_epochs}")
         epoch_start_time = time.time()
 
         # Train

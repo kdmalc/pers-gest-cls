@@ -149,7 +149,7 @@ def train_MAML_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, cr
 # -----------------------------
 # Top-Level Pretraining Pipeline
 # -----------------------------
-def MAML_pretrain(model, config, episodic_train_loader, episodic_val_loader=None):
+def maml_pretrain(model, config, episodic_train_loader, episodic_val_loader=None):
     device = config["device"]
     model.to(device)
 
@@ -181,7 +181,7 @@ def MAML_pretrain(model, config, episodic_train_loader, episodic_val_loader=None
         print(f"Train Loss: {t_metrics['loss']:.4f} | Acc: {t_metrics['acc']*100:.2f}%")
 
         # Validation
-        if episodic_val_loader:
+        if episodic_val_loader is not None:
             v_metrics = meta_evaluate(model, episodic_val_loader, config, maml_adapt_and_eval)
             metrics_log["val_loss"].append(v_metrics["loss"])
             metrics_log["val_acc"].append(v_metrics["acc"])
@@ -207,7 +207,7 @@ def MAML_pretrain(model, config, episodic_train_loader, episodic_val_loader=None
 def maml_predict(model, adapted_params, batch, config):
     """Simple prediction using adapted parameters."""
     device = config['device']
-    
+
     # It is safe to switch to eval() here because we are done with gradients for this episode
     model.to(device).eval() 
 

@@ -305,8 +305,8 @@ def objective(trial):
         )
 
         # Do the meta "pretraining" (is this just the meta-train phase?)
-        ## MAMLpp_pretrain returns: train_loss_log, train_acc_log, val_loss_log, val_acc_log, model, best_state, best_val_acc,
-        pretrained_model, pretrain_res_dict = MAMLpp_pretrain(
+        ## mamlpp_pretrain returns: train_loss_log, train_acc_log, val_loss_log, val_acc_log, model, best_state, best_val_acc,
+        pretrained_model, pretrain_res_dict = mamlpp_pretrain(
             model,
             config,
             episodic_train_loader,
