@@ -1,6 +1,4 @@
-import torch
-import torch.nn as nn
-import numpy as np
+# This is also no longer used with the new dataloader structure (did that solve the num_workers repeat trials?)
 
 def meta_evaluate(model, episodic_loader, config, adapt_and_eval_fn):
     """

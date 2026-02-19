@@ -54,9 +54,10 @@ def apply_fold_to_config(config, all_splits, fold_idx):
     config["num_testft_users"] = len(config["val_PIDs"])
 ###########################
 
-from system.MAML_MOE.multimodal_data_processing import *  # Needed for load_multimodal_dataloaders()
+#from system.MAML_MOE.multimodal_data_processing import *  # Needed for load_multimodal_dataloaders()
+#from system.MAML_MOE.maml_multimodal_dataloaders import *
 from system.MAML_MOE.mamlpp import *
-from system.MAML_MOE.maml_multimodal_dataloaders import *
+from maml_data_pipeline import get_maml_dataloaders, maml_mm_collate
 from system.MAML_MOE.shared_maml import *
 from system.MAML_MOE.MOE_CNN_LSTM import *
 
@@ -299,9 +300,20 @@ def objective(trial):
         apply_fold_to_config(config, ALL_SPLITS, fold_idx)
 
         # ---- Pretraining data & training ----
-        episodic_train_loader, episodic_val_loader, episodic_test_loader = load_multimodal_data_loaders(
+        #episodic_train_loader, episodic_val_loader, episodic_test_loader = load_multimodal_data_loaders(
+        #    config,
+        #    load_existing_dfs=True,
+        #)
+        # ---- New Optimized Data Loading ----
+        # Define the path to the .pkl file we just created/verified
+        tensor_dict_path = os.path.join(config["dfs_load_path"], f"{config['saved_df_timestamp']}_tensor_dict.pkl")
+
+        # This returns two standard PyTorch DataLoaders
+        # It uses config['train_PIDs'] and config['val_PIDs'] internally to split the data
+        episodic_train_loader, episodic_val_loader = get_maml_dataloaders(
             config,
-            load_existing_dfs=True,
+            tensor_dict_path=tensor_dict_path,
+            collate_fn=maml_mm_collate
         )
 
         # Do the meta "pretraining" (is this just the meta-train phase?)
@@ -340,22 +352,35 @@ def objective(trial):
         ## NOTE: Allegedly this is the same as just calling meta_evaluate()
         ## In the Outer Loop (Meta-Training), small batches are noisy. But in the Meta-Test phase, there is no "batch size" because there is no outer update.
         ## You are just processing episodes one by one. Increasing the "batch size" here would just be a trick to make it run faster on your GPU by parallelizing users; it wouldn't change the accuracy at all.
-        user_loaders = make_user_loaders_from_dataloaders(
-            episodic_val_loader,
-            episodic_test_loader,
-            config,
-        )
-        user_accs = []
-        val_dls = user_loaders[0]  # val_dls is a dictionary of dataloaders, keys are user_ids and values are the user-specific dataloaders
+        #user_loaders = make_user_loaders_from_dataloaders(
+        #    episodic_val_loader,
+        #    episodic_test_loader,
+        #    config,
+        #)
+        #val_dls = user_loaders[0]  # val_dls is a dictionary of dataloaders, keys are user_ids and values are the user-specific dataloaders
         #test_dls = user_loaders[1]
-        for user_id, user_val_dl in val_dls.items():
-            if user_val_dl is None:
-                raise ValueError("user_val_dl is None, preventing maml_finetune_and_eval...")
+        #for user_id, user_val_dl in val_dls.items():
+        #    if user_val_dl is None:
+        #        raise ValueError("user_val_dl is None, preventing maml_finetune_and_eval...")
+        #
+        #    val_metrics = meta_evaluate(model, user_val_dl, config, mamlpp_adapt_and_eval)
+        #    final_user_val_loss, final_user_val_acc = val_metrics["loss"], val_metrics["acc"]
+        #    user_accs.append(final_user_val_acc)
+        #    print(f"Final user{user_id} loss: {final_user_val_acc*100:.2f}%")
+        user_accs = []
+        # The new val_loader iterates through each validation user exactly once
+        for batch in episodic_val_loader:
+            user_id = batch['user_id']
+            support_set = batch['support']
+            query_set = batch['query']
 
-            val_metrics = meta_evaluate(model, user_val_dl, config, mamlpp_adapt_and_eval)
-            final_user_val_loss, final_user_val_acc = val_metrics["loss"], val_metrics["acc"]
-            user_accs.append(final_user_val_acc)
-            print(f"Final user{user_id} loss: {final_user_val_acc*100:.2f}%")
+            # Call your evaluation function using the support and query sets directly
+            # We use mamlpp_adapt_and_eval which handles the inner-loop update
+            val_metrics = mamlpp_adapt_and_eval(model, config, support_set, query_set)
+            
+            user_acc = val_metrics["acc"]
+            user_accs.append(user_acc)
+            print(f"User {user_id} | Validation Acc: {user_acc*100:.2f}%")
 
         mean_acc = float(np.mean(user_accs)) if len(user_accs) > 0 else float("nan")
 
