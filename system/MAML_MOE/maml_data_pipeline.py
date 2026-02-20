@@ -61,64 +61,96 @@ class MetaGestureDataset(Dataset):
         return self.episodes_per_epoch if self.is_train else len(self.pids)
 
     def __getitem__(self, idx):
-        # Map-style datasets cleanly handle num_workers without duplicating episodes.
-        
+        """
+        Returns a single MAML episode (Support set and Query set).
+        Each sample in the sets now contains 'emg' and 'imu' separately.
+        """
+        # -----------------------------------------------------------
+        # 1. IDENTIFY USER AND CLASSES (N-WAY)
+        # -----------------------------------------------------------
         if self.is_train:
-            # Pick a random user
+            # Training: Randomly pick a user and then pick N random gestures they have performed
             user_id = self.rng.choice(self.pids)
-            # Pick random gestures available for this user
             available_gestures = [g for g in self.target_gestures if g in self.data[user_id]]
             classes = self.rng.sample(available_gestures, self.n_way)
         else:
-            # Deterministic evaluation: idx directly corresponds to a specific user
+            # Evaluation: Deterministic. Each idx maps to a specific user to ensure 
+            # consistent reporting across HPO trials.
             user_id = self.pids[idx]
-            # Always evaluate on the exact same fixed support/query gestures
             classes = sorted([g for g in self.target_gestures if g in self.data[user_id]])[:self.n_way]
 
         support_samples, query_samples = [], []
         label_map = {c: i for i, c in enumerate(classes)}
 
+        # -----------------------------------------------------------
+        # 2. LOOP THROUGH CLASSES TO BUILD SUPPORT/QUERY SAMPLES
+        # -----------------------------------------------------------
         for global_c in classes:
             local_label = label_map[global_c]
-            user_class_data = self.data[user_id][global_c]['timeseries'] # Tensor of shape (num_trials, feature_dim)
+            
+            # Access the 3D Tensors: (Num_Trials, Time, Channels)
+            user_emg_data = self.data[user_id][global_c]['emg'] 
+            user_imu_data = self.data[user_id][global_c]['imu']
             user_demo = self.data[user_id][global_c]['demo']
             
-            total_trials = user_class_data.shape[0]
+            # Determine available trials (usually 10)
+            total_trials = user_emg_data.shape[0]
             indices = list(range(total_trials))
             
+            # Shuffle trials during training so the 'Support' trial isn't always the same one
             if self.is_train:
                 self.rng.shuffle(indices)
-            # If eval, indices remain sorted for deterministic 1-shot selection
             
+            # -----------------------------------------------------------
+            # 3. SPLIT DISJOINT INDICES (K-SHOT vs Q-QUERY)
+            # -----------------------------------------------------------
+            # Support indices: The first K trials
             sup_idx = indices[:self.k_shot]
-            qry_idx = indices[self.k_shot : self.k_shot + self.q_query] if self.is_train else indices[self.k_shot:]
+            
+            # Query indices: The next Q trials. 
+            # This ensures support and query never overlap.
+            # If is_train is false, we use all remaining trials for a more robust evaluation.
+            if self.is_train:
+                # Slice from K to K+Q (e.g., 1:1+5)
+                qry_idx = indices[self.k_shot : self.k_shot + self.q_query]
+            else:
+                # Use everything else for evaluation
+                qry_idx = indices[self.k_shot:]
 
-            # Build support list
+            # -----------------------------------------------------------
+            # 4. MATERIALIZE SAMPLE DICTIONARIES
+            # -----------------------------------------------------------
+            # Build Support List for this class
             for i in sup_idx:
                 support_samples.append({
-                    'timeseries': user_class_data[i],
+                    'emg': user_emg_data[i], # Shape: (64, 16)
+                    'imu': user_imu_data[i], # Shape: (64, 72)
                     'demo': user_demo,
                     'label': torch.tensor(local_label, dtype=torch.long),
                     'global_class': global_c
                 })
                 
-            # Build query list
+            # Build Query List for this class
             for i in qry_idx:
                 query_samples.append({
-                    'timeseries': user_class_data[i],
+                    'emg': user_emg_data[i],
+                    'imu': user_imu_data[i],
                     'demo': user_demo,
                     'label': torch.tensor(local_label, dtype=torch.long),
                     'global_class': global_c
                 })
 
-        # Shuffle tasks during training to prevent the model from memorizing class orders
+        # -----------------------------------------------------------
+        # 5. FINAL SHUFFLE AND RETURN
+        # -----------------------------------------------------------
+        # Shuffle the samples within the episode so the model doesn't see 
+        # all 'Class 0' samples followed by all 'Class 1' samples.
         if self.is_train:
             self.rng.shuffle(support_samples)
             self.rng.shuffle(query_samples)
 
-        # TODO: We are not returning global_class here FYI...
         return {
-            'support': support_samples, # You can apply your custom collate_fn to this in the DataLoader
+            'support': support_samples, 
             'query': query_samples,
             'user_id': user_id,
             'label_map': label_map
