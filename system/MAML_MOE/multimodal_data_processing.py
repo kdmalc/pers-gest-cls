@@ -94,6 +94,22 @@ def load_multimodal_data_loaders(config,
         )
         demoENC_df.drop(columns=["PID"], inplace=True)  # keep Enc_PID only
 
+        ###############################################################################
+        ###   DEBUGGING DEMOGRAPHICS   ###
+        # TODO: Do I want it to include (Enc_)PID or not?
+        ## For ML, no
+        ## But presumably this is the only place where PID is passed through? Which would be useful for MOE and conditioning...
+        ## Is this the only place where it is passsed through?
+        # 1. Print the shape (Rows, Columns)
+        print(f"Shape of DataFrame: {demoENC_df.shape}")
+        # 2. Print the column names as a list (so you can count them easily)
+        print("\n--- Column Names ---")
+        print(demoENC_df.columns.tolist())
+        # 3. Print the first row to see the data types and values
+        print("\n--- First Row Entry ---")
+        print(demoENC_df.head(1))
+        ###############################################################################
+
         full_yX_timeseries_df = pd.concat([metadata_cols_df, ppd_B_X_df], axis=1)
 
         # Classic fixed splits (still used either for classic loaders OR to form merged pools)

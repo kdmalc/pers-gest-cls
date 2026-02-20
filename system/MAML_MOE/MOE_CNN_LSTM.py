@@ -165,6 +165,7 @@ class ContextEncoder(nn.Module):
 class DemographicsEncoder(nn.Module):
     def __init__(self, in_dim: int, demo_emb_dim: int = 16):
         super().__init__()
+        # TODO: Why do we have hard coded maxes here? Sure we have an unspecified hidden size ig...
         self.net = nn.Sequential(
             nn.LayerNorm(in_dim),
             nn.Linear(in_dim, max(16, demo_emb_dim)),
