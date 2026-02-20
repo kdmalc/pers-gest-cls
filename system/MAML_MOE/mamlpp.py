@@ -269,8 +269,8 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         optimizer_name=config["optimizer"],
     )
 
-    scheduler = None
-    if bool(config.get("use_cosine_outer_lr", False)):  # TODO: Does this exist?
+    scheduler = None  # Learning rate scheduler... would this be for beta, or alpha, or both...
+    if bool(config.get("use_cosine_outer_lr", False)):  # TODO: Is this used right now...
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(meta_opt, T_max=int(config["num_epochs"]))
 
     use_es = episodic_val_loader is not None and bool(config["use_earlystopping"])
@@ -281,7 +281,7 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
             min_delta=float(config["earlystopping_min_delta"]),
         )
 
-    best_val_acc, best_state = -1.0, None
+    best_val_acc, best_state, best_val_epoch = -1.0, None, 0
     train_loss_log, train_acc_log, val_loss_log, val_acc_log = [], [], [], []
     num_epochs = int(config["num_epochs"])
 
@@ -309,6 +309,7 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
             if cur_val_acc > best_val_acc:
                 best_val_acc = cur_val_acc
                 best_state = copy.deepcopy(model.state_dict())
+                best_val_epoch = ep
 
             if use_es and early_stopping(cur_val_loss):
                 print(f"[EarlyStopping] epoch {ep}: val loss stalled. Stopping.")
@@ -332,6 +333,7 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         "model": model,
         "best_state": best_state,
         "best_val_acc": best_val_acc,
+        "best_val_epoch": best_val_epoch
     }
 
 # -----------------------------

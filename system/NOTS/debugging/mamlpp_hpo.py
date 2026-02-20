@@ -100,7 +100,7 @@ def build_model_from_trial(trial, base_config=None):
         config["pwoutmd_xlsx_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\Biosignal gesture questionnaire for participants without disabilities.xlsx"
         config["dfs_save_path"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\"
         config["dfs_load_path"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\"
-        config["saved_df_timestamp"] = '20250917_1217'
+        #config["saved_df_timestamp"] = '20250917_1217'
         config["user_split_json_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\fixed_user_splits\\4kfcv_splits_shared_test.json"
         config["results_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\results\\local_{timestamp}"
         config["models_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\models\\local_{timestamp}"
@@ -156,7 +156,7 @@ def build_model_from_trial(trial, base_config=None):
     config["multimodal"] = True
     config['emg_in_ch'] = 16
     config['imu_in_ch'] = 72
-    config['demo_in_dim'] = 12
+    config['demo_in_dim'] = 12  # TODO: Why is this 12?? Arent there only 8?? Now it says I have 11....
     config['num_epochs'] = 40  
 
     #config['log_each_pid_results'] = False --> Not used rn

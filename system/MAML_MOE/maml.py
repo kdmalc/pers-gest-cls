@@ -162,43 +162,70 @@ def maml_pretrain(model, config, episodic_train_loader, episodic_val_loader=None
         optimizer_name=config["optimizer"],
     )
 
-    use_es = episodic_val_loader is not None and bool(config.get("use_earlystopping", False))
-    early_stopping = SmoothedEarlyStopping(
-        patience=int(config.get("earlystopping_patience", 5)),
-        min_delta=float(config.get("earlystopping_min_delta", 0.001)),
-    ) if use_es else None
+    scheduler = None  # Learning rate scheduler... would this be for beta, or alpha, or both...
+    if bool(config.get("use_cosine_outer_lr", False)):  # TODO: Is this used right now...
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(meta_opt, T_max=int(config["num_epochs"]))
 
-    best_val_acc, best_state = -1.0, None
-    metrics_log = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
+    use_es = episodic_val_loader is not None and bool(config["use_earlystopping"])
+    early_stopping = None
+    if use_es:
+        early_stopping = SmoothedEarlyStopping(
+            patience=int(config["earlystopping_patience"]),
+            min_delta=float(config["earlystopping_min_delta"]),
+        )
+
+    best_val_acc, best_state, best_val_epoch = -1.0, None, 0
+    train_loss_log, train_acc_log, val_loss_log, val_acc_log = [], [], [], []
 
     for ep in range(1, int(config["num_epochs"]) + 1):
         print(f"--- MAML Epoch {ep} ---")
+        epoch_start_time = time.time()
         
         # Train
         t_metrics = train_MAML_one_epoch(model, episodic_train_loader, meta_opt, config, ep)
-        metrics_log["train_loss"].append(t_metrics["loss"])
-        metrics_log["train_acc"].append(t_metrics["acc"])
+        train_loss_log.append(t_metrics["loss"])
+        train_acc_log.append(t_metrics["acc"])
         print(f"Train Loss: {t_metrics['loss']:.4f} | Acc: {t_metrics['acc']*100:.2f}%")
 
-        # Validation
+        # Val
         if episodic_val_loader is not None:
-            v_metrics = meta_evaluate(model, episodic_val_loader, config, maml_adapt_and_eval)
-            metrics_log["val_loss"].append(v_metrics["loss"])
-            metrics_log["val_acc"].append(v_metrics["acc"])
-            print(f"Val Loss: {v_metrics['loss']:.4f} | Acc: {v_metrics['acc']*100:.2f}%")
+            val_start_time = time.time()
+            val_metrics = meta_evaluate(model, episodic_val_loader, config, maml_adapt_and_eval)
+            cur_val_loss, cur_val_acc = val_metrics["loss"], val_metrics["acc"]
+            val_loss_log.append(cur_val_loss)
+            val_acc_log.append(cur_val_acc)
+            print(f"Val completed in {time.time() - val_start_time:.2f}s")
+            print(f"Val loss/acc: {cur_val_loss:.4f}, {cur_val_acc*100:.2f}%")
 
-            if v_metrics["acc"] > best_val_acc:
-                best_val_acc = v_metrics["acc"]
+            if cur_val_acc > best_val_acc:
+                best_val_acc = cur_val_acc
                 best_state = copy.deepcopy(model.state_dict())
+                best_val_epoch = ep
 
-            if early_stopping and early_stopping(v_metrics["loss"]):
-                print("Early stopping triggered.")
+            if use_es and early_stopping(cur_val_loss):
+                print(f"[EarlyStopping] epoch {ep}: val loss stalled. Stopping.")
+                if scheduler: scheduler.step()
                 break
+        else:
+            print("No val loader found! Skipping during-training val evals")
 
-    if best_state:
+        if scheduler: scheduler.step()
+        print(f"Epoch completed in {time.time() - epoch_start_time:.2f}s\n")
+
+    if best_state is not None:
         model.load_state_dict(best_state)
-    
-    return model, metrics_log
+        print(f"[MAML] loaded best model (val acc={best_val_acc:.3f})")
+
+    return model, {
+        "train_loss_log": train_loss_log,
+        "train_acc_log":  train_acc_log,
+        "val_loss_log":   val_loss_log,
+        "val_acc_log":    val_acc_log,
+        "model": model,
+        "best_state": best_state,
+        "best_val_acc": best_val_acc,
+        "best_val_epoch": best_val_epoch
+    }
 
 # -----------------------------
 # Meta-Evaluation
