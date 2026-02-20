@@ -161,7 +161,7 @@ def build_model_from_trial(trial, base_config=None):
 
     #config['log_each_pid_results'] = False --> Not used rn
     # This is used for the support query dfs that get loaded and then merged... that code should maybe get refactored but I dont think it is affecting MAML perf...
-    config['saved_df_timestamp'] = '20250917_1217'  
+    #config['saved_df_timestamp'] = '20250917_1217'  
 
     config["use_lstm"] = trial.suggest_categorical("use_lstm", [True, False])
     if config["use_lstm"]:
@@ -307,7 +307,8 @@ def objective(trial):
         #)
         # ---- New Optimized Data Loading ----
         # Define the path to the .pkl file we just created/verified
-        tensor_dict_path = os.path.join(config["dfs_load_path"], f"{config['saved_df_timestamp']}_tensor_dict.pkl")
+        #tensor_dict_path = os.path.join(config["dfs_load_path"], f"{config['saved_df_timestamp']}_tensor_dict.pkl")
+        tensor_dict_path = os.path.join(config["dfs_load_path"], f"maml_tensor_dict.pkl")
 
         # This returns two standard PyTorch DataLoaders
         # It uses config['train_PIDs'] and config['val_PIDs'] internally to split the data
