@@ -18,6 +18,7 @@ import optuna
 from optuna.storages.journal import JournalStorage, JournalFileBackend
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
+import random
 
 from pathlib import Path
 # env -> Path objects
