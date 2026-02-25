@@ -49,7 +49,9 @@ class PerParamPerStepLSLR(torch.nn.Module):
             self._lrs[key] = nn.Parameter(vec, requires_grad=learnable)
 
     def lr(self, name: str, step: int) -> torch.Tensor:
-        return self._lrs[name.replace('.', '-')][step]
+        # BUG FIX: Clamp step to prevent IndexError if eval_steps > train_steps
+        safe_step = min(step, self.inner_steps)
+        return self._lrs[name.replace('.', '-')][safe_step]
 
 def apply_update_repo_style(params, grads, lslr, step, fallback_alpha=0.01):
     new = OrderedDict()
@@ -220,9 +222,6 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
 
             # 4. Backward Pass (Scaled strictly by target meta-batch size for stable learning rates)
             # NOTE: gradients accumulate with backward, we arent just overwriting the old gradients
-            # TODO: Should this be divided by 1.0 since there is only 1 task or by meta_batchsize (which is probably 4-64...)
-            ## I think the division is fine but only if it is AFTER all episodes right? Is this just continuously downscaling the loss....
-            ## This would make sense why it is not learning... toggle this off?
             (meta_loss_task / meta_batchsize).backward()
             
             accum_count += 1
@@ -390,7 +389,8 @@ def mamlpp_predict_with_params(model, adapted_params, batch, config):
     """
     device = config['device']
     
-    # It is safe to switch to eval() here because we are done with gradients for this episode
+    # Switch to eval for deterministic prediction
+    # WARNING: If using BatchNorm, this uses global stats, not query stats!
     model.to(device).eval() 
     
     multimodal = bool(config["multimodal"])
@@ -399,6 +399,9 @@ def mamlpp_predict_with_params(model, adapted_params, batch, config):
     outputs, labels, B = _model_forward_router(fmodel, batch, device, multimodal=multimodal)
     logits = outputs[0] if isinstance(outputs, tuple) else outputs
     preds = torch.argmax(logits, dim=1)
+    
+    # Revert base model to train immediately to prevent silent state bugs in next episode
+    model.train()
     
     return logits, preds, labels, B
 

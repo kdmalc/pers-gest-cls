@@ -77,6 +77,11 @@ def build_model_from_trial(trial, base_config=None):
         config = copy.deepcopy(base_config) 
     else:
         config = dict()
+
+    # NEW
+    config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
+    config['eval_episodes'] = 10
+
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
     config["feature_engr"] = "None"
     config["time_steps"] = 1  # TODO: Idk if this is used... its not called by the new model...
@@ -351,39 +356,6 @@ def objective(trial):
         model.load_state_dict(best_state)
 
         # --------- Finetuning / Adaptation per Novel user ---------
-        ## NOTE: Allegedly this is the same as just calling meta_evaluate()
-        ## In the Outer Loop (Meta-Training), small batches are noisy. But in the Meta-Test phase, there is no "batch size" because there is no outer update.
-        ## You are just processing episodes one by one. Increasing the "batch size" here would just be a trick to make it run faster on your GPU by parallelizing users; it wouldn't change the accuracy at all.
-        #user_loaders = make_user_loaders_from_dataloaders(
-        #    episodic_val_loader,
-        #    episodic_test_loader,
-        #    config,
-        #)
-        #val_dls = user_loaders[0]  # val_dls is a dictionary of dataloaders, keys are user_ids and values are the user-specific dataloaders
-        #test_dls = user_loaders[1]
-        #for user_id, user_val_dl in val_dls.items():
-        #    if user_val_dl is None:
-        #        raise ValueError("user_val_dl is None, preventing maml_finetune_and_eval...")
-        #
-        #    val_metrics = meta_evaluate(model, user_val_dl, config, mamlpp_adapt_and_eval)
-        #    final_user_val_loss, final_user_val_acc = val_metrics["loss"], val_metrics["acc"]
-        #    user_accs.append(final_user_val_acc)
-        #    print(f"Final user{user_id} loss: {final_user_val_acc*100:.2f}%")
-        
-        #user_accs = []
-        ## The new val_loader iterates through each validation user exactly once
-        #for batch in episodic_val_loader:
-        #    user_id = batch['user_id']
-        #    support_set = batch['support']
-        #    query_set = batch['query']
-        #    # Call your evaluation function using the support and query sets directly
-        #    # We use mamlpp_adapt_and_eval which handles the inner-loop update
-        #    val_metrics = mamlpp_adapt_and_eval(model, config, support_set, query_set)
-        #    user_acc = val_metrics["acc"]
-        #    user_accs.append(user_acc)
-        #    print(f"User {user_id} | Validation Acc: {user_acc*100:.2f}%")
-        #mean_acc = float(np.mean(user_accs)) if len(user_accs) > 0 else float("nan")
-
         user_metrics = defaultdict(list)
         # The val_loader now iterates through eval_episodes per user
         for batch in episodic_val_loader:

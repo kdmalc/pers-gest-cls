@@ -85,7 +85,7 @@ def inner_loop_maml(
 # -----------------------------
 # Training logic
 # -----------------------------
-def train_MAML_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, criterion=None):
+def train_MAML_one_epoch(model, episodic_loader, meta_opt, config, criterion=None):
     device = config['device']
     model.train()
 
@@ -129,7 +129,7 @@ def train_MAML_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, cr
 
             # 5. Outer Optimizer Step
             if accum_count == meta_batchsize:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['gradient_clip_max_norm'])
                 meta_opt.step()
                 meta_opt.zero_grad(set_to_none=True)
                 accum_count = 0
@@ -141,6 +141,7 @@ def train_MAML_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, cr
 
     # Final step for remaining episodes
     if accum_count > 0:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['gradient_clip_max_norm'])
         meta_opt.step()
         meta_opt.zero_grad(set_to_none=True)
 
@@ -182,7 +183,7 @@ def maml_pretrain(model, config, episodic_train_loader, episodic_val_loader=None
         epoch_start_time = time.time()
         
         # Train
-        t_metrics = train_MAML_one_epoch(model, episodic_train_loader, meta_opt, config, ep)
+        t_metrics = train_MAML_one_epoch(model, episodic_train_loader, meta_opt, config)
         train_loss_log.append(t_metrics["loss"])
         train_acc_log.append(t_metrics["acc"])
         print(f"Train Loss: {t_metrics['loss']:.4f} | Acc: {t_metrics['acc']*100:.2f}%")
@@ -236,12 +237,17 @@ def maml_predict(model, adapted_params, batch, config):
     """Simple prediction using adapted parameters."""
     device = config['device']
 
-    # It is safe to switch to eval() here because we are done with gradients for this episode
+    # Switch to eval for deterministic prediction (Dropout off, etc.)
+    # WARNING: If using BatchNorm, this uses global stats, not query stats!
     model.to(device).eval() 
 
     fmodel = FunctionalModel(model, adapted_params)
     outputs, labels, B = _model_forward_router(fmodel, batch, device, multimodal=config.get('multimodal', False))
     logits = outputs[0] if isinstance(outputs, tuple) else outputs
+    
+    # Revert base model to train immediately to prevent silent state bugs in next episode
+    model.train() 
+    
     return logits, torch.argmax(logits, dim=1), labels, B
 
 def maml_adapt(model, config, support_batch, criterion=None):
