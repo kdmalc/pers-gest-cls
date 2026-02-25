@@ -8,6 +8,7 @@ run_dir  = os.environ["RUN_DIR"]
 
 import copy, json, time#, joblib, sys
 from datetime import datetime
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -90,6 +91,7 @@ def build_model_from_trial(trial, base_config=None):
     config["use_earlystopping"] = True
     config["verbose"] = False
     config["num_total_users"] = 32
+    # TODO: These are super out of date I think... I think train and val should include all gestures for meta-learning right?
     config["train_gesture_range"] = [1, 2, 3, 4, 5, 6, 7, 8, 9]
     config["valtest_gesture_range"] = [2, 3, 4, 5, 6, 7, 8, 9, 10]
 
@@ -191,8 +193,7 @@ def build_model_from_trial(trial, base_config=None):
     config["n_way"] = 10
     config["k_shot"] = 1
     config["q_query"] = 9  # TODO: Does this need to be 9? If it set it lower does that just make it faster? Does that impact the model? Slightly noiser eval??
-    # ^^ Is this actually being used as 9... or is the full complement being used...
-    # TODO: Do the below eps/batch and eps/epoch need to be multiple of each other?
+    # ^^ Set it to None if we want to use ALL remaining data in the val loaders
     config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32, 64])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
     config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500, 1000])  # TODO: I have no idea what this should be... this is the max on the number of tasks per EPOCH. So this limits training, if the iterable is way too  (obvi true)
     config["num_workers"] = 8  # This is the dataloader, something about how many processes the CPU can use (more is faster generally)
@@ -368,27 +369,45 @@ def objective(trial):
         #    final_user_val_loss, final_user_val_acc = val_metrics["loss"], val_metrics["acc"]
         #    user_accs.append(final_user_val_acc)
         #    print(f"Final user{user_id} loss: {final_user_val_acc*100:.2f}%")
-        user_accs = []
-        # The new val_loader iterates through each validation user exactly once
+        
+        #user_accs = []
+        ## The new val_loader iterates through each validation user exactly once
+        #for batch in episodic_val_loader:
+        #    user_id = batch['user_id']
+        #    support_set = batch['support']
+        #    query_set = batch['query']
+        #    # Call your evaluation function using the support and query sets directly
+        #    # We use mamlpp_adapt_and_eval which handles the inner-loop update
+        #    val_metrics = mamlpp_adapt_and_eval(model, config, support_set, query_set)
+        #    user_acc = val_metrics["acc"]
+        #    user_accs.append(user_acc)
+        #    print(f"User {user_id} | Validation Acc: {user_acc*100:.2f}%")
+        #mean_acc = float(np.mean(user_accs)) if len(user_accs) > 0 else float("nan")
+
+        user_metrics = defaultdict(list)
+        # The val_loader now iterates through eval_episodes per user
         for batch in episodic_val_loader:
             user_id = batch['user_id']
             support_set = batch['support']
             query_set = batch['query']
-
-            # Call your evaluation function using the support and query sets directly
-            # We use mamlpp_adapt_and_eval which handles the inner-loop update
             val_metrics = mamlpp_adapt_and_eval(model, config, support_set, query_set)
-            
-            user_acc = val_metrics["acc"]
-            user_accs.append(user_acc)
-            print(f"User {user_id} | Validation Acc: {user_acc*100:.2f}%")
-
-        mean_acc = float(np.mean(user_accs)) if len(user_accs) > 0 else float("nan")
+            user_metrics[user_id].append(val_metrics["acc"])
+        # Calculate and print grouped metrics
+        print("\n--- Final User-Specific Evaluation ---")
+        all_user_means = []
+        for user_id, accs in user_metrics.items():
+            mean_acc = np.mean(accs) * 100
+            std_acc = np.std(accs) * 100
+            all_user_means.append(mean_acc)
+            print(f"User {user_id} | Acc: {mean_acc:.2f}% ± {std_acc:.2f}% (over {len(accs)} episodes)")
+        mean_acc = np.mean(all_user_means)
+        std_acc = np.std(all_user_means)
+        user_accs = all_user_means
 
         # --- END TIMER & PRINT ---
         fold_duration = time.time() - fold_start_time
-        print(f"[Trial {trial.number} | Fold {fold_idx}] User accs: {user_accs}")
-        print(f"[Trial {trial.number} | Fold {fold_idx}] Mean acc: {mean_acc*100:.2f}%")
+        #print(f"[Trial {trial.number} | Fold {fold_idx}] User accs: {user_accs}")
+        print(f"[Trial {trial.number} | Fold {fold_idx}] Mean acc: {mean_acc*100:.2f}% +- {std_acc*100:.2f} std")
         print(f"[Trial {trial.number} | Fold {fold_idx}] Finished in {fold_duration:.2f} seconds.")
 
         fold_mean_accs.append(mean_acc)

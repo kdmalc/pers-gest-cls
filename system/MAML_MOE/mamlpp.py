@@ -221,6 +221,8 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
             # 4. Backward Pass (Scaled strictly by target meta-batch size for stable learning rates)
             # NOTE: gradients accumulate with backward, we arent just overwriting the old gradients
             # TODO: Should this be divided by 1.0 since there is only 1 task or by meta_batchsize (which is probably 4-64...)
+            ## I think the division is fine but only if it is AFTER all episodes right? Is this just continuously downscaling the loss....
+            ## This would make sense why it is not learning... toggle this off?
             (meta_loss_task / meta_batchsize).backward()
             
             accum_count += 1
@@ -269,8 +271,8 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         optimizer_name=config["optimizer"],
     )
 
-    scheduler = None  # Learning rate scheduler... would this be for beta, or alpha, or both...
-    if bool(config.get("use_cosine_outer_lr", False)):  # TODO: Is this used right now...
+    scheduler = None  # Learning rate scheduler... this is just for beat (outer lr)
+    if bool(config.get("use_cosine_outer_lr", False)): 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(meta_opt, T_max=int(config["num_epochs"]))
 
     use_es = episodic_val_loader is not None and bool(config["use_earlystopping"])
@@ -299,6 +301,7 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         # Val
         if episodic_val_loader is not None:
             val_start_time = time.time()
+            # TODO: ... uhhh why is this not defined...
             val_metrics = meta_evaluate(model, episodic_val_loader, config, mamlpp_adapt_and_eval)
             cur_val_loss, cur_val_acc = val_metrics["loss"], val_metrics["acc"]
             val_loss_log.append(cur_val_loss)

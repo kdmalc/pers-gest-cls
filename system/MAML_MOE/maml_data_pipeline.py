@@ -4,7 +4,6 @@ import random
 import pickle
 from torch.utils.data import Dataset, DataLoader
 
-# TODO: Does this even get called... not yet...
 def maml_mm_collate(batch):
     episode = batch[0]
     
@@ -44,7 +43,7 @@ class MetaGestureDataset(Dataset):
     and Val/Test (deterministic user-specific episodes).
     """
     def __init__(self, tensor_dict, target_pids, target_gestures, n_way=10, k_shot=1, q_query=9, 
-                 episodes_per_epoch=1000, is_train=True, seed=42):
+                 episodes_per_epoch=1000, is_train=True, seed=42, eval_episodes=10):
         self.data = {pid: tensor_dict[pid] for pid in target_pids}
         self.pids = list(self.data.keys())
         self.target_gestures = target_gestures
@@ -55,29 +54,26 @@ class MetaGestureDataset(Dataset):
         self.episodes_per_epoch = episodes_per_epoch
         self.is_train = is_train
         self.rng = random.Random(seed)
+        self.eval_episodes = eval_episodes 
 
-    def __len__(self):
-        # Train: Arbitrary number of episodes. Val/Test: Exactly one episode per user.
-        return self.episodes_per_epoch if self.is_train else len(self.pids)
+def __len__(self):
+    # Train: Arbitrary limit. Val/Test: N episodes per user.
+    return self.episodes_per_epoch if self.is_train else len(self.pids) * self.eval_episodes
 
-    def __getitem__(self, idx):
-        """
+def __getitem__(self, idx):
+    """
         Returns a single MAML episode (Support set and Query set).
         Each sample in the sets now contains 'emg' and 'imu' separately.
         """
-        # -----------------------------------------------------------
-        # 1. IDENTIFY USER AND CLASSES (N-WAY)
-        # -----------------------------------------------------------
-        if self.is_train:
-            # Training: Randomly pick a user and then pick N random gestures they have performed
-            user_id = self.rng.choice(self.pids)
-            available_gestures = [g for g in self.target_gestures if g in self.data[user_id]]
-            classes = self.rng.sample(available_gestures, self.n_way)
-        else:
-            # Evaluation: Deterministic. Each idx maps to a specific user to ensure 
-            # consistent reporting across HPO trials.
-            user_id = self.pids[idx]
-            classes = sorted([g for g in self.target_gestures if g in self.data[user_id]])[:self.n_way]
+    if self.is_train:
+        user_id = self.rng.choice(self.pids)
+        available_gestures = [g for g in self.target_gestures if g in self.data[user_id]]
+        classes = self.rng.sample(available_gestures, self.n_way)
+    else:
+        # This groups the episodes by user. 
+        # e.g., idx 0-9 is User A, idx 10-19 is User B
+        user_id = self.pids[idx // self.eval_episodes] 
+        classes = sorted([g for g in self.target_gestures if g in self.data[user_id]])[:self.n_way]
 
         support_samples, query_samples = [], []
         label_map = {c: i for i, c in enumerate(classes)}
@@ -92,29 +88,22 @@ class MetaGestureDataset(Dataset):
             user_emg_data = self.data[user_id][global_c]['emg'] 
             user_imu_data = self.data[user_id][global_c]['imu']
             user_demo = self.data[user_id][global_c]['demo']
-            
-            # Determine available trials (usually 10)
+
             total_trials = user_emg_data.shape[0]
             indices = list(range(total_trials))
             
-            # Shuffle trials during training so the 'Support' trial isn't always the same one
-            if self.is_train:
-                self.rng.shuffle(indices)
+            # CRITICAL FIX: We must shuffle indices for BOTH train and eval now!
+            # Otherwise, the 10 eval episodes will all use the exact same support data.
+            self.rng.shuffle(indices)
             
             # -----------------------------------------------------------
             # 3. SPLIT DISJOINT INDICES (K-SHOT vs Q-QUERY)
             # -----------------------------------------------------------
             # Support indices: The first K trials
             sup_idx = indices[:self.k_shot]
-            
-            # Query indices: The next Q trials. 
-            # This ensures support and query never overlap.
-            # If is_train is false, we use all remaining trials for a more robust evaluation.
             if self.is_train:
-                # Slice from K to K+Q (e.g., 1:1+5)
                 qry_idx = indices[self.k_shot : self.k_shot + self.q_query]
             else:
-                # Use everything else for evaluation
                 qry_idx = indices[self.k_shot:]
 
             # -----------------------------------------------------------
@@ -184,8 +173,8 @@ def get_maml_dataloaders(config, tensor_dict_path, collate_fn):
     val_ds = MetaGestureDataset(
         tensor_dict,
         target_pids=config["val_PIDs"],
-        target_gestures=[1] + config["valtest_gesture_range"], # 1 is support, rest are query
-        n_way=config['n_way'], k_shot=1, q_query=None, # q_query=None grabs all remaining for eval
+        target_gestures=[1] + config["valtest_gesture_range"], # 1 is support, rest are query --> TODO: We are currently passing in all 10 gesture classes which is actually what we want
+        n_way=config['n_way'], k_shot=config["k_shot"], q_query=config["q_query"], # q_query=None grabs all remaining for eval
         is_train=False
     )
     val_dl = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=num_workers, collate_fn=collate_fn)

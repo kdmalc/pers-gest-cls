@@ -190,6 +190,7 @@ def maml_pretrain(model, config, episodic_train_loader, episodic_val_loader=None
         # Val
         if episodic_val_loader is not None:
             val_start_time = time.time()
+            # TODO: ... why is this not defined either.....................
             val_metrics = meta_evaluate(model, episodic_val_loader, config, maml_adapt_and_eval)
             cur_val_loss, cur_val_acc = val_metrics["loss"], val_metrics["acc"]
             val_loss_log.append(cur_val_loss)
