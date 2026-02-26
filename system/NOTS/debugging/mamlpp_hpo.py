@@ -363,26 +363,31 @@ def objective(trial):
             query_set = batch['query']
             val_metrics = mamlpp_adapt_and_eval(model, config, support_set, query_set)
             user_metrics[user_id].append(val_metrics["acc"])
+            
         # Calculate and print grouped metrics
         print("\n--- Final User-Specific Evaluation ---")
         all_user_means = []
         for user_id, accs in user_metrics.items():
-            mean_acc = np.mean(accs) * 100
-            std_acc = np.std(accs) * 100
-            all_user_means.append(mean_acc)
-            print(f"User {user_id} | Acc: {mean_acc:.2f}% ± {std_acc:.2f}% (over {len(accs)} episodes)")
-        mean_acc = np.mean(all_user_means)
-        std_acc = np.std(all_user_means)
-        user_accs = all_user_means
-
+            # Keep as ratios (0.0 to 1.0) internally
+            m_acc = np.mean(accs)
+            s_acc = np.std(accs)
+            # Convert to standard Python float to avoid np.float64 wrapping in the list
+            all_user_means.append(float(m_acc))
+            print(f"User {user_id} | Acc: {m_acc*100:.2f}% ± {s_acc*100:.2f}% (over {len(accs)} episodes)")
+        # Calculate summary across users
+        # These are still ratios (e.g., 0.10)
+        mean_acc_ratio = np.mean(all_user_means)
+        std_acc_ratio = np.std(all_user_means)
+        # Create a clean list of percentages for the summary print
+        user_acc_percentages = [round(a * 100, 2) for a in all_user_means]
         # --- END TIMER & PRINT ---
         fold_duration = time.time() - fold_start_time
-        #print(f"[Trial {trial.number} | Fold {fold_idx}] User accs: {user_accs}")
-        print(f"[Trial {trial.number} | Fold {fold_idx}] Mean acc: {mean_acc*100:.2f}% +- {std_acc*100:.2f} std")
+        print(f"[Trial {trial.number} | Fold {fold_idx}] User accs (%): {user_acc_percentages}")
+        # Multiply by 100 only ONCE here for display
+        print(f"[Trial {trial.number} | Fold {fold_idx}] Mean acc: {mean_acc_ratio*100:.2f}% ± {std_acc_ratio*100:.2f}%")
         print(f"[Trial {trial.number} | Fold {fold_idx}] Finished in {fold_duration:.2f} seconds.")
-
-        fold_mean_accs.append(mean_acc)
-        all_fold_user_accs.append(user_accs)
+        fold_mean_accs.append(mean_acc_ratio)
+        all_fold_user_accs.append(all_user_means)
 
         # (Optional) you could report per-fold for pruning:
         # trial.report(mean_acc, step=fold_idx)
