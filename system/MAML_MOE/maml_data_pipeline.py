@@ -151,7 +151,8 @@ class MetaGestureDataset(Dataset):
 
     def __len__(self):
         if self.debug_one_task:
-            return self.episodes_per_epoch
+            return self.episodes_per_epoch if self.is_train else self.eval_episodes
+        
         if self.is_train:
             return self.episodes_per_epoch 
         else:
@@ -185,6 +186,7 @@ def get_maml_dataloaders(config, tensor_dict_path):
         tensor_dict = pickle.load(f)
         
     num_workers = int(config.get('num_workers', 4))
+    debug_one_task = config.get('debug_one_task', False)
     
     # Train Loader (Randomly sampling all users on the fly)
     train_ds = MetaGestureDataset(
@@ -196,7 +198,7 @@ def get_maml_dataloaders(config, tensor_dict_path):
         q_query=config['q_query'],
         episodes_per_epoch=config['episodes_per_epoch_train'],
         is_train=True, 
-        debug_one_task=config['debug_one_task']
+        debug_one_task=debug_one_task
     )
     
     # batch_size=1 to yield 1 episode dictionary at a time for Gradient Accumulation
@@ -205,15 +207,16 @@ def get_maml_dataloaders(config, tensor_dict_path):
     # Val Loader (Deterministic, predefined episodes per user)
     val_ds = MetaGestureDataset(
         tensor_dict,
-        target_pids=config["val_PIDs"],
-        target_gestures=[1] + config["valtest_gesture_range"], 
+        # IMPORTANT: In debug_one_task mode, use the same pool as training so the seed picks the same task
+        target_pids=config["val_PIDs"] if not debug_one_task else config["train_PIDs"], #
+        target_gestures=[1] + config["valtest_gesture_range"] if not debug_one_task else config["train_gesture_range"] + [10],
         n_way=config['n_way'], 
         k_shot=config["k_shot"], 
         q_query=config.get("q_query", None), # Use None to grab all remaining for eval if desired
-        eval_episodes=config.get('eval_episodes', 10), # Toggleable validation episodes
+        eval_episodes=config.get('eval_episodes', 10) if not debug_one_task else 1, # Only 1 ep for val in debug
         is_train=False,
         seed=config.get('seed', 42), 
-        debug_one_task=config['debug_one_task']
+        debug_one_task=debug_one_task
     )
     
     val_dl = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=num_workers, collate_fn=maml_mm_collate)

@@ -56,10 +56,8 @@ def apply_fold_to_config(config, all_splits, fold_idx):
     config["num_testft_users"] = len(config["val_PIDs"])
 ###########################
 
-#from system.MAML_MOE.multimodal_data_processing import *  # Needed for load_multimodal_dataloaders()
-#from system.MAML_MOE.maml_multimodal_dataloaders import *
 from system.MAML_MOE.mamlpp import *
-from maml_data_pipeline import get_maml_dataloaders, maml_mm_collate
+from maml_data_pipeline import get_maml_dataloaders
 from system.MAML_MOE.shared_maml import *
 from system.MAML_MOE.MOE_CNN_LSTM import *
 
@@ -411,7 +409,7 @@ def run_study(study_name, storage_path, n_trials=1):
 
     # Generate a random sleep offset
     # This prevents the "Thundering Herd" problem on HPC filesystems
-    sleep_time = random.uniform(0, 60)
+    sleep_time = random.uniform(0, 10)
     print(f"Staggering start: sleeping for {sleep_time:.2f} seconds...")
     time.sleep(sleep_time)
 

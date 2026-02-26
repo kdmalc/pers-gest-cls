@@ -128,10 +128,10 @@ def inner_loop_mamlpp(
         last_q_logits, last_q_labels = logits_q, labels_q
 
         # If the loss at step 0 and the final inner step are the same then we literally are not training
-        if step == 0:
-            print(f"Initial Query Loss: {q_loss_step.item()}")
+        #if step == 0:
+        #    print(f"Initial Query Loss: {q_loss_step.item()}")
         if step == inner_steps:
-            print(f"Adapted Query Loss: {q_loss_step.item()}")
+            #print(f"Adapted Query Loss: {q_loss_step.item()}")
             break  # We only do `inner_steps` updates, but we need `inner_steps + 1` query evaluations
 
         # 2. Support Forward & Inner Update
