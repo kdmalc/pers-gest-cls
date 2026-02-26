@@ -320,7 +320,7 @@ def objective(trial):
         episodic_train_loader, episodic_val_loader = get_maml_dataloaders(
             config,
             tensor_dict_path=tensor_dict_path,
-            collate_fn=maml_mm_collate
+        #    collate_fn=maml_mm_collate
         )
 
         # Do the meta "pretraining" (is this just the meta-train phase?)

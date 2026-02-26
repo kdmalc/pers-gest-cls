@@ -314,7 +314,7 @@ def objective(trial):
         episodic_train_loader, episodic_val_loader = get_maml_dataloaders(
             config,
             tensor_dict_path=tensor_dict_path,
-            collate_fn=maml_mm_collate
+        #    collate_fn=maml_mm_collate
         )
 
         ## maml_pretrain returns: train_loss_log, train_acc_log, val_loss_log, val_acc_log, model, best_state, best_val_acc,
