@@ -81,6 +81,7 @@ def build_model_from_trial(trial, base_config=None):
     # NEW
     config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
     config['eval_episodes'] = 10
+    config['debug_one_task'] = True
 
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
     config["feature_engr"] = "None"

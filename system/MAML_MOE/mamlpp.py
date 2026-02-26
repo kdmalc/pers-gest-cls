@@ -127,7 +127,11 @@ def inner_loop_mamlpp(
         per_step_query_losses.append(q_loss_step)
         last_q_logits, last_q_labels = logits_q, labels_q
 
+        # If the loss at step 0 and the final inner step are the same then we literally are not training
+        if step == 0:
+            print(f"Initial Query Loss: {q_loss_step.item()}")
         if step == inner_steps:
+            print(f"Adapted Query Loss: {q_loss_step.item()}")
             break  # We only do `inner_steps` updates, but we need `inner_steps + 1` query evaluations
 
         # 2. Support Forward & Inner Update
@@ -159,7 +163,7 @@ def inner_loop_mamlpp(
     return params_i, last_q_logits, last_q_labels, meta_loss
 
 # -----------------------------
-# One epoch of MAML++ training
+# One epoch of MAML++ training: ie batched inner loops followed by one outer loop
 # -----------------------------
 def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, criterion=None):
     device = config['device']
@@ -221,6 +225,14 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
                 loss_sum += float(meta_loss_task.item())
 
             # 4. Backward Pass (Scaled strictly by target meta-batch size for stable learning rates)
+            # TODO: ... wait is this wrong? This is saying after EACH episode, we calc the grads (backward) and divide meta_loss_task by meta_batchsize...
+            ## This is after a SINGLE inner loop iter. Don't we need to run meta_batchsize inner loop iters before we update (and... do the outer optimization step)?
+            ## I think this code is actually updating after EACH inner loop iter (ie 1 iter) but still dividing by the entire meta_batchsize each time??
+            ## Oh so in step 5 we ONLY update if we have hit the accum_count
+            ## So why are we dividing meta_loss_task by meta_batchsize here and not in Step 5, havent we only run 1 iter?
+            ## Or is it distributive or whatever and dividing each meta_loss_task by meta_batchsize is the same as if we just divided the final meta_loss_task by meta_batchsize once at the end?
+            ## I guess my main question is if we are dividing meta_loss_task by meta_batchsize ONCE per batch, or if we are dividing meta_batchsize meta_batchsize times (ie making our gradients basically zero)
+            ## Why is it even called meta_loss_task, isnt that loss the student inner loop loss, not the outer loop meta loss??
             # NOTE: gradients accumulate with backward, we arent just overwriting the old gradients
             (meta_loss_task / meta_batchsize).backward()
             
@@ -256,7 +268,7 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
     return {"loss": avg_loss, "acc": avg_acc, "episodes": n_episodes}
 
 # -----------------------------
-# Outer loop (pretrain)
+# Pretrain: this handles the full training (ie all epochs for inner and outer loops)
 # -----------------------------
 def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=None):
     device = config["device"]
@@ -300,7 +312,6 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         # Val
         if episodic_val_loader is not None:
             val_start_time = time.time()
-            # TODO: ... uhhh why is this not defined...
             val_metrics = meta_evaluate(model, episodic_val_loader, config, mamlpp_adapt_and_eval)
             cur_val_loss, cur_val_acc = val_metrics["loss"], val_metrics["acc"]
             val_loss_log.append(cur_val_loss)
