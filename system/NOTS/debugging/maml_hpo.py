@@ -77,8 +77,9 @@ def build_model_from_trial(trial, base_config=None):
 
     # NEW
     config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
-    config['eval_episodes'] = 10
-    config['debug_one_task'] = True
+    config['num_eval_episodes'] = 10
+    config['debug_one_episode'] = False
+    config['debug_five_episode'] = True
 
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
     config["feature_engr"] = "None"
@@ -388,9 +389,11 @@ def objective(trial):
         #     raise optuna.TrialPruned()
 
     # Aggregate across folds for Optuna
-    overall_mean_acc = float(np.nanmean(fold_mean_accs))
-    print(f"[Trial {trial.number}] Fold mean accs: {fold_mean_accs}")
-    print(f"[Trial {trial.number}] Overall k-fold mean acc: {overall_mean_acc*100:.2f}%")
+    # Final k-fold print
+    clean_fold_accs = [float(f) for f in fold_mean_accs]
+    overall_mean_acc = float(np.nanmean(clean_fold_accs))
+    print(f"[Trial {trial.number}] Fold mean accs: {clean_fold_accs}")
+    print(f"[Trial {trial.number}] Overall k-fold mean acc: {np.mean(clean_fold_accs)*100:.2f}%")
 
     # ---- Log ancillary info for analysis ----
     ## NOTE: This is logged as part of Optuna? How/where do I access this?... From the db??

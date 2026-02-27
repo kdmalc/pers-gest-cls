@@ -48,8 +48,8 @@ class MetaGestureDataset(Dataset):
     and Val/Test (deterministic pre-generated episodes).
     """
     def __init__(self, tensor_dict, target_pids, target_gestures, n_way=10, k_shot=1, q_query=9, 
-                 episodes_per_epoch=1000, is_train=True, seed=42, eval_episodes=10, 
-                 debug_one_task=False):
+                 episodes_per_epoch=1000, is_train=True, seed=42, num_eval_episodes=10, 
+                 debug_one_episode=False, debug_five_episodes=False):
         self.data = {pid: tensor_dict[pid] for pid in target_pids}
         self.pids = list(self.data.keys())
         self.target_gestures = target_gestures
@@ -59,23 +59,40 @@ class MetaGestureDataset(Dataset):
         self.q_query = q_query
         self.episodes_per_epoch = episodes_per_epoch
         self.is_train = is_train
-        self.eval_episodes = eval_episodes 
-        self.debug_one_task = debug_one_task
+        self.num_eval_episodes = num_eval_episodes 
+        self.debug_one_episode = debug_one_episode
+        self.debug_five_episodes = debug_five_episodes
         
-        self.debug_episode = None
-        if self.debug_one_task:
-            print(f"!!! DEBUG MODE: Overfitting to a single task (n_way={n_way}) !!!")
-            debug_rng = random.Random(seed)
-            user_id = debug_rng.choice(self.pids)  # Choose a random user_id...
-            available = [g for g in self.target_gestures if g in self.data[user_id]]
-            classes = debug_rng.sample(available, min(self.n_way, len(available)))
-            label_map = {c: i for i, c in enumerate(classes)}
-            # Create ONE fixed episode for the entire life of this dataset
-            self.debug_episode = self._build_episode(user_id, classes, label_map, debug_rng, is_train=True)
+        self.debug_episodes = []
+        if self.debug_one_episode or self.debug_five_episodes:
+            mode_name = "ONE task" if self.debug_one_episode else "FIVE tasks"
+            print(f"!!! DEBUG MODE: Overfitting to {mode_name} (n_way={n_way}) !!!")
+            
+            # Use a fixed seed for RNG so Train/Val create the EXACT same episodes
+            debug_rng = random.Random(seed) 
+            if self.debug_one_episode:
+                num_to_create = 1
+            elif self.debug_five_episodes: 
+                num_to_create = 5
 
-        # Cache for deterministic validation
+            for i in range(num_to_create):
+                user_id = debug_rng.choice(self.pids)
+                available = [g for g in self.target_gestures if g in self.data[user_id]]
+                classes = debug_rng.sample(available, min(self.n_way, len(available)))
+                label_map = {c: i for i, c in enumerate(classes)}
+                
+                # Build the fixed episode
+                ep = self._build_episode(user_id, classes, label_map, debug_rng, is_train=True)
+                self.debug_episodes.append(ep)
+                
+                # FINGERPRINTING: Print a unique ID based on the data values
+                # We use the first EMG sample in the support set
+                fingerprint = ep['support'][0]['emg'].abs().sum().item()
+                print(f"  > Episode {i} Fixed (User {user_id}) | Fingerprint: {fingerprint:.4f}")
+
+        # --- NORMAL VAL CACHE ---
         self.val_episodes_cache = []
-        if not self.is_train and not self.debug_one_task:
+        if not self.is_train and not self.debug_one_episode and not self.debug_five_episodes:
             self._precompute_val_episodes(seed)
 
     def _precompute_val_episodes(self, seed):
@@ -86,7 +103,7 @@ class MetaGestureDataset(Dataset):
         for user_id in self.pids:
             available_gestures = [g for g in self.target_gestures if g in self.data[user_id]]
             
-            for _ in range(self.eval_episodes):
+            for _ in range(self.num_eval_episodes):
                 # 1. Randomly sample and order classes to ensure randomized label permutation
                 classes = val_rng.sample(available_gestures, min(self.n_way, len(available_gestures)))
                 label_map = {c: i for i, c in enumerate(classes)}
@@ -150,8 +167,8 @@ class MetaGestureDataset(Dataset):
         }
 
     def __len__(self):
-        if self.debug_one_task:
-            return self.episodes_per_epoch if self.is_train else self.eval_episodes
+        if self.debug_one_episode or self.debug_five_episodes:
+            return self.episodes_per_epoch if self.is_train else len(self.debug_episodes)
         
         if self.is_train:
             return self.episodes_per_epoch 
@@ -159,9 +176,16 @@ class MetaGestureDataset(Dataset):
             return len(self.val_episodes_cache)
 
     def __getitem__(self, idx):
-        if self.debug_one_task:
-            return self.debug_episode
+        # Handle Debug Modes (One or Five)
+        if self.debug_one_episode or self.debug_five_episodes:
+            # If training, we sample randomly from our pool of 1 or 5
+            # If evaluating, we step through them sequentially
+            if self.is_train:
+                return random.choice(self.debug_episodes)
+            else:
+                return self.debug_episodes[idx % len(self.debug_episodes)]
         
+        # Normal Mode
         if self.is_train:
             # Generate on the fly using standard random (safe for DataLoader workers)
             user_id = random.choice(self.pids)
@@ -186,7 +210,8 @@ def get_maml_dataloaders(config, tensor_dict_path):
         tensor_dict = pickle.load(f)
         
     num_workers = int(config.get('num_workers', 4))
-    debug_one_task = config.get('debug_one_task', False)
+    debug_one_episode = config.get('debug_one_episode', False)
+    debug_five_episodes = config.get('debug_five_episodes', False)
     
     # Train Loader (Randomly sampling all users on the fly)
     train_ds = MetaGestureDataset(
@@ -198,7 +223,8 @@ def get_maml_dataloaders(config, tensor_dict_path):
         q_query=config['q_query'],
         episodes_per_epoch=config['episodes_per_epoch_train'],
         is_train=True, 
-        debug_one_task=debug_one_task
+        debug_one_episode=debug_one_episode,
+        debug_five_episodes=debug_five_episodes
     )
     
     # batch_size=1 to yield 1 episode dictionary at a time for Gradient Accumulation
@@ -207,16 +233,17 @@ def get_maml_dataloaders(config, tensor_dict_path):
     # Val Loader (Deterministic, predefined episodes per user)
     val_ds = MetaGestureDataset(
         tensor_dict,
-        # IMPORTANT: In debug_one_task mode, use the same pool as training so the seed picks the same task
-        target_pids=config["val_PIDs"] if not debug_one_task else config["train_PIDs"], #
-        target_gestures=[1] + config["valtest_gesture_range"] if not debug_one_task else config["train_gesture_range"] + [10],
+        # IMPORTANT: In debug_one_episode mode, use the same pool as training so the seed picks the same task
+        target_pids=config["val_PIDs"] if not debug_one_episode else config["train_PIDs"], #
+        target_gestures=[1] + config["valtest_gesture_range"] if not debug_one_episode else config["train_gesture_range"] + [10],
         n_way=config['n_way'], 
         k_shot=config["k_shot"], 
         q_query=config.get("q_query", None), # Use None to grab all remaining for eval if desired
-        eval_episodes=config.get('eval_episodes', 10) if not debug_one_task else 1, # Only 1 ep for val in debug
+        num_eval_episodes=config.get('num_eval_episodes', 10) if not debug_one_episode else 1, # Only 1 ep for val in debug
         is_train=False,
         seed=config.get('seed', 42), 
-        debug_one_task=debug_one_task
+        debug_one_episode=debug_one_episode,
+        debug_five_episodes=debug_five_episodes
     )
     
     val_dl = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=num_workers, collate_fn=maml_mm_collate)

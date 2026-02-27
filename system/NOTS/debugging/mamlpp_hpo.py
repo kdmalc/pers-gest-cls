@@ -76,10 +76,16 @@ def build_model_from_trial(trial, base_config=None):
     else:
         config = dict()
 
+    config["n_way"] = 10
+    config["k_shot"] = 1
+    config["q_query"] = 9  # TODO: Does this need to be 9? If it set it lower does that just make it faster? Does that impact the model? Slightly noiser eval??
+    # ^^ Set it to None if we want to use ALL remaining data in the val loaders
+
     # NEW
     config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
-    config['eval_episodes'] = 10
-    config['debug_one_task'] = True
+    config['num_eval_episodes'] = 10
+    config['debug_one_episode'] = False
+    config['debug_five_episode'] = True
 
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
     config["feature_engr"] = "None"
@@ -194,10 +200,6 @@ def build_model_from_trial(trial, base_config=None):
 
     # ADDING MAML SPECIFIC
     config["meta_learning"] = True
-    config["n_way"] = 10
-    config["k_shot"] = 1
-    config["q_query"] = 9  # TODO: Does this need to be 9? If it set it lower does that just make it faster? Does that impact the model? Slightly noiser eval??
-    # ^^ Set it to None if we want to use ALL remaining data in the val loaders
     config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32, 64])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
     config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500, 1000])  # TODO: I have no idea what this should be... this is the max on the number of tasks per EPOCH. So this limits training, if the iterable is way too  (obvi true)
     config["num_workers"] = 8  # This is the dataloader, something about how many processes the CPU can use (more is faster generally)
@@ -363,7 +365,7 @@ def objective(trial):
             query_set = batch['query']
             val_metrics = mamlpp_adapt_and_eval(model, config, support_set, query_set)
             user_metrics[user_id].append(val_metrics["acc"])
-            
+
         # Calculate and print grouped metrics
         print("\n--- Final User-Specific Evaluation ---")
         all_user_means = []
@@ -395,9 +397,11 @@ def objective(trial):
         #     raise optuna.TrialPruned()
 
     # Aggregate across folds for Optuna
-    overall_mean_acc = float(np.nanmean(fold_mean_accs))
-    print(f"[Trial {trial.number}] Fold mean accs: {fold_mean_accs}")
-    print(f"[Trial {trial.number}] Overall k-fold mean acc: {overall_mean_acc*100:.2f}%")
+    # Final k-fold print
+    clean_fold_accs = [float(f) for f in fold_mean_accs]
+    overall_mean_acc = float(np.nanmean(clean_fold_accs))
+    print(f"[Trial {trial.number}] Fold mean accs: {clean_fold_accs}")
+    print(f"[Trial {trial.number}] Overall k-fold mean acc: {np.mean(clean_fold_accs)*100:.2f}%")
 
     # ---- Log ancillary info for analysis ----
     ## NOTE: This is logged as part of Optuna? How/where do I access this?... From the db??
