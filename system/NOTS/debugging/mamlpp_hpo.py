@@ -80,33 +80,39 @@ def build_model_from_trial(trial, base_config=None):
     config["k_shot"] = 1
     config["q_query"] = 9  # TODO: Does this need to be 9? If it set it lower does that just make it faster? Does that impact the model? Slightly noiser eval??
     # ^^ Set it to None if we want to use ALL remaining data in the val loaders
+    config["num_classes"] = 10
 
     # NEW
     config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
     config['num_eval_episodes'] = 10
     config['debug_one_episode'] = False
     config['debug_five_episode'] = True
+    if config['debug_one_episode']:
+        config["meta_batchsize"] = 1
+    elif config['debug_five_episode']:
+        config["meta_batchsize"] = 5
+    else:
+        config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32, 64])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
 
-    # Raised this to 5 since the issue appears to be the inner loop not learning...
-    config["maml_inner_steps"] = 5  #trial.suggest_categorical("maml_inner_steps", [1, 1, 1, 2, 2, 3])
+
+    # Fixed to 3 since the issue appears to be the inner loop not learning...
+    config["maml_inner_steps"] = 3  #trial.suggest_categorical("maml_inner_steps", [1, 1, 1, 2, 2, 3])
 
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
     config["feature_engr"] = "None"
-    config["time_steps"] = 1  # TODO: Idk if this is used... its not called by the new model...
-    config["sequence_length"] = 64  # TODO: Idk if this is used... its not called by the new model...
-    config["num_train_gesture_trials"] = 9
-    config["num_ft_gesture_trials"] = 1
+    config["time_steps"] = 1  # This is not called by the new model...
+    config["sequence_length"] = 64  # This is not called by the new model...
+    #config["num_train_gesture_trials"] = 9
+    #config["num_ft_gesture_trials"] = 1
     config["padding"] = 0 
-    config["use_batch_norm"] = False  # NEVER USE! Our batches are small!
+    config["use_batch_norm"] = False  # NEVER USE! Our batches are small! Introduces other problems too...
     config["timestamp"] = timestamp
     config["dropout"] = trial.suggest_categorical("dropout", [0.0, 0.1, 0.25])
-    config["num_classes"] = 10
     config["use_earlystopping"] = True
     config["verbose"] = False
     config["num_total_users"] = 32
-    # TODO: These are super out of date I think... I think train and val should include all gestures for meta-learning right?
-    config["train_gesture_range"] = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-    config["valtest_gesture_range"] = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["train_gesture_range"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["valtest_gesture_range"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
     config["NOTS"] = True
     if config["NOTS"]==False:
@@ -133,11 +139,10 @@ def build_model_from_trial(trial, base_config=None):
         config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds//"
 
     # ----- Model layout hyperparams -----
-    #config["user_emb_dim"]  = trial.suggest_int("user_emb_dim", 12, 48)  # TODO: This is the size u? I dont think this is used with the new model? There must be a different var that contorls this...
     config["num_experts"]   = trial.suggest_int("num_experts", 3, 5)
     config["use_shared_expert"]   = trial.suggest_categorical("use_shared_expert", [True, False])
     config["expert_architecture"]   = trial.suggest_categorical("expert_architecture", ["MLP", "linear", "cosine"])
-    # TODO: Should I add init_tau back in? Or is it not worth HPOing over... note that this is not synced right now
+    # Should I add init_tau back in? Or is it not worth HPOing over... note that this is not synced right now
     #if config["expert_architecture"] == "cosine":
     #    config["init_tau"] = 5.0  #trial.suggest_float("init_tau", 5.0, 30.0)
     config["top_k"]         = trial.suggest_categorical("top_k", [1, 2, 3])  # None means all/equal voting --> TODO: Does None still mean that... I removed it to force MOE to specialize
@@ -154,8 +159,8 @@ def build_model_from_trial(trial, base_config=None):
     config["imu_base_cnn_filters"]       = trial.suggest_categorical("imu_emb_dim", [16, 32, 32, 64, 64, 96, 128])
     # Idk if my model will still work if I increase the stride... nmight need to get the shapes to match....
     ## Hmm I wonder if the strides need to be the same actually so the feature maps have the same seq lens... not sure...
-    config['emg_stride'] = 1  #trial.suggest_int("emg_stride2", 1, 2)
-    config['imu_stride'] = 1  #trial.suggest_int("imu_stride2", 1, 2)
+    config['emg_stride'] = 1  
+    config['imu_stride'] = 1  
     config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel_size", [3, 5, 7])
     config["imu_cnn_layers"] = trial.suggest_categorical("imu_cnn_layers", [1, 1, 1, 2, 2, 3])
     config["emg_cnn_layers"] = trial.suggest_categorical("emg_cnn_layers", [1, 1, 1, 2, 2, 3])
@@ -165,12 +170,11 @@ def build_model_from_trial(trial, base_config=None):
     config["context_emb_dim"] = trial.suggest_categorical("context_emb_dim", [4, 8, 12, 16])
     config["context_pool_type"] = trial.suggest_categorical("context_pool_type", ['mean', 'attn'])  
     config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [4, 8, 16])
-    #config["demo_conditioning"] = trial.suggest_categorical("demo_conditioning", ['concat', 'film'])
 
     config["multimodal"] = True
     config['emg_in_ch'] = 16
     config['imu_in_ch'] = 72
-    config['demo_in_dim'] = 12  # TODO: Double check what the 12 are (PID and Enc_PID get dropped somewhere 14-->12??). It does one hot encoding to go up to 12
+    config['demo_in_dim'] = 12  # TODO: It does one hot encoding to get 12
     config['num_epochs'] = 40  
 
     config["use_lstm"] = trial.suggest_categorical("use_lstm", [True, False])
@@ -196,13 +200,11 @@ def build_model_from_trial(trial, base_config=None):
 
     # ADDING MAML SPECIFIC
     config["meta_learning"] = True
-    config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32, 64])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
     config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500, 1000])  # TODO: I have no idea what this should be... this is the max on the number of tasks per EPOCH. So this limits training, if the iterable is way too  (obvi true)
     config["num_workers"] = 8  # This is the dataloader, something about how many processes the CPU can use (more is faster generally)
     
     # First epochs are first order, then switches to second, if using hybrid
-    # TODO: TEMP HARDCODED 
-    config["maml_opt_order"] = 'second'  #trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
+    config["maml_opt_order"] = trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
     if config["maml_opt_order"] == "hybrid":
         config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 1, 40)      # DOA threshold (epochs <= this are first-order)
     # Theoretically this should be even be used, but just in case...
@@ -213,8 +215,7 @@ def build_model_from_trial(trial, base_config=None):
     
     # use MSL during first N epochs; after that, final-step loss only
     ## First epochs are MSL, then turns it off
-    # TODO: TEMP HARDCODED 
-    config["use_maml_msl"] = True  #trial.suggest_categorical("use_maml_msl", [True, False, "hybrid"])                              # MSL (multi-step loss) on
+    config["use_maml_msl"] = trial.suggest_categorical("use_maml_msl", [True, False, "hybrid"])                              # MSL (multi-step loss) on
     if config["use_maml_msl"] == "hybrid":
         config["maml_msl_num_epochs"] = trial.suggest_int("maml_msl_num_epochs", 1, 40)  # Also note that currently the max num_epochs is 40 (plus we use ES so may not even hit this)
     # Theoretically this should be even be used, but just in case...

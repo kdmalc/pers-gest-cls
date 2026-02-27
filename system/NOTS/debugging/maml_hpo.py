@@ -83,8 +83,8 @@ def build_model_from_trial(trial, base_config=None):
 
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
     config["feature_engr"] = "None"
-    config["time_steps"] = 1  # TODO: Idk if this is used... its not called by the new model...
-    config["sequence_length"] = 64  # TODO: Idk if this is used... its not called by the new model...
+    config["time_steps"] = 1  # Not called by the new model...
+    config["sequence_length"] = 64  # Not called by the new model...
     config["num_train_gesture_trials"] = 9
     config["num_ft_gesture_trials"] = 1
     config["padding"] = 0 
@@ -95,8 +95,8 @@ def build_model_from_trial(trial, base_config=None):
     config["use_earlystopping"] = True
     config["verbose"] = False
     config["num_total_users"] = 32
-    config["train_gesture_range"] = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-    config["valtest_gesture_range"] = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["train_gesture_range"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["valtest_gesture_range"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
     config["NOTS"] = True
     if config["NOTS"]==False:
@@ -124,11 +124,10 @@ def build_model_from_trial(trial, base_config=None):
         config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds//"
 
     # ----- Model layout hyperparams -----
-    #config["user_emb_dim"]  = trial.suggest_int("user_emb_dim", 12, 48)  # TODO: This is the size u? I dont think this is used with the new model? There must be a different var that contorls this...
     config["num_experts"]   = trial.suggest_int("num_experts", 3, 5)
     config["use_shared_expert"]   = trial.suggest_categorical("use_shared_expert", [True, False])
     config["expert_architecture"]   = trial.suggest_categorical("expert_architecture", ["MLP", "linear", "cosine"])
-    # TODO: Should I add init_tau back in? Or is it not worth HPOing over... note that this is not synced right now
+    # Should I add init_tau back in? Or is it not worth HPOing over... note that this is not synced right now
     #if config["expert_architecture"] == "cosine":
     #    config["init_tau"] = 5.0  #trial.suggest_float("init_tau", 5.0, 30.0)
     config["top_k"]         = trial.suggest_categorical("top_k", [1, 2, 3])  # None means all/equal voting --> TODO: Does None still mean that... I removed it to force MOE to specialize
@@ -156,7 +155,6 @@ def build_model_from_trial(trial, base_config=None):
     config["context_emb_dim"] = trial.suggest_categorical("context_emb_dim", [4, 8, 12, 16])
     config["context_pool_type"] = trial.suggest_categorical("context_pool_type", ['mean', 'attn'])  
     config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [4, 8, 16])
-    #config["demo_conditioning"] = trial.suggest_categorical("demo_conditioning", ['concat', 'film'])
 
     config["multimodal"] = True
     config['emg_in_ch'] = 16
@@ -164,22 +162,15 @@ def build_model_from_trial(trial, base_config=None):
     config['demo_in_dim'] = 12
     config['num_epochs'] = 40  
 
-    # TODO: is this used?
-    #config['log_each_pid_results'] = False
-    # TODO: No idea where/how this is used. I am pretty sure it is used tho... review this......
-    config['saved_df_timestamp'] = '20250917_1217'  
-
     config["use_lstm"] = trial.suggest_categorical("use_lstm", [True, False])
     if config["use_lstm"]:
         config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [16, 32, 32, 64, 128])
         config["lstm_layers"] = trial.suggest_categorical("lstm_layers", [1, 1, 1, 2, 2, 3])
         #config["lstm_bidirectional"] = True  # Not implemented, hardcoded as True by default
         config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
-    # ---- MoE placement (you can leave this as-is; we keep MoE at the head) ----
-    #config["moe_placement"] = "head"        # ("head" recommended; others optional/unused here) --> This architecture is hardcoded in but ought to test other placements probably...
 
     # MOE Hyperparams
-    config["label_smooth"]       = 0.1  #trial.suggest_float("label_smooth", 0.0, 0.15)
+    config["label_smooth"]       = 0.0  #trial.suggest_float("label_smooth", 0.0, 0.15)
     # TODO: These are not used at all atm
     #config["expert_dropout"]     = 0.25  #trial.suggest_float("expert_dropout", 0.0, 0.40)
     #config["gate_balance_coef"]  = 0.1  #trial.suggest_float("gate_balance_coef", 0.0, 0.15)
