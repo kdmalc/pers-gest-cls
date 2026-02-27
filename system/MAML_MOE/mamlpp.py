@@ -243,6 +243,13 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
             if accum_count == meta_batchsize:
                 if n_episodes==meta_batchsize:  # Ie, only print on the first hit
                     print(f"Meta batchsize hit on ep {n_episodes}! Parameters updating!")
+                
+                total_norm = 0
+                for p in model.parameters():
+                    if p.grad is not None:
+                        total_norm += p.grad.data.norm(2).item()
+                print(f"Update Step | Total Gradient Norm: {total_norm}")
+
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
                 meta_opt.step()
                 meta_opt.zero_grad(set_to_none=True)

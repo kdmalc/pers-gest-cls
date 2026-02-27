@@ -86,6 +86,8 @@ def build_model_from_trial(trial, base_config=None):
     config['num_eval_episodes'] = 10
     config['debug_one_episode'] = False
     config['debug_five_episode'] = True
+    # TODO: Is there some weird behaviour with gate type or was that just happenchance?
+    config["gate_type"]     = 'demographic_only'  #trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
 
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
     config["feature_engr"] = "None"
@@ -139,7 +141,7 @@ def build_model_from_trial(trial, base_config=None):
     #if config["expert_architecture"] == "cosine":
     #    config["init_tau"] = 5.0  #trial.suggest_float("init_tau", 5.0, 30.0)
     config["top_k"]         = trial.suggest_categorical("top_k", [1, 2, 3])  # None means all/equal voting --> TODO: Does None still mean that... I removed it to force MOE to specialize
-    config["gate_type"]     = trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
+    #config["gate_type"]     = trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
     #config["gate_dense_before_topk"] = True 
     #config["pool_mode"] = trial.suggest_categorical("pool_mode", ['avg', 'max', 'avgmax'])  # --> I dont remember what this was or where it was...
     config["mixture_mode"] = 'logits'  # 'logits' | 'probs' | 'logprobs' --> I didnt even add the other options
