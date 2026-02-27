@@ -253,6 +253,8 @@ def build_model_from_trial(trial, base_config=None):
     model = MultimodalCNNLSTMMOE(config)
     device = config["device"]
 
+    print(f"CONFIG:\n{config}\n")
+
     model.to(device)
     return model, config
 

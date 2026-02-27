@@ -244,6 +244,8 @@ def build_model_from_trial(trial, base_config=None):
     #    if isinstance(exp.drop, nn.Dropout):
     #        exp.drop.p = config["expert_dropout"]
 
+    print(f"CONFIG:\n{config}\n")
+
     model.to(device)
     return model, config
 
