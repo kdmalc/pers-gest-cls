@@ -86,8 +86,11 @@ def build_model_from_trial(trial, base_config=None):
     config['num_eval_episodes'] = 10
     config['debug_one_episode'] = True
     config['debug_five_episode'] = False
+
     # TODO: Is there some weird behaviour with gate type or was that just happenchance?
     config["gate_type"]     = 'demographic_only'  #trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
+    # Raised this to 5 since the issue appears to be the inner loop not learning...
+    config["maml_inner_steps"] = 5  #trial.suggest_categorical("maml_inner_steps", [1, 1, 1, 2, 2, 3])
 
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
     config["feature_engr"] = "None"
@@ -187,7 +190,7 @@ def build_model_from_trial(trial, base_config=None):
     #config["moe_placement"] = "head"        # ("head" recommended; others optional/unused here) --> This architecture is hardcoded in but ought to test other placements probably...
 
     # MOE Hyperparams
-    config["label_smooth"]       = 0.1  #trial.suggest_float("label_smooth", 0.0, 0.15)
+    config["label_smooth"]       = 0.0  #trial.suggest_float("label_smooth", 0.0, 0.15)
     # TODO: These are not used at all atm
     #config["expert_dropout"]     = 0.25  #trial.suggest_float("expert_dropout", 0.0, 0.40)
     #config["gate_balance_coef"]  = 0.1  #trial.suggest_float("gate_balance_coef", 0.0, 0.15)
@@ -205,11 +208,10 @@ def build_model_from_trial(trial, base_config=None):
     config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32, 64])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
     config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500, 1000])  # TODO: I have no idea what this should be... this is the max on the number of tasks per EPOCH. So this limits training, if the iterable is way too  (obvi true)
     config["num_workers"] = 8  # This is the dataloader, something about how many processes the CPU can use (more is faster generally)
-    # Core MAML++
-    config["maml_inner_steps"] = trial.suggest_categorical("maml_inner_steps", [1, 1, 1, 2, 2, 3])
     
     # First epochs are first order, then switches to second, if using hybrid
-    config["maml_opt_order"] = trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
+    # TODO: TEMP HARDCODED 
+    config["maml_opt_order"] = 'second'  #trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
     if config["maml_opt_order"] == "hybrid":
         config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 1, 40)      # DOA threshold (epochs <= this are first-order)
     # Theoretically this should be even be used, but just in case...
@@ -220,7 +222,8 @@ def build_model_from_trial(trial, base_config=None):
     
     # use MSL during first N epochs; after that, final-step loss only
     ## First epochs are MSL, then turns it off
-    config["use_maml_msl"] = trial.suggest_categorical("use_maml_msl", [True, False, "hybrid"])                              # MSL (multi-step loss) on
+    # TODO: TEMP HARDCODED 
+    config["use_maml_msl"] = True  #trial.suggest_categorical("use_maml_msl", [True, False, "hybrid"])                              # MSL (multi-step loss) on
     if config["use_maml_msl"] == "hybrid":
         config["maml_msl_num_epochs"] = trial.suggest_int("maml_msl_num_epochs", 1, 40)  # Also note that currently the max num_epochs is 40 (plus we use ES so may not even hit this)
     # Theoretically this should be even be used, but just in case...
@@ -230,7 +233,7 @@ def build_model_from_trial(trial, base_config=None):
         config["maml_msl_num_epochs"] = 0
     
     # If LSLR is used, then alpha is only used as a fallback/init (and then we learn the learning rate). I am not sure if beta gets used at all. I think it does?
-    config["maml_use_lslr"] = trial.suggest_categorical("maml_use_lslr", [True, False])                             # learn per-parameter, per-step inner LRs
+    config["maml_use_lslr"] = True  #trial.suggest_categorical("maml_use_lslr", [True, False])                             # learn per-parameter, per-step inner LRs
     # AKA Beta. This is the outer loop learning rate (the one that actually gets used directly in the optimizer)
     config["learning_rate"]      = trial.suggest_float("pre_lr", 0.00001, 0.001)
     # Alpha is the inner loop learning rate
