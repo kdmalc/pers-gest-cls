@@ -84,11 +84,9 @@ def build_model_from_trial(trial, base_config=None):
     # NEW
     config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
     config['num_eval_episodes'] = 10
-    config['debug_one_episode'] = True
-    config['debug_five_episode'] = False
+    config['debug_one_episode'] = False
+    config['debug_five_episode'] = True
 
-    # TODO: Is there some weird behaviour with gate type or was that just happenchance?
-    config["gate_type"]     = 'demographic_only'  #trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
     # Raised this to 5 since the issue appears to be the inner loop not learning...
     config["maml_inner_steps"] = 5  #trial.suggest_categorical("maml_inner_steps", [1, 1, 1, 2, 2, 3])
 
@@ -117,7 +115,6 @@ def build_model_from_trial(trial, base_config=None):
         config["pwoutmd_xlsx_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\Biosignal gesture questionnaire for participants without disabilities.xlsx"
         config["dfs_save_path"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\"
         config["dfs_load_path"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\"
-        #config["saved_df_timestamp"] = '20250917_1217'
         config["user_split_json_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\fixed_user_splits\\4kfcv_splits_shared_test.json"
         config["results_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\results\\local_{timestamp}"
         config["models_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\models\\local_{timestamp}"
@@ -144,7 +141,7 @@ def build_model_from_trial(trial, base_config=None):
     #if config["expert_architecture"] == "cosine":
     #    config["init_tau"] = 5.0  #trial.suggest_float("init_tau", 5.0, 30.0)
     config["top_k"]         = trial.suggest_categorical("top_k", [1, 2, 3])  # None means all/equal voting --> TODO: Does None still mean that... I removed it to force MOE to specialize
-    #config["gate_type"]     = trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
+    config["gate_type"]     = trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
     #config["gate_dense_before_topk"] = True 
     #config["pool_mode"] = trial.suggest_categorical("pool_mode", ['avg', 'max', 'avgmax'])  # --> I dont remember what this was or where it was...
     config["mixture_mode"] = 'logits'  # 'logits' | 'probs' | 'logprobs' --> I didnt even add the other options
@@ -176,18 +173,12 @@ def build_model_from_trial(trial, base_config=None):
     config['demo_in_dim'] = 12  # TODO: Double check what the 12 are (PID and Enc_PID get dropped somewhere 14-->12??). It does one hot encoding to go up to 12
     config['num_epochs'] = 40  
 
-    #config['log_each_pid_results'] = False --> Not used rn
-    # This is used for the support query dfs that get loaded and then merged... that code should maybe get refactored but I dont think it is affecting MAML perf...
-    #config['saved_df_timestamp'] = '20250917_1217'  
-
     config["use_lstm"] = trial.suggest_categorical("use_lstm", [True, False])
     if config["use_lstm"]:
         config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [16, 32, 32, 64, 128])
         config["lstm_layers"] = trial.suggest_categorical("lstm_layers", [1, 1, 1, 2, 2, 3])
         #config["lstm_bidirectional"] = True  # Not implemented, hardcoded as True by default
         config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
-    # ---- MoE placement (you can leave this as-is; we keep MoE at the head) ----
-    #config["moe_placement"] = "head"        # ("head" recommended; others optional/unused here) --> This architecture is hardcoded in but ought to test other placements probably...
 
     # MOE Hyperparams
     config["label_smooth"]       = 0.0  #trial.suggest_float("label_smooth", 0.0, 0.15)
@@ -321,14 +312,12 @@ def objective(trial):
         #)
         # ---- New Optimized Data Loading ----
         # Define the path to the .pkl file we just created/verified
-        #tensor_dict_path = os.path.join(config["dfs_load_path"], f"{config['saved_df_timestamp']}_tensor_dict.pkl")
         tensor_dict_path = os.path.join(config["dfs_load_path"], f"maml_tensor_dict.pkl")
         # This returns two standard PyTorch DataLoaders
         # It uses config['train_PIDs'] and config['val_PIDs'] internally to split the data
         episodic_train_loader, episodic_val_loader = get_maml_dataloaders(
             config,
             tensor_dict_path=tensor_dict_path,
-        #    collate_fn=maml_mm_collate
         )
 
         # Do the meta "pretraining" (is this just the meta-train phase?)
