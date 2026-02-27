@@ -84,8 +84,8 @@ def build_model_from_trial(trial, base_config=None):
     # NEW
     config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
     config['num_eval_episodes'] = 10
-    config['debug_one_episode'] = False
-    config['debug_five_episode'] = True
+    config['debug_one_episode'] = True
+    config['debug_five_episode'] = False
     # TODO: Is there some weird behaviour with gate type or was that just happenchance?
     config["gate_type"]     = 'demographic_only'  #trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
 
