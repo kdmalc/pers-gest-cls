@@ -87,10 +87,10 @@ def build_model_from_trial(trial, base_config=None):
     config['num_eval_episodes'] = 10
     config['debug_one_user_only'] = True
     config['debug_one_episode'] = False
-    config['debug_five_episode'] = True
+    config['debug_five_episodes'] = True
     if config['debug_one_episode']:
         config["meta_batchsize"] = 1
-    elif config['debug_five_episode']:
+    elif config['debug_five_episodes']:
         config["meta_batchsize"] = 5
     else:
         config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32, 64])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
