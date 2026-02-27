@@ -85,7 +85,7 @@ def build_model_from_trial(trial, base_config=None):
     # NEW
     config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
     config['num_eval_episodes'] = 10
-    config['debug_one_user_only'] = True
+    config['debug_one_user_only'] = False
     config['debug_one_episode'] = False
     config['debug_five_episodes'] = True
     if config['debug_one_episode']:
