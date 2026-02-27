@@ -85,6 +85,7 @@ def build_model_from_trial(trial, base_config=None):
     # NEW
     config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
     config['num_eval_episodes'] = 10
+    config['debug_one_user_only'] = True
     config['debug_one_episode'] = False
     config['debug_five_episode'] = True
     if config['debug_one_episode']:
@@ -94,9 +95,10 @@ def build_model_from_trial(trial, base_config=None):
     else:
         config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32, 64])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
 
-
     # Fixed to 3 since the issue appears to be the inner loop not learning...
-    config["maml_inner_steps"] = 3  #trial.suggest_categorical("maml_inner_steps", [1, 1, 1, 2, 2, 3])
+    config["maml_inner_steps"] = 5  #trial.suggest_categorical("maml_inner_steps", [1, 1, 1, 2, 2, 3])
+
+
 
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
     config["feature_engr"] = "None"
@@ -204,7 +206,8 @@ def build_model_from_trial(trial, base_config=None):
     config["num_workers"] = 8  # This is the dataloader, something about how many processes the CPU can use (more is faster generally)
     
     # First epochs are first order, then switches to second, if using hybrid
-    config["maml_opt_order"] = trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
+    # TODO: Hardcoded for the local adaptation HPO check
+    config["maml_opt_order"] = "first"  #trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
     if config["maml_opt_order"] == "hybrid":
         config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 1, 40)      # DOA threshold (epochs <= this are first-order)
     # Theoretically this should be even be used, but just in case...
