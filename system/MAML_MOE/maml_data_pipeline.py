@@ -247,7 +247,7 @@ def get_maml_dataloaders(config, tensor_dict_path):
     val_ds = MetaGestureDataset(
         tensor_dict,
         # IMPORTANT: In debug_one_episode mode, use the same pool as training so the seed picks the same task
-        target_pids=config["val_PIDs"] if not debug_one_episode else config["train_PIDs"], #
+        target_pids=config["val_PIDs"] if not (debug_one_episode or debug_five_episodes) else config["train_PIDs"], #
         target_gestures=config["valtest_gesture_range"] if not debug_one_episode else config["train_gesture_range"],  # These are the same now, 1-10, FWIW
         n_way=config['n_way'], 
         k_shot=config["k_shot"], 
