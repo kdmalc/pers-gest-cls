@@ -76,7 +76,7 @@ def build_model_from_trial(trial, base_config=None):
     else:
         config = dict()
 
-    config["n_way"] = 10
+    config["n_way"] = 3  #TODO: Lowered from 10 to 3 just to see what happens...
     config["k_shot"] = 1
     config["q_query"] = 9  # TODO: Does this need to be 9? If it set it lower does that just make it faster? Does that impact the model? Slightly noiser eval??
     # ^^ Set it to None if we want to use ALL remaining data in the val loaders
@@ -87,7 +87,7 @@ def build_model_from_trial(trial, base_config=None):
     config['num_eval_episodes'] = 10
     config['debug_one_user_only'] = False
     config['debug_one_episode'] = False
-    config['debug_five_episodes'] = True
+    config['debug_five_episodes'] = False
     if config['debug_one_episode']:
         config["meta_batchsize"] = 1
     elif config['debug_five_episodes']:
@@ -95,10 +95,10 @@ def build_model_from_trial(trial, base_config=None):
     else:
         config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32, 64])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
 
-    # Fixed to 3 since the issue appears to be the inner loop not learning...
-    config["maml_inner_steps"] = 5  #trial.suggest_categorical("maml_inner_steps", [1, 1, 1, 2, 2, 3])
+    # Consider fixing to 3 or 5 since the issue appears to be the inner loop not learning in 10-way full task? Learns fine on fixed 1 and 5 tasks...
+    config["maml_inner_steps"] = trial.suggest_categorical("maml_inner_steps", [1, 1, 1, 2, 2, 3])
 
-
+    #######################################################################
 
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
     config["feature_engr"] = "None"
