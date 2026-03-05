@@ -43,6 +43,6 @@ echo "CWD: $(pwd)"
 echo "Output Directory: $RUN_DIR"
 
 # Run the python script and pass the trial ID
-python -u "$CODE_DIR/system/NOTS/debugging/maml_hpo.py" \
+python -u "$CODE_DIR/system/NOTS/maml/maml_hpo.py" \
     --data_dir "$DATA_DIR" #\
 #    --out_dir  "$DEBUG_RUN_DIR"

@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=mamlpp-debug
-#SBATCH --partition=debug
+#SBATCH --job-name=maml-hpo
+#SBATCH --partition=commons
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem=10G
-#SBATCH --time=00:15:00
+#SBATCH --time=11:45:00
 #SBATCH --gres=gpu:1
 # Optional, only if your site really has those node features:
 # # SBATCH --constraint="ampere|lovelace"
@@ -13,8 +13,12 @@
 # SBATCH --export=HOME,USER,LOGNAME,SHELL,LANG,LC_ALL,PATH,PROJECTS,WORK,SHARED_SCRATCH,LOCAL_SCRATCH
 #SBATCH --export=ALL
 
+# Launch 5 workers (Trial IDs will be managed by Optuna automatically)
+#SBATCH --array=1-5
+
 # Safer bash: exit on error/undefined vars; fail pipelines if any step fails
 echo "JOB_START host=$(hostname) date=$(date)"
+# ArrayID=${SLURM_ARRAY_TASK_ID}" idk if this is defined? Unless it is automatically created...
 #set -euo pipefail
 #echo "after set -euo pipefail"
 
@@ -36,26 +40,20 @@ mamba activate /projects/my13/kai/meta-pers-gest/envs/fl-torch
 ######## 4) Paths & run ########
 export CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
 export DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
-export RUN_DIR=/scratch/my13/kai/runs/${SLURM_JOB_NAME}_${SLURM_JOB_ID}
+export RUN_DIR=/scratch/my13/kai/runs/logs/${SLURM_JOB_NAME}_${SLURM_JOB_ID}
 export DEBUG_RUN_DIR=/scratch/my13/kai/runs
 #mkdir -p "$RUN_DIR" /scratch/my13/kai/logs
 # For relative file imports (in other .py files)
 export MOE_DIR="$CODE_DIR/system/MAML_MOE"
-
-# before running python
-# Put CODE_DIR (for April_25.* imports) and MOE_DIR (for MOE_model_classes, etc.) on PYTHONPATH
+# before running python:
+# Put CODE_DIR (for ...) and MOE_DIR (for ...) on PYTHONPATH
 export PYTHONPATH="$CODE_DIR:$MOE_DIR:$PYTHONPATH"
 
-#echo "===== Sanity ====="
-#echo "Host: $(hostname)"
-#echo "which python: $(which python)"
-#python -V
-#python -c "import sys; print('sys.prefix:', sys.prefix)"
-#python -c "import numpy as np; print('numpy:', np.__version__)"
-#nvidia-smi || true
-#echo "=================="
-
 echo "CWD:"; pwd
-python -u "$CODE_DIR/system/NOTS/debugging/mamlpp_hpo.py" \
-    --data_dir "$DATA_DIR" \
-    --out_dir  "$DEBUG_RUN_DIR"
+
+# Run the script
+# Each array task will run the python script, which runs 1 trial and exits.
+python -u "$CODE_DIR/system/NOTS/maml/maml_hpo.py" \
+    --data_dir "$DATA_DIR" #\
+#    --out_dir  "$DEBUG_RUN_DIR"
+# ^ Would maybe rather just let it write to its log dir? Is this why the created dirs are always empty presumably?

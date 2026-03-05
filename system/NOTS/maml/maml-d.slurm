@@ -61,7 +61,7 @@ echo "PYTHONPATH: $PYTHONPATH"
 # /projects/my13/kai/meta-pers-gest/envs/fl-torch/bin/python \
 #     "$CODE_DIR/April_25/NOTS/first_run/maml_run1.py"
 
-python "$CODE_DIR/April_25/NOTS/first_run/maml_run1.py"
+python "$CODE_DIR/April_25/NOTS/maml/maml_hpo.py"
 
 echo "===== Sanity ====="
 echo "Host: $(hostname)"

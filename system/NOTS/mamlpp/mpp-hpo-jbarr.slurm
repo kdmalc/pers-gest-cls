@@ -12,7 +12,7 @@
 # For 10 trials now:
 #SBATCH --array=0-9
 # For 100 trials, 5 at a time (Uncomment below and comment above to switch):
-# #SBATCH --array=0-99%5
+# #SBATCH --array=0-99%3
 
 # SBATCH --export=ALL
 
@@ -43,6 +43,6 @@ echo "CWD: $(pwd)"
 echo "Output Directory: $RUN_DIR"
 
 # Run the python script and pass the trial ID
-python -u "$CODE_DIR/system/NOTS/debugging/mamlpp_hpo.py" \
+python -u "$CODE_DIR/system/NOTS/mamlpp/mamlpp_hpo.py" \
     --data_dir "$DATA_DIR" #\
 #    --out_dir  "$DEBUG_RUN_DIR"
