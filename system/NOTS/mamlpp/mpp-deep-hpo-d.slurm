@@ -56,6 +56,6 @@ export PYTHONPATH="$CODE_DIR:$MOE_DIR:$PYTHONPATH"
 #echo "=================="
 
 echo "CWD:"; pwd
-python -u "$CODE_DIR/system/NOTS/maml/mamlpp_deep_hpo.py" \
+python -u "$CODE_DIR/system/NOTS/mamlpp/mamlpp_deep_hpo.py" \
     --data_dir "$DATA_DIR" \
     --out_dir  "$DEBUG_RUN_DIR"
