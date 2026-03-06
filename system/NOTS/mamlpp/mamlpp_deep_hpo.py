@@ -40,7 +40,7 @@ def build_model_from_trial(trial, base_config=None):
     config = copy.deepcopy(base_config) if base_config else {}
 
     # === STATIC HYPERPARAMETERS (Reducing Search Space) ===
-    config["n_way"] = 3
+    config["n_way"] = 3  # TODO: Should I HPO 3way or 10way... 10way wasnt really learning at all... probably check both ig...
     config["k_shot"] = 1
     config["q_query"] = 9
     config["meta_batchsize"] = 32  # Stable baseline for meta-gradients
@@ -57,33 +57,62 @@ def build_model_from_trial(trial, base_config=None):
     config["mixture_mode"] = 'logits'
     config["num_epochs"] = 50 
     config["maml_opt_order"] = "first" 
+
     config["maml_use_lslr"] = True # Learned Step Size is crucial for bigger models
+    if config["maml_use_lslr"] == True:
+        # These are only getting used as inits so it doesn't really matter I dont think...
+        # Alpha Init (Inner Loop) - higher capacity models might need larger initial steps
+        config["maml_alpha_init"] = trial.suggest_float("maml_alpha_init", 0.0001, 0.1, log=True)
+        config["maml_alpha_init_eval"] = trial.suggest_float("maml_alpha_init_eval", 0.0001, 0.01, log=True)
+    elif config["maml_use_lslr"] == False:
+        config["maml_alpha_init"] = trial.suggest_float("maml_alpha_init", 0.0001, 0.1, log=True)
+        config["maml_alpha_init_eval"] = trial.suggest_float("maml_alpha_init_eval", 0.0001, 0.01, log=True)
+    config["enable_inner_loop_optimizable_bn_params"] = False  # by default, do NOT adapt BN in inner loop --> I should not be using BN at all AFAIK
+    # Eval
+    config["use_cosine_outer_lr"] = False                       # This is cosine-based lr annealing... is this in addition to my lr scheduler....
+    config["use_lslr_at_eval"] = False
+
+    config["use_maml_msl"] = False
+    if config["use_maml_msl"] == "hybrid":
+        config["maml_msl_num_epochs"] = trial.suggest_int("maml_msl_num_epochs", 1, 40)
+    elif config["use_maml_msl"] == True:
+        config["maml_msl_num_epochs"] = 1000000  # Arbitrarily large to never trigger and turn MSL off
+    elif config["use_maml_msl"] == False:
+        config["maml_msl_num_epochs"] = 0
+
+    config["num_classes"] = 10
     
     # === DYNAMIC HYPERPARAMETERS (Focusing on Model Size) ===
+
+    config["groupnorm_num_groups"] = trial.suggest_categorical("groupnorm_num_groups", [4, 8])
+    config["use_film_x_demo"] = trial.suggest_categorical("use_film_x_demo", [True, False])
+    config["use_imu"] = True 
+    config["use_demographics"] = True  # Is it worth testing turning this off?
+    config["context_emb_dim"] = trial.suggest_categorical("context_emb_dim", [4, 8, 12, 16, 32, 64])
+    config["context_pool_type"] = trial.suggest_categorical("context_pool_type", ['mean', 'attn'])  
+    config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [4, 8, 16, 32, 64])
     
     # Increase CNN capacity (Width and Depth)
     # We move from 16-128 to 64-512 to give the model more "memory" for features
     config["emg_base_cnn_filters"] = trial.suggest_categorical("emg_width", [64, 128, 256, 512])
     config["imu_base_cnn_filters"] = trial.suggest_categorical("imu_width", [64, 128, 256, 512])
-    
     # Depth: 3 to 6 layers. 
     # (Note: Beyond 6 usually requires ResNet connections to train in MAML)
     config["emg_cnn_layers"] = trial.suggest_int("emg_depth", 3, 6)
     config["imu_cnn_layers"] = trial.suggest_int("imu_depth", 3, 6)
     config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel", [3, 5])
+    config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
+    config['emg_stride'] = 1  
+    config['imu_stride'] = 1 
 
     # LSTM Capacity
     config["use_lstm"] = True 
-    config["lstm_hidden"] = trial.suggest_categorical("lstm_units", [128, 256, 512])
-    config["lstm_layers"] = trial.suggest_int("lstm_depth", 1, 3)
-    config["use_GlobalAvgPooling"] = True
+    config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [64, 128, 256, 512])
+    config["lstm_layers"] = trial.suggest_int("lstm_layers", 1, 3)
 
     # Optimization (Bigger models need tailored LR and Weight Decay)
-    config["learning_rate"] = trial.suggest_float("outer_lr", 1e-5, 1e-3, log=True)
+    config["learning_rate"] = trial.suggest_float("outer_lr", 1e-5, 1e-2, log=True)
     config["weight_decay"] = trial.suggest_float("wd", 1e-6, 1e-4, log=True)
-    
-    # Alpha Init (Inner Loop) - higher capacity models might need larger initial steps
-    config["maml_alpha_init"] = trial.suggest_float("inner_lr_init", 0.001, 0.1, log=True)
 
     # Path setups (Remain static)
     config["NOTS"] = True
@@ -91,6 +120,22 @@ def build_model_from_trial(trial, base_config=None):
     config["results_save_dir"] = results_save_dir
     config["models_save_dir"] = models_save_dir
     config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds//"
+
+    # Things it dropped
+    config["optimizer"]          = trial.suggest_categorical("optimizer", ["adamw", "adam", "sgd"])
+    # TODO: Should I even bother turning ES on? My ES is pretty generous...
+    config["lr_scheduler_factor"]= 0.1  
+    config["lr_scheduler_patience"]= 6  
+    config["earlystopping_patience"]= 8 
+    config["earlystopping_min_delta"]= 0.005 
+    config["meta_learning"] = True
+    config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500, 1000])  # TODO: I have no idea what this should be... this is the max on the number of tasks per EPOCH. So this limits training, if the iterable is way too  (obvi true)
+    config["num_workers"] = 8
+    config["label_smooth"] = 0.0
+    config["multimodal"] = True
+    config['emg_in_ch'] = 16
+    config['imu_in_ch'] = 72
+    config['demo_in_dim'] = 12
 
     model = MultimodalCNNLSTMMOE(config)
     model.to(config["device"])
@@ -302,10 +347,10 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(FIXED_SEED)
     
     # The journal file is just a log of operations (no complex SQL locking)
-    journal_path = os.path.join(db_dir, "mamlpp_CNNLSTMMLP_deep_2fcv_hpo.log")
+    journal_path = os.path.join(db_dir, "mamlpp_CNNLSTMMLP_deep_1s3w_2fcv_hpo.log")
 
     run_study(
-        study_name="mamlpp_CNNLSTMMLP_deep_2fcv_hpo",
+        study_name="mamlpp_CNNLSTMMLP_deep_1s3w_2fcv_hpo",
         storage_path=journal_path,
         n_trials=N_TRIALS, # Each Slurm worker does one trial (N_TRIALS=1)
     )
