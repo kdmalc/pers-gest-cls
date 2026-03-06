@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --job-name=mamlpp-debug
+#SBATCH --job-name=mpp-deep-d
 #SBATCH --partition=debug
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=10
-#SBATCH --mem=10G
+#SBATCH --mem=30G
 #SBATCH --time=00:15:00
 #SBATCH --gres=gpu:1
 # Optional, only if your site really has those node features:

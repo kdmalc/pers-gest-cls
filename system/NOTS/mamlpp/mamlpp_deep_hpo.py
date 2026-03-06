@@ -43,7 +43,7 @@ def build_model_from_trial(trial, base_config=None):
     config["n_way"] = 3  # TODO: Should I HPO 3way or 10way... 10way wasnt really learning at all... probably check both ig...
     config["k_shot"] = 1
     config["q_query"] = 9
-    config["meta_batchsize"] = 32  # Stable baseline for meta-gradients
+    config["meta_batchsize"] = 16  # Stable baseline for meta-gradients
     config["maml_inner_steps"] = 3 # Moderate steps for training
     config["maml_inner_steps_eval"] = 10 # More steps for evaluation
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -92,12 +92,14 @@ def build_model_from_trial(trial, base_config=None):
     
     # Increase CNN capacity (Width and Depth)
     # We move from 16-128 to 64-512 to give the model more "memory" for features
-    config["emg_base_cnn_filters"] = trial.suggest_categorical("emg_width", [64, 128, 256, 512])
-    config["imu_base_cnn_filters"] = trial.suggest_categorical("imu_width", [64, 128, 256, 512])
+    ## "Base" bc this is the first layer and it doubles each layer thereafter I believe...
+    ## So at 256 start, that could be 256*(2^6) at 6 layers... ...
+    config["emg_base_cnn_filters"] = trial.suggest_categorical("emg_width", [16, 32, 64, 128, 256])
+    config["imu_base_cnn_filters"] = trial.suggest_categorical("imu_width", [16, 32, 64, 128, 256])
     # Depth: 3 to 6 layers. 
     # (Note: Beyond 6 usually requires ResNet connections to train in MAML)
-    config["emg_cnn_layers"] = trial.suggest_int("emg_depth", 3, 6)
-    config["imu_cnn_layers"] = trial.suggest_int("imu_depth", 3, 6)
+    config["emg_cnn_layers"] = trial.suggest_int("emg_depth", 1, 5)
+    config["imu_cnn_layers"] = trial.suggest_int("imu_depth", 1, 5)
     config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel", [3, 5])
     config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
     config['emg_stride'] = 1  
@@ -105,7 +107,7 @@ def build_model_from_trial(trial, base_config=None):
 
     # LSTM Capacity
     config["use_lstm"] = True 
-    config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [64, 128, 256, 512])
+    config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [64, 128, 256])
     config["lstm_layers"] = trial.suggest_int("lstm_layers", 1, 3)
 
     # Optimization (Bigger models need tailored LR and Weight Decay)
@@ -153,9 +155,7 @@ def build_model_from_trial(trial, base_config=None):
 # ---------- Load splits once ----------
 with open(user_split_json_filepath, "r") as f:
     ALL_SPLITS = json.load(f)
-NUM_FOLDS = 2  #len(ALL_SPLITS) --> Overwriting to just be 1 for HPO, otherwise runs legit cannot finish
-## Im going to change it to 2 so that we dont just overfit to the fixed val set...
-## I dont think 2 folds can finish in 24 hours... increase the time to 24 hours ig...
+NUM_FOLDS = 2  #len(ALL_SPLITS) 
 # If you want to store per-fold metrics:
 fold_mean_accs = []
 fold_user_accs = []  # list of lists (per-fold user accs)
