@@ -136,6 +136,13 @@ def build_model_from_trial(trial, base_config=None):
     config['demo_in_dim'] = 12
     config["num_classes"] = 10
     config["return_aux"] = True
+    config["use_earlystopping"] = True
+    config["verbose"] = False
+    config["num_total_users"] = 32
+    config["train_gesture_range"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["valtest_gesture_range"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["padding"] = 0 
+    config["timestamp"] = timestamp
 
     model = MultimodalCNNLSTMMOE(config)
     model.to(config["device"])
