@@ -1,18 +1,18 @@
 #!/bin/bash
-#SBATCH --job-name=mamlpp-hpo-jb
+#SBATCH --job-name=mpp-hpo-jb
 #SBATCH --partition=commons
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=10
-#SBATCH --mem=10G
+#SBATCH --mem=30G
 #SBATCH --time=10:00:00
 #SBATCH --gres=gpu:1
 
 ######## JOB ARRAY SETTINGS ########
 # For 10 trials now:
-#SBATCH --array=0-9
+# 3SBATCH --array=0-9
 # For 100 trials, 5 at a time (Uncomment below and comment above to switch):
-# #SBATCH --array=0-99%3
+#SBATCH --array=0-99%3
 
 # SBATCH --export=ALL
 
