@@ -324,7 +324,7 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
                 mean_lr = all_lrs.mean().item()
                 min_lr = all_lrs.min().item()
                 max_lr = all_lrs.max().item()
-                print(f"[LSLR Stats] Mean: {mean_lr:.5f} | Min: {min_lr:.5f} | Max: {max_lr:.5f}")
+                print(f"[LSLR Stats] Mean: {mean_lr:.7f} | Min: {min_lr:.7f} | Max: {max_lr:.7f}")
 
         # Val
         if episodic_val_loader is not None:
