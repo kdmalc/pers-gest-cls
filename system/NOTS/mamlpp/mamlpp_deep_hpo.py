@@ -50,7 +50,8 @@ def build_model_from_trial(trial, base_config=None):
     config["sequence_length"] = 64
     config["use_batch_norm"] = False
     config["dropout"] = 0.1 # Fixed low dropout to prevent underfitting
-    config["gate_type"] = "context_feature_demo" # Use all info for MoE
+    config["gate_type"] = "context_feature_demo" # Use all info for MoE  # How sure am I that this is working... or being useful...
+    # TODO: Ought to make a version where I can toggle MOE off...
     config["num_experts"] = 4
     config["top_k"] = 2
     config["expert_architecture"] = "MLP"

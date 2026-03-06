@@ -2,7 +2,13 @@ import os
 import torch
 import random
 import pickle
+import numpy as np
 from torch.utils.data import Dataset, DataLoader
+
+def worker_init_fn(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 # ==========================================
 # 1. COLLATE FUNCTION (Gradient Accumulation)
@@ -241,7 +247,7 @@ def get_maml_dataloaders(config, tensor_dict_path):
     )
     
     # batch_size=1 to yield 1 episode dictionary at a time for Gradient Accumulation
-    train_dl = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=num_workers, collate_fn=maml_mm_collate)
+    train_dl = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=num_workers, collate_fn=maml_mm_collate, worker_init_fn=worker_init_fn)
 
     # Val Loader (Deterministic, predefined episodes per user)
     val_ds = MetaGestureDataset(

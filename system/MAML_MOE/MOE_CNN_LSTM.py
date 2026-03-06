@@ -28,6 +28,7 @@ class MultimodalCNNLSTMMOE(nn.Module):
         input_feat_dim = self.emg_out_dim + self.imu_out_dim
         if config['use_lstm']:
             self.lstm = nn.LSTM(input_size=input_feat_dim, hidden_size=config['lstm_hidden'], num_layers=config['lstm_layers'], batch_first=True, bidirectional=True, dropout=config['dropout'] if config['lstm_layers'] > 1 else 0)
+            # TODO: Why does this double here... whatever
             self.feature_dim = config['lstm_hidden'] * 2
         else:
             self.lstm = None
@@ -41,7 +42,9 @@ class MultimodalCNNLSTMMOE(nn.Module):
         )
 
         # 5. MoE Head
-        self.moe = MOELayer(input_dim=self.feature_dim, output_dim=config['num_classes'], num_experts=config['num_experts'], context_dim=config['context_emb_dim'], config=config)
+        #self.moe = MOELayer(input_dim=self.feature_dim, output_dim=config['num_classes'], num_experts=config['num_experts'], context_dim=config['context_emb_dim'], config=config)
+        # Output should actually be n_way, otherwise we have a bunch of unused output nodes each episode
+        self.moe = MOELayer(input_dim=self.feature_dim, output_dim=config['n_way'], num_experts=config['num_experts'], context_dim=config['context_emb_dim'], config=config)
 
     def _build_cnn(self, in_channels, base_filters, num_layers, kernel_size, stride, gn_groups):
         layers = []

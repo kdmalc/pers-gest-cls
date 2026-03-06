@@ -317,6 +317,15 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         print(f"Train completed in {time.time() - epoch_start_time:.2f}s")
         print(f'Train loss/acc: {train_metrics["loss"]:.4f}, {train_metrics["acc"]*100:.2f}%')
 
+        # If using LSLR, print the learning rates so can make sure they arent crazy low...
+        if bool(config.get("maml_use_lslr")) and hasattr(model, "_lslr"):
+            with torch.no_grad():
+                all_lrs = torch.cat([v.flatten() for v in model._lslr._lrs.values()])
+                mean_lr = all_lrs.mean().item()
+                min_lr = all_lrs.min().item()
+                max_lr = all_lrs.max().item()
+                print(f"[LSLR Stats] Mean: {mean_lr:.5f} | Min: {min_lr:.5f} | Max: {max_lr:.5f}")
+
         # Val
         if episodic_val_loader is not None:
             val_start_time = time.time()
