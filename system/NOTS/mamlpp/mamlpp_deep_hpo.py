@@ -79,8 +79,6 @@ def build_model_from_trial(trial, base_config=None):
         config["maml_msl_num_epochs"] = 1000000  # Arbitrarily large to never trigger and turn MSL off
     elif config["use_maml_msl"] == False:
         config["maml_msl_num_epochs"] = 0
-
-    config["num_classes"] = 10
     
     # === DYNAMIC HYPERPARAMETERS (Focusing on Model Size) ===
 
@@ -136,6 +134,8 @@ def build_model_from_trial(trial, base_config=None):
     config['emg_in_ch'] = 16
     config['imu_in_ch'] = 72
     config['demo_in_dim'] = 12
+    config["num_classes"] = 10
+    config["return_aux"] = True
 
     model = MultimodalCNNLSTMMOE(config)
     model.to(config["device"])
