@@ -1,10 +1,11 @@
-# === MAML++ core for your codebase ============================================
+# === MAML++ core ============================================
 import copy
 from collections import OrderedDict
 import torch
 import torch.nn as nn
 import numpy as np
 import time
+import torch.nn.functional as F
 
 from system.MAML_MOE.MOE_training import _model_forward_router, set_MOE_optimizer, SmoothedEarlyStopping
 from system.MAML_MOE.shared_maml import *
@@ -162,6 +163,11 @@ def inner_loop_mamlpp(
 
     return params_i, last_q_logits, last_q_labels, meta_loss
 
+def _normalize_step_item(step_item):
+    if isinstance(step_item, dict): return [step_item]
+    if isinstance(step_item, (list, tuple)): return list(step_item)
+    raise TypeError(f"Episode item must be dict or list of dicts.")
+
 # -----------------------------
 # One epoch of MAML++ training: ie batched inner loops followed by one outer loop
 # -----------------------------
@@ -191,11 +197,6 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
                 "params": list(model._lslr.parameters()),
                 "lr": float(config["learning_rate"])
             })
-
-    def _normalize_step_item(step_item):
-        if isinstance(step_item, dict): return [step_item]
-        if isinstance(step_item, (list, tuple)): return list(step_item)
-        raise TypeError(f"Episode item must be dict or list of dicts.")
 
     meta_correct = meta_total = loss_sum = n_episodes = accum_count = 0
     meta_opt.zero_grad(set_to_none=True)
@@ -267,6 +268,136 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
         for p in model.parameters():
             if p.grad is not None:
                 p.grad *= (meta_batchsize / accum_count)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+        meta_opt.step()
+        meta_opt.zero_grad(set_to_none=True)
+
+    avg_loss = loss_sum / max(n_episodes, 1)
+    avg_acc  = meta_correct / max(meta_total, 1)
+    return {"loss": avg_loss, "acc": avg_acc, "episodes": n_episodes}
+
+def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, criterion=None):
+    device = config['device']
+    model.to(device).train()
+
+    # --- Setup Logic (Verbatim from your original) ---
+    if criterion is None:
+        label_smooth = float(config["label_smooth"])
+        criterion = nn.CrossEntropyLoss(label_smoothing=label_smooth) if label_smooth > 0 else nn.CrossEntropyLoss()
+
+    N = int(config["maml_inner_steps"])
+    use_lslr = bool(config["maml_use_lslr"])
+    alpha_init = float(config["maml_alpha_init"])
+    meta_batchsize = int(config["meta_batchsize"])
+    episodes_per_epoch = int(config["episodes_per_epoch_train"])
+    track_alignment = bool(config.get("track_gradient_alignment", False))
+
+    # LSLR Setup
+    temp_theta_for_lslr = named_param_dict(model, require_grad_only=True)
+    if use_lslr:
+        if not hasattr(model, "_lslr") or getattr(model._lslr, "inner_steps", None) != N:
+            model._lslr = PerParamPerStepLSLR(
+                temp_theta_for_lslr.items(), inner_steps=N, init_lr=alpha_init,
+                learnable=True, device=device
+            ).to(device)
+            meta_opt.add_param_group({
+                "params": list(model._lslr.parameters()),
+                "lr": float(config["learning_rate"])
+            })
+
+    meta_correct = meta_total = loss_sum = n_episodes = accum_count = 0
+    meta_opt.zero_grad(set_to_none=True)
+    
+    # Storage for diagnostic branch
+    task_grads_for_batch = []
+
+    for step_item in episodic_loader:
+        episodes = _normalize_step_item(step_item)
+        for episode in episodes:
+            if n_episodes % 100 == 0:
+                print(f"--- Episode {n_episodes}/{episodes_per_epoch} | Target Meta-Batch Size: {meta_batchsize} ---")
+
+            current_theta0 = named_param_dict(model, require_grad_only=True)
+
+            # 1. Inner Loop
+            thetaN, q_logits, q_labels, meta_loss_task = inner_loop_mamlpp(
+                model, current_theta0, episode["support"], episode["query"], 
+                config, lslr=(model._lslr if use_lslr else None), 
+                criterion=criterion, epoch=epoch_idx
+            )
+
+            # 2. Metrics
+            with torch.no_grad():
+                preds = q_logits.argmax(dim=1)
+                meta_correct += (preds == q_labels).sum().item()
+                meta_total += q_labels.numel()
+                loss_sum += float(meta_loss_task.item())
+
+            # 3. Backward Pass / Gradient Accumulation
+            if track_alignment:
+                # --- DIAGNOSTIC BRANCH ---
+                # Isolate this task's gradient to measure its specific direction
+                model.zero_grad(set_to_none=True)
+                (meta_loss_task / meta_batchsize).backward()
+                
+                with torch.no_grad():
+                    this_grad = torch.cat([p.grad.flatten() for p in model.parameters() if p.grad is not None]).detach()
+                    task_grads_for_batch.append(this_grad)
+            else:
+                # --- ORIGINAL VERBATIM BRANCH ---
+                # Standard PyTorch accumulation (sums directly into p.grad)
+                (meta_loss_task / meta_batchsize).backward()
+
+            accum_count += 1
+            n_episodes += 1
+
+            # 4. Outer Optimizer Step
+            if accum_count == meta_batchsize:
+                if track_alignment:
+                    # Compute alignment before injecting back into model
+                    alignment = compute_meta_batch_alignment(task_grads_for_batch)
+                    if n_episodes % 100 == 0 or n_episodes == meta_batchsize:
+                        print(f"Meta batchsize hit on ep {n_episodes}! Alignment (Cosine Sim): {alignment:.4f}")
+
+                    # Manually sum isolated grads and re-assign to model parameters
+                    sum_grad = torch.stack(task_grads_for_batch).sum(dim=0)
+                    pointer = 0
+                    for p in model.parameters():
+                        if p.requires_grad:
+                            n_p = p.numel()
+                            p.grad = sum_grad[pointer : pointer + n_p].view_as(p)
+                            pointer += n_p
+                    task_grads_for_batch = [] # Reset for next batch
+
+                # Final Step (Shared logic)
+                if n_episodes == meta_batchsize:
+                    print(f"Meta batchsize hit on ep {n_episodes}! Parameters updating!")
+                
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+                meta_opt.step()
+                meta_opt.zero_grad(set_to_none=True)
+                accum_count = 0
+
+            if episodes_per_epoch and n_episodes >= episodes_per_epoch:
+                break
+        if episodes_per_epoch and n_episodes >= episodes_per_epoch:
+            break
+
+    # Residual Step logic (Simplified for clarity)
+    if accum_count > 0:
+        if track_alignment and task_grads_for_batch:
+            sum_grad = torch.stack(task_grads_for_batch).sum(dim=0)
+            pointer = 0
+            for p in model.parameters():
+                if p.requires_grad:
+                    n_p = p.numel()
+                    p.grad = (sum_grad[pointer : pointer + n_p] * (meta_batchsize / accum_count)).view_as(p)
+                    pointer += n_p
+        else:
+            for p in model.parameters():
+                if p.grad is not None:
+                    p.grad *= (meta_batchsize / accum_count)
+        
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
         meta_opt.step()
         meta_opt.zero_grad(set_to_none=True)
@@ -447,3 +578,13 @@ def mamlpp_adapt_and_eval(model, config, support_batch, query_batch):
     acc = (preds == labels).sum().item() / max(1, B)
 
     return {"loss": q_loss, "acc": acc, "adapted_params": theta_prime}
+
+def compute_meta_batch_alignment(task_gradients):
+    """Computes average pairwise cosine similarity between flattened task gradients."""
+    if len(task_gradients) < 2: 
+        return 0.0
+    grads_matrix = torch.stack(task_gradients) 
+    grads_norm = F.normalize(grads_matrix, p=2, dim=1)
+    sim_matrix = torch.mm(grads_norm, grads_norm.t())
+    mask = torch.eye(sim_matrix.size(0), device=sim_matrix.device).bool()
+    return sim_matrix.masked_select(~mask).mean().item()

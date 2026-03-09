@@ -115,6 +115,7 @@ def build_model_from_trial(trial, base_config=None):
     config["num_total_users"] = 32
     config["train_gesture_range"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     config["valtest_gesture_range"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["track_gradient_alignment"] = True
 
     config["NOTS"] = True
     if config["NOTS"]==False:

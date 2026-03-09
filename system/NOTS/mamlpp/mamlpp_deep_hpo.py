@@ -58,8 +58,9 @@ def build_model_from_trial(trial, base_config=None):
     config["mixture_mode"] = 'logits'
     config["num_epochs"] = 50 
     config["maml_opt_order"] = "first" 
+    config["track_gradient_alignment"] = True
 
-    config["maml_use_lslr"] = True # Learned Step Size is crucial for bigger models
+    config["maml_use_lslr"] = False # Learned Step Size is crucial for bigger models --> It was giving negative lrs....
     if config["maml_use_lslr"] == True:
         # These are only getting used as inits so it doesn't really matter I dont think...
         # Alpha Init (Inner Loop) - higher capacity models might need larger initial steps
