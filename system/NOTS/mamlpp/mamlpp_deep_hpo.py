@@ -201,6 +201,8 @@ def objective(trial):
         # Uses your new builder that takes `trial` and sets hyperparams via trial.suggest_*
         model, config = build_model_from_trial(trial, base_config=BASE_CONFIG)
 
+        print(f"MODEL:\n{model}\n")
+
         if config["use_MOE"]:
             print(f"CONFIG[GATE_TYPE]: {config['gate_type']}")
 
