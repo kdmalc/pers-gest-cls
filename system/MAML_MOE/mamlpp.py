@@ -334,7 +334,6 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
                 loss_sum += float(meta_loss_task.item())
 
             # 3. Backward Pass / Gradient Accumulation
-            # 3. Backward Pass / Gradient Accumulation
             if track_alignment:
                 # --- DIAGNOSTIC BRANCH ---
                 # Isolate this task's gradient to measure its specific direction
@@ -359,6 +358,9 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
             # 4. Outer Optimizer Step
             if accum_count == meta_batchsize:
                 if track_alignment:  # We need to reinject the gradients that we extracted earlier
+                    # TODO: How does this handle experts that were not used (ie when the grads are None)?
+                    ## Are we just overwriting them with 0? ... Seems like it will wipe out info from earlier tasks...
+                    ## I guess it depends on how the accumulation is handled...
                     with torch.no_grad():
                         # compute_meta_batch_alignment likely expects flattened 1D tensors per task.
                         # We flatten them here just for the metric calculation.
