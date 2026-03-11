@@ -57,10 +57,13 @@ def build_model_from_trial(trial, base_config=None):
         config["top_k"] = 2
         config["mixture_mode"] = 'logits'
         config["gate_type"] = "context_feature_demo" # Use all info for MoE  # How sure am I that this is working... or being useful...
-        config["label_smooth"] = 0.0
         config["return_aux"] = True
     # This might still get used, not sure... since this is how we set the non-MOE replacement head?
     config["expert_architecture"] = "MLP"
+    # Also going to leave this defined since it should probably be 0 anyways
+    ## We get errors if we do not define label_smooth FYI
+    config["label_smooth"] = 0.0
+
     config["num_epochs"] = 50 
     config["maml_opt_order"] = "first" 
     config["track_gradient_alignment"] = True
