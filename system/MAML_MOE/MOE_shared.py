@@ -2,6 +2,28 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
+class SingleExpertHead(nn.Module):
+    """
+    Simple MLP classifier used when config['use_MOE'] is False.
+    Structurally identical to one MoE expert: Linear -> ReLU -> Linear.
+    Accepts (x, u, d) to match MOELayer's forward signature, but ignores u and d
+    (since FiLM conditioning on demographics happens upstream in the CNN, and the
+    context vector 'u' is only meaningful for routing, which we are bypassing).
+    Returns (logits, {}) to stay API-compatible with MOELayer.
+    """
+    def __init__(self, input_dim: int, output_dim: int):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, input_dim // 2),
+            nn.ReLU(),
+            nn.Linear(input_dim // 2, output_dim),
+        )
+
+    def forward(self, x, u=None, d=None):
+        return self.mlp(x), {}
+
+
 class CosineHead(nn.Module):
     """
     Angular similarity classifier. Measures the proximity of features 

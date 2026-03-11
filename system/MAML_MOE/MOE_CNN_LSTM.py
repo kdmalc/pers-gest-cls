@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from MOE_shared import MOELayer
+from MOE_shared import MOELayer, SingleExpertHead
 
 
 class MultimodalCNNLSTMMOE(nn.Module):
@@ -41,10 +41,28 @@ class MultimodalCNNLSTMMOE(nn.Module):
             pool_type=config['context_pool_type']
         )
 
-        # 5. MoE Head
-        #self.moe = MOELayer(input_dim=self.feature_dim, output_dim=config['num_classes'], num_experts=config['num_experts'], context_dim=config['context_emb_dim'], config=config)
-        # Output should actually be n_way, otherwise we have a bunch of unused output nodes each episode
-        self.moe = MOELayer(input_dim=self.feature_dim, output_dim=config['n_way'], num_experts=config['num_experts'], context_dim=config['context_emb_dim'], config=config)
+        # 5. Classification Head: MoE or single MLP
+        # When use_MOE=False, we replace the full MoE stack with a single MLP expert.
+        # The ContextEncoder and get_context_vector path still exist but the context
+        # vector 'u' is simply ignored at forward time -- this keeps the API identical
+        # and makes it easy to flip back on.
+        ## Note: d and u embeddings still get calculated, just not used... 
+        ## I dont really know how they are getting trained then lol
+        ## It is effectively just some overhead
+        ## Idk if it affects the gradient alignment calc... probably... ...
+        if config.get('use_MOE', True):
+            self.moe = MOELayer(
+                input_dim=self.feature_dim,
+                output_dim=config['n_way'],
+                num_experts=config['num_experts'],
+                context_dim=config['context_emb_dim'],
+                config=config,
+            )
+        else:
+            self.moe = SingleExpertHead(
+                input_dim=self.feature_dim,
+                output_dim=config['n_way'],
+            )
 
     def _build_cnn(self, in_channels, base_filters, num_layers, kernel_size, stride, gn_groups):
         layers = []

@@ -50,12 +50,17 @@ def build_model_from_trial(trial, base_config=None):
     config["sequence_length"] = 64
     config["use_batch_norm"] = False
     config["dropout"] = 0.1 # Fixed low dropout to prevent underfitting
-    config["gate_type"] = "context_feature_demo" # Use all info for MoE  # How sure am I that this is working... or being useful...
-    # TODO: Ought to make a version where I can toggle MOE off...
-    config["num_experts"] = 4
-    config["top_k"] = 2
+    
+    config["use_MOE"] = False
+    if config["use_MOE"] == True:
+        config["num_experts"] = 4
+        config["top_k"] = 2
+        config["mixture_mode"] = 'logits'
+        config["gate_type"] = "context_feature_demo" # Use all info for MoE  # How sure am I that this is working... or being useful...
+        config["label_smooth"] = 0.0
+        config["return_aux"] = True
+    # This might still get used, not sure... since this is how we set the non-MOE replacement head?
     config["expert_architecture"] = "MLP"
-    config["mixture_mode"] = 'logits'
     config["num_epochs"] = 50 
     config["maml_opt_order"] = "first" 
     config["track_gradient_alignment"] = True
@@ -133,13 +138,11 @@ def build_model_from_trial(trial, base_config=None):
     config["meta_learning"] = True
     config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500, 1000])  # TODO: I have no idea what this should be... this is the max on the number of tasks per EPOCH. So this limits training, if the iterable is way too  (obvi true)
     config["num_workers"] = 8
-    config["label_smooth"] = 0.0
     config["multimodal"] = True
     config['emg_in_ch'] = 16
     config['imu_in_ch'] = 72
     config['demo_in_dim'] = 12
     config["num_classes"] = 10
-    config["return_aux"] = True
     config["use_earlystopping"] = True
     config["verbose"] = False
     config["num_total_users"] = 32

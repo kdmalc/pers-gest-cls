@@ -340,6 +340,7 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
                 ## This completely wipes the gradients from the previous task, resetting them to None rather than tensors filled with zeros (which saves memory).
                 ## Mixture of Experts (MoE) Routing: If your model uses an MoE architecture, the router decides which "experts" (sub-networks) process the data.
                 ## If a specific expert is not used at all during a particular episode's forward pass, PyTorch's autograd engine will not route any gradients to it. Its .grad remains None.
+                ### For gradient alignment, since the experts are zero'd out, they basically don't contribute to alignment (just cotnribute 0s)
                 model.zero_grad(set_to_none=True)
                 (meta_loss_task / meta_batchsize).backward()
                 
@@ -592,9 +593,15 @@ def mamlpp_adapt_and_eval(model, config, support_batch, query_batch):
 def compute_meta_batch_alignment(task_gradients):
     """Computes average pairwise cosine similarity between flattened task gradients."""
     if len(task_gradients) < 2: 
+        print("compute_meta_batch_alignment: Only 1 task given!")
         return 0.0
     grads_matrix = torch.stack(task_gradients) 
+    # Convert into unit vector:
     grads_norm = F.normalize(grads_matrix, p=2, dim=1)
+    # [N, D] x [D, N] = [N, N] similarity matrix where the value at row i col j is the dot product of gradient_i and gradient_j
+    ## This dot product is exactly cosine similarity (since we normalized our vectors)
     sim_matrix = torch.mm(grads_norm, grads_norm.t())
+    # Mask the diagonal (since that will always be 1.0)
     mask = torch.eye(sim_matrix.size(0), device=sim_matrix.device).bool()
+    # Take the mean of the off-diagonal elements, thus returning a single number, the mean of all pairwise gradient alignments
     return sim_matrix.masked_select(~mask).mean().item()
