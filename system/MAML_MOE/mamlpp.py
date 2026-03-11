@@ -334,18 +334,23 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
                 loss_sum += float(meta_loss_task.item())
 
             # 3. Backward Pass / Gradient Accumulation
+            # 3. Backward Pass / Gradient Accumulation
             if track_alignment:
                 # --- DIAGNOSTIC BRANCH ---
                 # Isolate this task's gradient to measure its specific direction
+                ## This completely wipes the gradients from the previous task, resetting them to None rather than tensors filled with zeros (which saves memory).
+                ## Mixture of Experts (MoE) Routing: If your model uses an MoE architecture, the router decides which "experts" (sub-networks) process the data.
+                ## If a specific expert is not used at all during a particular episode's forward pass, PyTorch's autograd engine will not route any gradients to it. Its .grad remains None.
                 model.zero_grad(set_to_none=True)
                 (meta_loss_task / meta_batchsize).backward()
                 
                 with torch.no_grad():
-                    this_grad = torch.cat([p.grad.flatten() for p in model.parameters() if p.grad is not None]).detach()
+                    # Safely clone grads. If None, create a zero tensor of the exact same shape.
+                    this_grad = [p.grad.clone().detach() if p.grad is not None else torch.zeros_like(p) 
+                                 for p in model.parameters() if p.requires_grad]
                     task_grads_for_batch.append(this_grad)
             else:
                 # --- ORIGINAL VERBATIM BRANCH ---
-                # Standard PyTorch accumulation (sums directly into p.grad)
                 (meta_loss_task / meta_batchsize).backward()
 
             accum_count += 1
@@ -353,29 +358,32 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
 
             # 4. Outer Optimizer Step
             if accum_count == meta_batchsize:
-                if track_alignment:
-                    # Compute alignment before injecting back into model
-                    alignment = compute_meta_batch_alignment(task_grads_for_batch)
-                    if n_episodes % 100 == 0 or n_episodes == meta_batchsize:
-                        print(f"Meta batchsize hit on ep {n_episodes}! Alignment (Cosine Sim): {alignment:.4f}")
+                if track_alignment:  # We need to reinject the gradients that we extracted earlier
+                    with torch.no_grad():
+                        # compute_meta_batch_alignment likely expects flattened 1D tensors per task.
+                        # We flatten them here just for the metric calculation.
+                        flattened_task_grads = [torch.cat([g.flatten() for g in task_grad]) for task_grad in task_grads_for_batch]
+                        alignment = compute_meta_batch_alignment(flattened_task_grads)
+                        
+                        if n_episodes % 100 == 0 or n_episodes == meta_batchsize:
+                            print(f"Meta batchsize hit on ep {n_episodes}! Alignment (Cosine Sim): {alignment:.4f}")
 
-                    # Manually sum isolated grads and re-assign to model parameters
-                    sum_grad = torch.stack(task_grads_for_batch).sum(dim=0)
-                    pointer = 0
-                    for p in model.parameters():
-                        if p.requires_grad:
-                            n_p = p.numel()
-                            p.grad = sum_grad[pointer : pointer + n_p].view_as(p)
-                            pointer += n_p
+                        # Safely sum isolated grads and re-assign to model parameters
+                        # We iterate over the parameters and the extracted lists in parallel
+                        for param_idx, p in enumerate(filter(lambda x: x.requires_grad, model.parameters())):
+                            # Stack the gradients for THIS specific parameter across all tasks, then sum
+                            summed_p_grad = torch.stack([task_grad[param_idx] for task_grad in task_grads_for_batch]).sum(dim=0)
+                            p.grad = summed_p_grad
+                            
                     task_grads_for_batch = [] # Reset for next batch
 
                 # Final Step (Shared logic)
-                if n_episodes == meta_batchsize:
-                    print(f"Meta batchsize hit on ep {n_episodes}! Parameters updating!")
+                #if n_episodes == meta_batchsize:
+                #    print(f"Meta batchsize hit on ep {n_episodes}! Parameters updating!")
                 
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
                 meta_opt.step()
-                meta_opt.zero_grad(set_to_none=True)
+                meta_opt.zero_grad(set_to_none=True)  # Prepare for the next meta-batch
                 accum_count = 0
 
             if episodes_per_epoch and n_episodes >= episodes_per_epoch:
