@@ -394,21 +394,27 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
         if episodes_per_epoch and n_episodes >= episodes_per_epoch:
             break
 
-    # Residual Step logic (Simplified for clarity)
+    # Residual Step logic
     if accum_count > 0:
         if track_alignment and task_grads_for_batch:
-            sum_grad = torch.stack(task_grads_for_batch).sum(dim=0)
-            pointer = 0
-            for p in model.parameters():
-                if p.requires_grad:
-                    n_p = p.numel()
-                    p.grad = (sum_grad[pointer : pointer + n_p] * (meta_batchsize / accum_count)).view_as(p)
-                    pointer += n_p
+            with torch.no_grad():
+                # 1. We need to sum per-parameter, just like in Step 4
+                for param_idx, p in enumerate(filter(lambda x: x.requires_grad, model.parameters())):
+                    # Extract the grad for THIS parameter from every task in the residual batch
+                    summed_p_grad = torch.stack([task_grad[param_idx] for task_grad in task_grads_for_batch]).sum(dim=0)
+                    
+                    # 2. Apply the scaling factor (to normalize by the target meta_batchsize)
+                    # and assign directly to p.grad
+                    p.grad = summed_p_grad * (meta_batchsize / accum_count)
+                    
+            task_grads_for_batch = [] # Reset for safety
         else:
+            # Standard PyTorch accumulation path: gradients are already in p.grad
             for p in model.parameters():
                 if p.grad is not None:
                     p.grad *= (meta_batchsize / accum_count)
-        
+
+        # Finalize the update
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
         meta_opt.step()
         meta_opt.zero_grad(set_to_none=True)
