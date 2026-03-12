@@ -41,8 +41,8 @@ def build_model_from_trial(trial, base_config=None):
 
     # === STATIC HYPERPARAMETERS (Reducing Search Space) ===
     config["n_way"] = 3  # TODO: Should I HPO 3way or 10way... 10way wasnt really learning at all... probably check both ig...
-    config["k_shot"] = 1
-    config["q_query"] = 9
+    config["k_shot"] = 5  # TODO: Raised this from 1 to 5... if it can't solve 5 then we're cooked
+    config["q_query"] = 5
     config["meta_batchsize"] = 16  # Stable baseline for meta-gradients
     config["maml_inner_steps"] = trial.suggest_int("maml_inner_steps", 3, 5) # Moderate steps for training
     config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [7, 10, 15]) # More steps for evaluation
@@ -363,12 +363,11 @@ if __name__ == "__main__":
     torch.manual_seed(FIXED_SEED)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(FIXED_SEED)
-    
-    # The journal file is just a log of operations (no complex SQL locking)
-    journal_path = os.path.join(db_dir, "mamlpp_CNNLSTMMLP_deep_1s3w_2fcv_hpo.log")
 
+    # TODO: Swap these names back if/when we change back from 5 shot!!!
+    journal_path = os.path.join(db_dir, "mamlpp_CNNLSTMMLP_deep_5s3w_2fcv_hpo.log")
     run_study(
-        study_name="mamlpp_CNNLSTMMLP_deep_1s3w_2fcv_hpo",
+        study_name="mamlpp_CNNLSTMMLP_deep_5s3w_2fcv_hpo",
         storage_path=journal_path,
         n_trials=N_TRIALS, # Each Slurm worker does one trial (N_TRIALS=1)
     )
