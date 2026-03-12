@@ -66,7 +66,7 @@ def build_model_from_trial(trial, base_config=None):
 
     config["num_epochs"] = 50 
     config["maml_opt_order"] = "first" 
-    config["track_gradient_alignment"] = True
+    config["track_gradient_alignment"] = True  # NOTE: This is very questionable if using MOE / LSLR. Without those I think it is fine
 
     config["maml_use_lslr"] = False # Learned Step Size is crucial for bigger models --> It was giving negative lrs....
     if config["maml_use_lslr"] == True:
