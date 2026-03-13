@@ -127,8 +127,8 @@ CONTRASTIVE_CONFIG = {
     # SUPCON LOSS  (loss_mode == 'supcon')
     # ----------------------------------------------------------
     # Temperature τ: lower = sharper, harder negatives. 0.07 is SupCon default.
-    # hard_negative_mining: weight harder negatives more strongly
-    # label_hierarchy: enables 4-level weighting (see SupConLoss docstring)
+    # hard_negative_mining: weight harder negatives more strongly --> TODO: This is not fully implemented yet!!
+    # label_hierarchy: enables 4-level weighting (see SupConLoss docstring) --> TODO: Ought to test different hierarchies levels/orderings...
     "supcon_temperature":   0.07,
     "hard_negative_mining": False,        # Start False; ablate on
     "label_hierarchy":      False,        # 4-level: (user,gest) > (user,diff) > (diff,gest) > (diff,diff)
@@ -150,7 +150,12 @@ CONTRASTIVE_CONFIG = {
     # samples_per_class_per_batch × num_classes_in_batch = effective batch size.
     # Recommended: 4-8 samples/class, as many classes as memory allows.
     "batch_construction":   "balanced",   # 'balanced' (recommended) or 'random'
-    "samples_per_class":    6,            # M samples per gesture per batch
+    # TODO: This is pretraining... so... k-shot doesnt matter here?
+    ## Wait... is this even k-shot? Since we are pulling from multiple users (batches are not user-specific at this stage), 
+    ## increasing samples_per_class really just increases the likelihood that we have multiple samples from the same user, which 
+    ## CURRENTLY IS NOT EVEN GUARANTEED! (Will that break the label_hierarchy off runs? 
+    ## Since we could have zero positive samples? Unless we count same gesture diff user as pos...)
+    "samples_per_class":    6,            # M samples per gesture per batch  
     "classes_per_batch":    10,           # How many gesture classes to include per batch
                                           # effective_batch_size = samples_per_class × classes_per_batch = 60
     "num_workers":          8,
@@ -158,7 +163,7 @@ CONTRASTIVE_CONFIG = {
     # Validation: 1-shot prototyping accuracy (mimics test-time protocol exactly)
     "val_support_shots":    1,            # k-shot for prototype construction
     "val_query_per_class":  9,            # How many query samples to evaluate per class
-    "num_val_episodes":     20,           # Episodes per val user
+    "num_val_episodes":     20,           # Episodes per val user --> TODO: Are eps still unlimited... or is there only one val ep if we do 1-9 (10+90=100)... or can eps be sampled over and over independently?...
 
     # ----------------------------------------------------------
     # OPTIMIZATION
@@ -181,8 +186,8 @@ CONTRASTIVE_CONFIG = {
     "device":               "cuda" if torch.cuda.is_available() else "cpu",
     "seed":                 42,
     "verbose":              True,
-    "grad_clip":            1.0,          # Max gradient norm; None to disable
-    "log_interval":         50,           # Steps between training log prints
+    "grad_clip":            5.0,          # Max gradient norm; None to disable
+    "log_interval":         1,           # Steps between training log prints
 }
 
 

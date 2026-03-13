@@ -43,7 +43,7 @@ class FiLMConditioner(nn.Module):
     """
     Feature-wise Linear Modulation.
     Modulates CNN feature maps using a conditioning vector (e.g. demographics).
-    h: (B, C, T) → scaled/shifted by γ, β derived from cond_dim vector.
+    h: (B, C, T) → scaled/shifted by gamma, beta derived from cond_dim vector.
     """
     def __init__(self, feat_dim: int, cond_dim: int):
         super().__init__()
@@ -52,9 +52,9 @@ class FiLMConditioner(nn.Module):
 
     def forward(self, h: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         # h: (B, C, T),  c: (B, cond_dim)
-        γ = self.gamma(c).unsqueeze(-1)   # (B, C, 1)
-        β = self.beta(c).unsqueeze(-1)    # (B, C, 1)
-        return h * (1 + γ) + β
+        gamma = self.gamma(c).unsqueeze(-1)   # (B, C, 1)
+        beta = self.beta(c).unsqueeze(-1)    # (B, C, 1)
+        return h * (1 + gamma) + beta
 
 
 class AttentionPool1d(nn.Module):
@@ -278,7 +278,7 @@ class ContrastiveGestureEncoder(nn.Module):
                imu: torch.Tensor = None,
                demo: torch.Tensor = None) -> torch.Tensor:
         """
-        Backbone only (before projection head).
+        Backbone only (before projection head, DOES NOT APPLY THE PROJECTION HEAD).
         Useful for prototype-based inference (can also use forward() — both work).
         Returns (B, backbone_dim), NOT normalized.
         """
@@ -291,6 +291,7 @@ class ContrastiveGestureEncoder(nn.Module):
                 demo: torch.Tensor = None) -> torch.Tensor:
         """
         Full forward pass: signal → backbone → projection head → L2-norm.
+        DOES APPLY THE PROJECTION HEAD
         Returns z: (B, embedding_dim), unit-norm vectors on the hypersphere.
         """
         d_emb = self.demo_encoder(demo) if (self.demo_encoder and demo is not None) else None
@@ -352,6 +353,7 @@ class ContrastiveGestureEncoder(nn.Module):
 
         z_q = self.forward(query_emg, query_imu, query_demo)  # (B, D)
 
+        # TODO: What is the connection to k-shot here? Does this still run in 1-shot?
         labels  = sorted(prototypes.keys())
         proto_mat = torch.stack([prototypes[l] for l in labels], dim=0)  # (K, D)
         proto_mat = proto_mat.to(z_q.device)

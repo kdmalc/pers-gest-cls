@@ -17,6 +17,7 @@ Both losses expect L2-normalized embeddings (unit vectors) as input.
 
 Label Hierarchy (optional, SupCon only):
   Level 1 (strongest positive):  same user  AND same gesture
+  # Order of 2 and 3 is questionable...
   Level 2:                        same user  AND different gesture  → treated as standard negative
   Level 3:                        different user AND same gesture   → treated as POSITIVE in SupCon
   Level 4 (hardest negative):    different user AND different gesture
