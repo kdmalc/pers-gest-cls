@@ -258,25 +258,23 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
             if accum_count == meta_batchsize:
                 if track_alignment:
                     with torch.no_grad():
-                        # CALL THE NEW FUNCTION: 
-                        # Send the list of task_grads (which contains Nones) directly.
-                        alignment = calculate_gradient_alignment(task_grads_for_batch)
+                        alignment = compute_meta_batch_alignment(task_grads_for_batch)
                         
                         if n_episodes % 100 == 0 or n_episodes == meta_batchsize:
-                            print(f"Meta batchsize hit on ep {n_episodes}! Alignment (Cosine Sim): {alignment:.4f}")
+                            print(f"Meta batchsize hit on ep {n_episodes}! Alignment: {alignment:.4f}")
 
-                        # Re-inject gradients into model.parameters() for the optimizer
+                        # Re-inject gradients safely
                         for param_idx, p in enumerate(filter(lambda x: x.requires_grad, model.parameters())):
-                            # Filter out the Nones just for the summation step
-                            grads_to_sum = [task_grad[param_idx] for task_grad in task_grads_for_batch 
-                                            if task_grad[param_idx] is not None]
+                            # THE FIX: Filter out None gradients before stacking
+                            valid_grads = [task_grad[param_idx] for task_grad in task_grads_for_batch 
+                                        if task_grad[param_idx] is not None]
                             
-                            if grads_to_sum:
-                                p.grad = torch.stack(grads_to_sum).sum(dim=0)
+                            if valid_grads:
+                                p.grad = torch.stack(valid_grads).sum(dim=0)
                             else:
-                                p.grad = None # Or torch.zeros_like(p) if your optimizer requires it
+                                p.grad = None # Entirely unused across the whole batch
                         
-                    task_grads_for_batch = []
+                    task_grads_for_batch = [] # Reset for next batch
 
                 # Final Step (Shared logic)
                 #if n_episodes == meta_batchsize:
@@ -296,16 +294,18 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
     if accum_count > 0:
         if track_alignment and task_grads_for_batch:
             with torch.no_grad():
-                # 1. We need to sum per-parameter, just like in Step 4
                 for param_idx, p in enumerate(filter(lambda x: x.requires_grad, model.parameters())):
-                    # Extract the grad for THIS parameter from every task in the residual batch
-                    summed_p_grad = torch.stack([task_grad[param_idx] for task_grad in task_grads_for_batch]).sum(dim=0)
+                    # THE FIX: Filter out None gradients here as well
+                    valid_grads = [task_grad[param_idx] for task_grad in task_grads_for_batch 
+                                if task_grad[param_idx] is not None]
                     
-                    # 2. Apply the scaling factor (to normalize by the target meta_batchsize)
-                    # and assign directly to p.grad
-                    p.grad = summed_p_grad * (meta_batchsize / accum_count)
-                    
-            task_grads_for_batch = [] # Reset for safety
+                    if valid_grads:
+                        summed_p_grad = torch.stack(valid_grads).sum(dim=0)
+                        p.grad = summed_p_grad * (meta_batchsize / accum_count)
+                    else:
+                        p.grad = None
+                        
+            task_grads_for_batch = [] 
         else:
             # Standard PyTorch accumulation path: gradients are already in p.grad
             for p in model.parameters():
