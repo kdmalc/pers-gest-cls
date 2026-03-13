@@ -43,13 +43,14 @@ def build_model_from_trial(trial, base_config=None):
     config["n_way"] = 3  # TODO: Should I HPO 3way or 10way... 10way wasnt really learning at all... probably check both ig...
     config["k_shot"] = 5  # TODO: Raised this from 1 to 5... if it can't solve 5 then we're cooked
     config["q_query"] = 5
-    config["meta_batchsize"] = 16  # Stable baseline for meta-gradients
+    config["meta_batchsize"] = 32  # Stable baseline for meta-gradients
     config["maml_inner_steps"] = trial.suggest_int("maml_inner_steps", 3, 5) # Moderate steps for training
     config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [7, 10, 15]) # More steps for evaluation
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     config["sequence_length"] = 64
     config["use_batch_norm"] = False
     config["dropout"] = 0.1 # Fixed low dropout to prevent underfitting
+    config['FILM_on_context_or_demo'] = 'context'  # Was implicitly doing demo before, so let's try context now...
     
     config["use_MOE"] = False
     if config["use_MOE"] == True:
@@ -106,10 +107,10 @@ def build_model_from_trial(trial, base_config=None):
     ## So at 256 start, that could be 256*(2^6) at 6 layers... ...
     config["emg_base_cnn_filters"] = trial.suggest_categorical("emg_width", [16, 32, 64, 128, 256])
     config["imu_base_cnn_filters"] = trial.suggest_categorical("imu_width", [16, 32, 64, 128, 256])
-    # Depth: 3 to 6 layers. 
+    # Depth: 1 to 4 layers. 
     # (Note: Beyond 6 usually requires ResNet connections to train in MAML)
-    config["emg_cnn_layers"] = trial.suggest_int("emg_depth", 1, 5)
-    config["imu_cnn_layers"] = trial.suggest_int("imu_depth", 1, 5)
+    config["emg_cnn_layers"] = trial.suggest_int("emg_depth", 1, 4)
+    config["imu_cnn_layers"] = trial.suggest_int("imu_depth", 1, 4)
     config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel", [3, 5])
     config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
     config['emg_stride'] = 1  
@@ -365,9 +366,9 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(FIXED_SEED)
 
     # TODO: Swap these names back if/when we change back from 5 shot!!!
-    journal_path = os.path.join(db_dir, "mamlpp_CNNLSTMMLP_deep_5s3w_2fcv_hpo.log")
+    journal_path = os.path.join(db_dir, "mamlpp_CNNLSTMMLP_deep_usercond_5s3w_2fcv_hpo.log")
     run_study(
-        study_name="mamlpp_CNNLSTMMLP_deep_5s3w_2fcv_hpo",
+        study_name="mamlpp_CNNLSTMMLP_deep_usercond_5s3w_2fcv_hpo",
         storage_path=journal_path,
         n_trials=N_TRIALS, # Each Slurm worker does one trial (N_TRIALS=1)
     )
