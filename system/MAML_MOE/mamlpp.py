@@ -258,23 +258,23 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
             if accum_count == meta_batchsize:
                 if track_alignment:
                     with torch.no_grad():
+                        # Simply pass the list of lists. The function above handles the rest.
                         alignment = compute_meta_batch_alignment(task_grads_for_batch)
                         
                         if n_episodes % 100 == 0 or n_episodes == meta_batchsize:
-                            print(f"Meta batchsize hit on ep {n_episodes}! Alignment: {alignment:.4f}")
+                            print(f"Meta-Batch Alignment: {alignment:.4f}")
 
-                        # Re-inject gradients safely
+                        # Re-inject gradients into the model for the optimizer
                         for param_idx, p in enumerate(filter(lambda x: x.requires_grad, model.parameters())):
-                            # THE FIX: Filter out None gradients before stacking
-                            valid_grads = [task_grad[param_idx] for task_grad in task_grads_for_batch 
-                                        if task_grad[param_idx] is not None]
+                            # If the first task's grad is None, the whole batch is None (Non-MOE assumption)
+                            if task_grads_for_batch[0][param_idx] is None:
+                                p.grad = None
+                                continue
                             
-                            if valid_grads:
-                                p.grad = torch.stack(valid_grads).sum(dim=0)
-                            else:
-                                p.grad = None # Entirely unused across the whole batch
+                            # Sum the gradients across the batch for this parameter
+                            p.grad = torch.stack([task_grad[param_idx] for task_grad in task_grads_for_batch]).sum(dim=0)
                         
-                    task_grads_for_batch = [] # Reset for next batch
+                    task_grads_for_batch = [] # Reset
 
                 # Final Step (Shared logic)
                 #if n_episodes == meta_batchsize:
@@ -494,18 +494,35 @@ def mamlpp_adapt_and_eval(model, config, support_batch, query_batch):
 
     return {"loss": q_loss, "acc": acc, "adapted_params": theta_prime}
 
-def compute_meta_batch_alignment(task_gradients):
-    """Computes average pairwise cosine similarity between flattened task gradients."""
-    if len(task_gradients) < 2: 
-        print("compute_meta_batch_alignment: Only 1 task given!")
+def compute_meta_batch_alignment(task_gradients_list):
+    """
+    task_gradients_list: List of lists. 
+                         Each inner list is [grad_p1, grad_p2, ... grad_pn]
+    """
+    num_tasks = len(task_gradients_list)
+    if num_tasks < 2:
         return 0.0
-    grads_matrix = torch.stack(task_gradients) 
-    # Convert into unit vector:
-    grads_norm = F.normalize(grads_matrix, p=2, dim=1)
-    # [N, D] x [D, N] = [N, N] similarity matrix where the value at row i col j is the dot product of gradient_i and gradient_j
-    ## This dot product is exactly cosine similarity (since we normalized our vectors)
+    # 1. Identify "Active" parameters
+    # We look at the first task to see which parameters actually have gradients.
+    # If a parameter is None here, and you aren't using MOE, it's a zombie.
+    active_indices = [
+        i for i, g in enumerate(task_gradients_list[0]) if g is not None
+    ]
+    if not active_indices:
+        return 0.0
+    # 2. Flatten only the active parameters for each task
+    flattened_tasks = []
+    for task_grads in task_gradients_list:
+        # Concatenate all active tensors into one long 1D vector
+        active_tensors = [task_grads[i].flatten() for i in active_indices]
+        flattened_tasks.append(torch.cat(active_tensors))
+    # 3. Stack into a matrix [NumTasks, TotalDimentionality]
+    # Now that they are all Tensors of the same length, stack works perfectly.
+    grads_matrix = torch.stack(flattened_tasks) 
+    # 4. Standard Cosine Similarity Math
+    grads_norm = torch.nn.functional.normalize(grads_matrix, p=2, dim=1)
     sim_matrix = torch.mm(grads_norm, grads_norm.t())
-    # Mask the diagonal (since that will always be 1.0)
-    mask = torch.eye(sim_matrix.size(0), device=sim_matrix.device).bool()
-    # Take the mean of the off-diagonal elements, thus returning a single number, the mean of all pairwise gradient alignments
-    return sim_matrix.masked_select(~mask).mean().item()
+    # Extract values above the diagonal
+    triu_indices = torch.triu_indices(num_tasks, num_tasks, offset=1)
+    similarities = sim_matrix[triu_indices[0], triu_indices[1]]
+    return similarities.mean().item()
