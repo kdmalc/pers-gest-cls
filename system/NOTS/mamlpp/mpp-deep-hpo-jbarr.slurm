@@ -32,7 +32,6 @@ export CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
 export DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
 
 # This creates a unique directory for EVERY trial so they never interfere
-#export RUN_DIR=/scratch/my13/kai/runs/${SLURM_JOB_NAME}_${SLURM_ARRAY_JOB_ID}/trial_${SLURM_ARRAY_TASK_ID}
 export RUN_DIR=/scratch/my13/kai/runs/logs/${SLURM_JOB_NAME}/trial_${SLURM_ARRAY_TASK_ID}
 mkdir -p "$RUN_DIR"
 

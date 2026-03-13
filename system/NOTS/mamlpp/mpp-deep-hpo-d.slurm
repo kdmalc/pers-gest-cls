@@ -36,9 +36,12 @@ mamba activate /projects/my13/kai/meta-pers-gest/envs/fl-torch
 ######## 4) Paths & run ########
 export CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
 export DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
-export RUN_DIR=/scratch/my13/kai/runs/${SLURM_JOB_NAME}_${SLURM_JOB_ID}
 export DEBUG_RUN_DIR=/scratch/my13/kai/runs
-#mkdir -p "$RUN_DIR" /scratch/my13/kai/logs
+#export RUN_DIR=/scratch/my13/kai/runs/${SLURM_JOB_NAME}_${SLURM_JOB_ID}
+# This creates a unique directory for EVERY trial so they never interfere
+export RUN_DIR=/scratch/my13/kai/runs/logs/${SLURM_JOB_NAME}/trial_${SLURM_ARRAY_TASK_ID}
+mkdir -p "$RUN_DIR"
+
 # For relative file imports (in other .py files)
 export MOE_DIR="$CODE_DIR/system/MAML_MOE"
 
