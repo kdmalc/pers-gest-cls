@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from MOE_shared import MOELayer, SingleExpertHead
 
-
 class MultimodalCNNLSTMMOE(nn.Module):
     def __init__(self, config):
         super(MultimodalCNNLSTMMOE, self).__init__()
@@ -17,40 +16,33 @@ class MultimodalCNNLSTMMOE(nn.Module):
             self.imu_encoder = self._build_cnn(config['imu_in_ch'], config['imu_base_cnn_filters'], config['imu_cnn_layers'], config['cnn_kernel_size'], config['imu_stride'], config['groupnorm_num_groups'])
             self.imu_out_dim = config['imu_base_cnn_filters'] * (2 ** (config['imu_cnn_layers'] - 1))
 
-        # 2. Demographics & FiLM
-        self.demo_encoder = DemographicsEncoder(config['demo_in_dim'], config['demo_emb_dim']) if config['use_demographics'] else None
+        cnn_combined_dim = self.emg_out_dim + self.imu_out_dim
+
+        # 2. Demographics Encoder
+        self.demo_encoder = DemographicsEncoder(config['demo_in_dim'], config['demo_emb_dim']) if config.get('use_demographics', True) else None
         
-        if config['use_film_x_demo'] and self.demo_encoder:
-            self.film_emg = FiLMConditioner(self.emg_out_dim, config['demo_emb_dim'])
-            self.film_imu = FiLMConditioner(self.imu_out_dim, config['demo_emb_dim']) if config['use_imu'] else None
-
-        # 3. Temporal Processing (LSTM)
-        input_feat_dim = self.emg_out_dim + self.imu_out_dim
-        if config['use_lstm']:
-            self.lstm = nn.LSTM(input_size=input_feat_dim, hidden_size=config['lstm_hidden'], num_layers=config['lstm_layers'], batch_first=True, bidirectional=True, dropout=config['dropout'] if config['lstm_layers'] > 1 else 0)
-            # TODO: Why does this double here... whatever
-            self.feature_dim = config['lstm_hidden'] * 2
-        else:
-            self.lstm = None
-            self.feature_dim = input_feat_dim
-
-        # 4. Context Embedding (User/Set Summary)
+        # 3. Context Projector (Now projects directly from pooled CNN features, not LSTM)
         self.context_projector = ContextEncoder(
-            feature_dim=self.feature_dim, 
+            feature_dim=cnn_combined_dim, 
             context_dim=config['context_emb_dim'],
             pool_type=config['context_pool_type']
         )
 
-        # 5. Classification Head: MoE or single MLP
-        # When use_MOE=False, we replace the full MoE stack with a single MLP expert.
-        # The ContextEncoder and get_context_vector path still exist but the context
-        # vector 'u' is simply ignored at forward time -- this keeps the API identical
-        # and makes it easy to flip back on.
-        ## Note: d and u embeddings still get calculated, just not used... 
-        ## I dont really know how they are getting trained then lol
-        ## It is effectively just some overhead
-        ## Idk if it affects the gradient alignment calc... probably... ...
-        if config.get('use_MOE', True):
+        # 4. FiLM Conditioner
+        film_cond_dim = config['context_emb_dim'] if config.get('FILM_on_context_or_demo', 'demo') == 'context' else config['demo_emb_dim']
+        self.film_emg = FiLMConditioner(self.emg_out_dim, film_cond_dim)
+        self.film_imu = FiLMConditioner(self.imu_out_dim, film_cond_dim) if config['use_imu'] else None
+
+        # 5. Temporal Processing (LSTM)
+        if config['use_lstm']:
+            self.lstm = nn.LSTM(input_size=cnn_combined_dim, hidden_size=config['lstm_hidden'], num_layers=config['lstm_layers'], batch_first=True, bidirectional=True, dropout=config['dropout'] if config['lstm_layers'] > 1 else 0)
+            self.feature_dim = config['lstm_hidden'] * 2
+        else:
+            self.lstm = None
+            self.feature_dim = cnn_combined_dim
+
+        # 6. Classification Head
+        if config.get('use_MOE', False):
             self.moe = MOELayer(
                 input_dim=self.feature_dim,
                 output_dim=config['n_way'],
@@ -77,77 +69,89 @@ class MultimodalCNNLSTMMOE(nn.Module):
             curr_in, curr_out = curr_out, curr_out * 2
         return nn.Sequential(*layers)
 
-    def _process_signals(self, x_emg, x_imu=None, d_emb=None):
-        """Internal helper to pass raw signals through CNN -> FiLM -> LSTM -> Pooling"""
-        # 1. CNN Encoding
+    def _extract_cnn_features(self, x_emg, x_imu=None):
+        """Pass 1: Just get the raw signals translated into feature maps."""
         e = self.emg_encoder(x_emg)
         i = self.imu_encoder(x_imu) if (self.config['use_imu'] and x_imu is not None) else None
+        return e, i
 
-        # 2. FiLM Conditioning
-        if self.config['use_film_x_demo'] and d_emb is not None:
-            # We expand d_emb if we are processing a support set (multiple samples) 
-            # while having only one demographic vector for the user.
-            if d_emb.size(0) == 1 and e.size(0) > 1:
-                d_emb_expanded = d_emb.expand(e.size(0), -1)
+    def _apply_film_and_temporal(self, e, i, condition_emb):
+        """Pass 2: Apply FiLM conditioning and run through LSTM."""
+        # 1. Apply FiLM
+        if condition_emb is not None:
+            if condition_emb.size(0) == 1 and e.size(0) > 1:
+                condition_emb_expanded = condition_emb.expand(e.size(0), -1)
             else:
-                d_emb_expanded = d_emb
+                condition_emb_expanded = condition_emb
                 
-            e = self.film_emg(e, d_emb_expanded)
+            e = self.film_emg(e, condition_emb_expanded)
             if i is not None:
-                i = self.film_imu(i, d_emb_expanded)
+                i = self.film_imu(i, condition_emb_expanded)
 
-        # 3. Fusion
+        # 2. Fusion
         combined = torch.cat([e, i], dim=1) if i is not None else e
 
-        # 4. Temporal Processing
+        # 3. Temporal Processing
         if self.lstm:
             combined = combined.permute(0, 2, 1) # (B, T, C)
             out, (hn, _) = self.lstm(combined)
-            # Use GAP or concat hidden states based on config
             if self.config['use_GlobalAvgPooling']:
                 return torch.mean(out, dim=1)
             else:
                 return torch.cat([hn[-2], hn[-1]], dim=1)
         else:
-            # No LSTM: Standard GAP across time dimension
             return torch.mean(combined, dim=2)
 
-    def get_context_vector(self, support_emg, support_imu=None, demographics=None):
-        """Used to calculate the static user 'u' vector from a calibration/support set."""
-        self.eval() 
-        with torch.no_grad():
-            d_emb = self.demo_encoder(demographics) if (self.demo_encoder and demographics is not None) else None
-            features = self._process_signals(support_emg, support_imu, d_emb) 
-            u = self.context_projector(features) 
-        self.train()
-        return u
+    def get_context_vector(self, support_emg, support_imu=None):
+        """Derive 'u' from the CNN features of the support set."""
+        # Notice we extract CNN features WITHOUT FiLM conditioning here
+        e, i = self._extract_cnn_features(support_emg, support_imu)
+        
+        # Pool the temporal dimension (T) so the context projector just gets a flat vector per sample
+        e_pooled = torch.mean(e, dim=2) 
+        if i is not None:
+            i_pooled = torch.mean(i, dim=2)
+            features = torch.cat([e_pooled, i_pooled], dim=1)
+        else:
+            features = e_pooled
+            
+        return self.context_projector(features)
 
     def forward(self, x_emg, x_imu=None, demographics=None, support_emg=None, support_imu=None, context_embedding=None):
-        """
-        Main forward pass. Handles both 'support' (context-generation) and 'query' samples.
-        """
-        # 1. Encode demographics once
-        d_emb = self.demo_encoder(demographics) if (self.demo_encoder and demographics is not None) else None
         
-        # 2. Handle context 'u'
-        if context_embedding is not None:
-            u = context_embedding
-        elif support_emg is not None:
-            # Generate u on-the-fly from the support set
-            u = self.get_context_vector(support_emg, support_imu, demographics)
-        else:
-            # Cold start fallback
-            u = torch.zeros(x_emg.size(0), self.config['context_emb_dim'], device=x_emg.device)
+        # Determine our Conditioning Vector for FiLM based on the config toggle
+        condition_emb = None
+        film_mode = self.config.get('FILM_on_context_or_demo', 'demo')
+        
+        if film_mode == 'demo':
+            condition_emb = self.demo_encoder(demographics) if (self.demo_encoder and demographics is not None) else None
+            # Even if we use demo for FiLM, we still might need the context vector 'u' for the MoE head.
+            if self.config.get('use_MOE', False):
+                u = self.get_context_vector(support_emg, support_imu) if context_embedding is None else context_embedding
+            else:
+                u = None # Ignore context completely if not using MOE and not using context for FiLM
+                
+        elif film_mode == 'context':
+            # We use the support set to generate the context vector, which will act as our condition_emb
+            if context_embedding is not None:
+                condition_emb = context_embedding
+            elif support_emg is not None:
+                condition_emb = self.get_context_vector(support_emg, support_imu)
+            else:
+                condition_emb = torch.zeros(x_emg.size(0), self.config['context_emb_dim'], device=x_emg.device)
+            u = condition_emb # The context vector is also 'u' for the MoE head (if used)
             
-        # Ensure u matches the query batch size for the MoE gate
-        if u.size(0) == 1 and x_emg.size(0) > 1:
-            u = u.expand(x_emg.size(0), -1)
+        # 1. Get raw CNN features for the Query Set
+        e_query, i_query = self._extract_cnn_features(x_emg, x_imu)
+        
+        # 2. Condition the features and pass through LSTM
+        x_features = self._apply_film_and_temporal(e_query, i_query, condition_emb)
 
-        # 3. Process Query Signals
-        x_features = self._process_signals(x_emg, x_imu, d_emb)
-
-        # 4. Mixture of Experts classification
-        return self.moe(x_features, u, d=d_emb)
+        # 3. Final Head (MOE or Single MLP)
+        if self.config.get('use_MOE', False):
+            return self.moe(x_features, u, d=(self.demo_encoder(demographics) if self.demo_encoder else None))
+        else:
+            return self.moe(x_features)
     
 
 class ContextEncoder(nn.Module):

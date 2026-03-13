@@ -236,13 +236,16 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
                 ## Mixture of Experts (MoE) Routing: If your model uses an MoE architecture, the router decides which "experts" (sub-networks) process the data.
                 ## If a specific expert is not used at all during a particular episode's forward pass, PyTorch's autograd engine will not route any gradients to it. Its .grad remains None.
                 ### For gradient alignment, since the experts are zero'd out, they basically don't contribute to alignment (just cotnribute 0s)
+                ### Actually I reworked this to ignore all components with gradients=None (when NOT using MOE!)
+                ### Or maybe the Nones are actually handled within my function now 
                 model.zero_grad(set_to_none=True)
                 (meta_loss_task / meta_batchsize).backward()
                 
                 with torch.no_grad():
-                    # Safely clone grads. If None, create a zero tensor of the exact same shape.
-                    this_grad = [p.grad.clone().detach() if p.grad is not None else torch.zeros_like(p) 
-                                 for p in model.parameters() if p.requires_grad]
+                    # MODIFIED: Keep the None values! Do not overwrite with zeros here.
+                    # This allows the alignment function to distinguish between "unused" and "zero gradient".
+                    this_grad = [p.grad.clone().detach() if p.grad is not None else None 
+                                for p in model.parameters() if p.requires_grad]
                     task_grads_for_batch.append(this_grad)
             else:
                 # --- ORIGINAL VERBATIM BRANCH ---
@@ -253,27 +256,27 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
 
             # 4. Outer Optimizer Step
             if accum_count == meta_batchsize:
-                if track_alignment:  # We need to reinject the gradients that we extracted earlier
-                    # TODO: How does this handle experts that were not used (ie when the grads are None)?
-                    ## Are we just overwriting them with 0? ... Seems like it will wipe out info from earlier tasks...
-                    ## I guess it depends on how the accumulation is handled...
+                if track_alignment:
                     with torch.no_grad():
-                        # compute_meta_batch_alignment likely expects flattened 1D tensors per task.
-                        # We flatten them here just for the metric calculation.
-                        flattened_task_grads = [torch.cat([g.flatten() for g in task_grad]) for task_grad in task_grads_for_batch]
-                        alignment = compute_meta_batch_alignment(flattened_task_grads)
+                        # CALL THE NEW FUNCTION: 
+                        # Send the list of task_grads (which contains Nones) directly.
+                        alignment = calculate_gradient_alignment(task_grads_for_batch)
                         
                         if n_episodes % 100 == 0 or n_episodes == meta_batchsize:
                             print(f"Meta batchsize hit on ep {n_episodes}! Alignment (Cosine Sim): {alignment:.4f}")
 
-                        # Safely sum isolated grads and re-assign to model parameters
-                        # We iterate over the parameters and the extracted lists in parallel
+                        # Re-inject gradients into model.parameters() for the optimizer
                         for param_idx, p in enumerate(filter(lambda x: x.requires_grad, model.parameters())):
-                            # Stack the gradients for THIS specific parameter across all tasks, then sum
-                            summed_p_grad = torch.stack([task_grad[param_idx] for task_grad in task_grads_for_batch]).sum(dim=0)
-                            p.grad = summed_p_grad
+                            # Filter out the Nones just for the summation step
+                            grads_to_sum = [task_grad[param_idx] for task_grad in task_grads_for_batch 
+                                            if task_grad[param_idx] is not None]
                             
-                    task_grads_for_batch = [] # Reset for next batch
+                            if grads_to_sum:
+                                p.grad = torch.stack(grads_to_sum).sum(dim=0)
+                            else:
+                                p.grad = None # Or torch.zeros_like(p) if your optimizer requires it
+                        
+                    task_grads_for_batch = []
 
                 # Final Step (Shared logic)
                 #if n_episodes == meta_batchsize:

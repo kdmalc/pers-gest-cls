@@ -115,7 +115,8 @@ def train_one_epoch(model, loader, loss_fn, optimizer, config, epoch):
         labels   = batch['labels'].to(device)            # (B,)
         demo     = batch['demo'].to(device) if batch['demo'] is not None else None
         imu      = batch['imu'].to(device) if batch['imu'] is not None else None
-        user_ids = batch['user_ids'].to(device)
+        # user_ids should just be strings used for tracking and thus not need to go to the GPU? Let's see if that messes things up...
+        user_ids = batch['user_ids']#.to(device)
 
         # Forward
         z = model(emg, imu=imu, demo=demo)              # (B, D) L2-normed

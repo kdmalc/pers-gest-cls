@@ -187,7 +187,7 @@ CONTRASTIVE_CONFIG = {
     "seed":                 42,
     "verbose":              True,
     "grad_clip":            5.0,          # Max gradient norm; None to disable
-    "log_interval":         1,           # Steps between training log prints
+    "log_interval":         100,           # Steps between training log prints
 }
 
 

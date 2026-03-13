@@ -171,7 +171,9 @@ def flat_collate(batch):
     emg    = torch.stack([s['emg'] for s in batch], dim=0)
     labels = torch.tensor([s['label'] for s in batch], dtype=torch.long)
     demo   = torch.stack([s['demo'] for s in batch], dim=0)
-    user_ids = torch.tensor([s['user_id'] for s in batch], dtype=torch.long)
+    # My user_ids are strings like "P100" so we cannot directly convert to torch.long (integers)
+    #user_ids = torch.tensor([s['user_id'] for s in batch], dtype=torch.long)
+    user_ids = [s['user_id'] for s in batch]
 
     imu = None
     if batch[0]['imu'] is not None:

@@ -1,3 +1,5 @@
+import torch
+
 def meta_evaluate(model, episodic_loader, config, adapt_and_eval_fn):
     """
     A shared eval function.
@@ -44,3 +46,46 @@ def meta_evaluate(model, episodic_loader, config, adapt_and_eval_fn):
         "loss": total_loss / max(n_eps, 1),
         "acc": total_correct / max(total_count, 1)
     }
+
+def calculate_gradient_alignment(task_gradients):
+    """
+    task_gradients: List of tuples/lists containing gradients for each task in the meta-batch.
+                    e.g., [task1_grads, task2_grads, ...]
+    """
+    alignments = []
+    num_tasks = len(task_gradients)
+    
+    if num_tasks < 2:
+        return 0.0
+
+    for i in range(num_tasks):
+        for j in range(i + 1, num_tasks):
+            grad_i_flat = []
+            grad_j_flat = []
+            
+            # Iterate through paired parameters
+            for g_i, g_j in zip(task_gradients[i], task_gradients[j]):
+                # If a module is entirely unused (e.g. inactive MoE expert or disabled demo encoder), 
+                # BOTH tasks will likely have None. We just skip it entirely.
+                if g_i is None and g_j is None:
+                    continue
+                
+                # If MOE is active, one task might use an expert and the other might not.
+                # In this case, we MUST treat the unused one as zeros to correctly penalize the alignment.
+                t_g_i = g_i.flatten() if g_i is not None else torch.zeros_like(g_j).flatten()
+                t_g_j = g_j.flatten() if g_j is not None else torch.zeros_like(g_i).flatten()
+                
+                grad_i_flat.append(t_g_i)
+                grad_j_flat.append(t_g_j)
+            
+            if len(grad_i_flat) == 0:
+                continue
+
+            v_i = torch.cat(grad_i_flat)
+            v_j = torch.cat(grad_j_flat)
+            
+            # Cosine similarity
+            cos_sim = torch.nn.functional.cosine_similarity(v_i.unsqueeze(0), v_j.unsqueeze(0)).item()
+            alignments.append(cos_sim)
+            
+    return sum(alignments) / len(alignments) if alignments else 0.0

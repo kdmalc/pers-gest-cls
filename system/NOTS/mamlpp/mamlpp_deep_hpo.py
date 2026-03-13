@@ -21,7 +21,7 @@ results_save_dir = RUN_DIR
 models_save_dir  = RUN_DIR
 
 from system.MAML_MOE.mamlpp import *
-from maml_data_pipeline import get_maml_dataloaders
+from system.MAML_MOE.maml_data_pipeline import get_maml_dataloaders
 from system.MAML_MOE.shared_maml import *
 from system.MAML_MOE.MOE_CNN_LSTM import *
 
