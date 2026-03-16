@@ -51,6 +51,7 @@ def build_model_from_trial(trial, base_config=None):
     config["use_batch_norm"] = False
     config["dropout"] = 0.1 # Fixed low dropout to prevent underfitting
     config['FILM_on_context_or_demo'] = 'context'  # Was implicitly doing demo before, so let's try context now...
+    config['use_label_shuf_meta_aug'] = False  # JUST ADDED: this does the meta augmentation of label shuffling (mutual exclusivity) 
     
     config["use_MOE"] = False
     if config["use_MOE"] == True:
