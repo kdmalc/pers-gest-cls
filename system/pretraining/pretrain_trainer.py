@@ -280,14 +280,15 @@ def pretrain(model, train_dl, val_dl, config: dict, save_path: str = None):
 
 PRETRAIN_DEFAULT_CONFIG = {
     # ── Data ──────────────────────────────────────────────────────────────
+    # NOTE: For supervised learning: train and val PIDs SHOULD MATCH! The val set is the val gesture split, NOT a user split!!
     "train_PIDs":   ["P102","P114"],        
             #["P102","P114","P119","P005","P107","P126","P132","P112",
             #"P103","P125","P127","P010","P128","P111","P118",
             #"P124","P110","P116","P108","P104","P122","P131","P106","P115"],
     "val_PIDs":     ["P102","P114"],        
             #["P011","P006","P105","P109"],
-    "train_gesture_range":  list(range(1, 11)),   # gestures 1-10
-    "valtest_gesture_range":list(range(1, 11)),
+    "train_gesture_range":  [1, 2, 3, 4, 5, 6, 7, 8],   # These are REPITIONS NOT CLASSES! So we should do a split here
+    "valtest_gesture_range":[9, 10],
     "use_imu":              False,
     "batch_size":           64,
     "num_workers":          1,
