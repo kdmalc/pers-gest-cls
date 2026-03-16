@@ -366,9 +366,9 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(FIXED_SEED)
 
     # TODO: Swap these names back if/when we change back from 5 shot!!!
-    journal_path = os.path.join(db_dir, "mamlpp_CNNLSTMMLP_deep_usercond_5s3w_2fcv_hpo.log")
+    journal_path = os.path.join(db_dir, "mamlpp_CNNLSTMMLP_deep_NoLabelShuffling_usercond_5s3w_2fcv_hpo.log")
     run_study(
-        study_name="mamlpp_CNNLSTMMLP_deep_usercond_5s3w_2fcv_hpo",
+        study_name="mamlpp_CNNLSTMMLP_deep_NoLabelShuffling_usercond_5s3w_2fcv_hpo",
         storage_path=journal_path,
         n_trials=N_TRIALS, # Each Slurm worker does one trial (N_TRIALS=1)
     )
