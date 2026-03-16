@@ -30,6 +30,24 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
 
+def ensure_channel_first(x: torch.Tensor) -> torch.Tensor:
+    """
+    Ensures the tensor is in (N, C, T) format by checking for 
+    known channel counts (EMG=16, IMU=72).
+    """
+    if x.dim() != 3:
+        return x
+    
+    # If the LAST dimension matches 16 or 72, it is currently (N, T, C)
+    # and needs to be permuted to (N, C, T).
+    if x.shape[2] in [16, 72]:
+        # Only permute if the middle dimension isn't already a channel count.
+        # This prevents double-flipping if time and channel count are the same.
+        #if x.shape[1] not in [16, 72]:
+        return x.permute(0, 2, 1).contiguous()
+            
+    return x
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Augmentation helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -61,89 +79,50 @@ def _channel_dropout(x: torch.Tensor, drop_prob: float = 0.1) -> torch.Tensor:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PretrainGestureDataset(Dataset):
-    """
-    Flat supervised dataset over (user, gesture, trial) triples.
-
-    Each item:
-      emg:   (C_emg, T)
-      imu:   (C_imu, T) or None
-      label: int in [0, n_gestures)
-
-    The gesture_id → label mapping is built once at construction and is fixed
-    (global label space = all target_gestures sorted).
-    """
-
     def __init__(
         self,
         tensor_dict: dict,
         target_pids: list,
-        target_gestures: list,
+        target_reps: list,  # Rename parameter
         use_imu: bool = False,
         augment: bool = False,
-        # Augmentation hyperparams
         noise_std: float = 0.05,
         max_shift: int = 4,
         ch_drop_prob: float = 0.10,
+        n_classes: int = 10
     ):
-        self.use_imu    = use_imu
-        self.augment    = augment
-        self.noise_std  = noise_std
-        self.max_shift  = max_shift
-        self.ch_drop    = ch_drop_prob
+        self.use_imu = use_imu
+        self.augment = augment
+        self.noise_std = noise_std
+        self.max_shift = max_shift
+        self.ch_drop = ch_drop_prob
+        self.n_classes = n_classes
 
-        # Build global label map: sorted gesture IDs → [0, n_classes)
-        sorted_gestures = sorted(target_gestures)
-        self.label_map  = {g: i for i, g in enumerate(sorted_gestures)}
-        self.n_classes  = len(sorted_gestures)
-
-        # Flatten all (pid, gesture, trial) samples
-        self.samples = []   # list of (emg_tensor, imu_tensor_or_None, label)
-
+        # 1. Dynamically find all unique gestures to build the proper label mapping
+        all_gestures = set()
         for pid in target_pids:
-            if pid not in tensor_dict:
-                print(f"[PretrainDataset] WARNING: pid {pid} not in tensor_dict, skipping.")
-                continue
-            for gest in sorted_gestures:
-                if gest not in tensor_dict[pid]:
-                    continue
-                slot      = tensor_dict[pid][gest]
-                emg_data  = slot['emg']    # (n_trials, C, T) or (n_trials, T, C)
-                imu_data  = slot.get('imu', None)
-                label     = self.label_map[gest]
-
-                # Normalise to (n_trials, C, T) — MAML pipeline stores (n_trials, T, C)
-                # We'll handle both orientations robustly.
-                emg_data = self._ensure_channel_first(emg_data)
-                if imu_data is not None:
-                    imu_data = self._ensure_channel_first(imu_data)
-
-                n_trials = emg_data.shape[0]
-                for i in range(n_trials):
-                    imu_sample = imu_data[i] if (imu_data is not None and use_imu) else None
-                    self.samples.append((emg_data[i], imu_sample, label))
-
-        print(f"[PretrainDataset] {len(self.samples)} total samples | "
-              f"{len(target_pids)} users | {self.n_classes} gestures | "
-              f"augment={augment}")
-
-    @staticmethod
-    def _ensure_channel_first(x: torch.Tensor) -> torch.Tensor:
-        """
-        Ensures the tensor is in (N, C, T) format by checking for 
-        known channel counts (EMG=16, IMU=72).
-        """
-        if x.dim() != 3:
-            return x
+            if pid in tensor_dict:
+                all_gestures.update(tensor_dict[pid].keys())
+        sorted_gestures = sorted(list(all_gestures))
         
-        # If the LAST dimension matches 16 or 72, it is currently (N, T, C)
-        # and needs to be permuted to (N, C, T).
-        if x.shape[2] in [16, 72]:
-            # Only permute if the middle dimension isn't already a channel count.
-            # This prevents double-flipping if time and channel count are the same.
-            #if x.shape[1] not in [16, 72]:
-            return x.permute(0, 2, 1).contiguous()
+        # Now label_map properly maps the actual classes 0 through 9
+        self.label_map = {g: i for i, g in enumerate(sorted_gestures)}
+        
+        self.samples = []
+        for pid in target_pids:
+            if pid not in tensor_dict: continue
+            for gest, slot in tensor_dict[pid].items():
+                emg_data = ensure_channel_first(slot['emg'])
+                imu_data = ensure_channel_first(slot['imu']) if slot.get('imu') is not None else None
+                label = self.label_map[gest]
                 
-        return x
+                # 2. Slice based on repetitions (Assumes config uses 1-indexed rep counts)
+                for rep in target_reps:
+                    idx = rep - 1  # Convert to 0-indexed array position
+                    if idx < 0 or idx >= emg_data.shape[0]:
+                        continue  # Skip if this trial doesn't exist for the user
+                    
+                    self.samples.append((emg_data[idx], imu_data[idx] if imu_data is not None else None, label))
 
     def __len__(self):
         return len(self.samples)
@@ -206,7 +185,7 @@ def get_pretrain_dataloaders(config: dict, tensor_dict_path: str):
     train_ds = PretrainGestureDataset(
         tensor_dict,
         target_pids     = config["train_PIDs"],
-        target_gestures = config["train_gesture_range"],
+        target_reps     = config["train_reps"],
         use_imu         = config.get("use_imu", False),
         augment         = config.get("augment", True),
         noise_std       = config.get("noise_std", 0.05),
@@ -217,7 +196,7 @@ def get_pretrain_dataloaders(config: dict, tensor_dict_path: str):
     val_ds = PretrainGestureDataset(
         tensor_dict,
         target_pids     = config["val_PIDs"],
-        target_gestures = config["valtest_gesture_range"],
+        target_reps     = config["val_reps"],
         use_imu         = config.get("use_imu", False),
         augment         = False,   # NEVER augment val
     )

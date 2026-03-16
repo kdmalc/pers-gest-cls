@@ -20,10 +20,11 @@ import argparse
 import torch
 import pickle
 
-from pretrain_models import build_model, DEFAULT_CONFIGS
+from pretrain_models import build_model
 from pretrain_data_pipeline import get_pretrain_dataloaders
-from pretrain_trainer import pretrain, PRETRAIN_DEFAULT_CONFIG
+from pretrain_trainer import pretrain
 from pretrain_eval import run_full_eval
+from pretrain_configs import PRETRAIN_CONFIG, MODEL_CONFIGS
 
 
 def train_one_model(model_type: str, tensor_dict_path: str, config_overrides: dict = None, save_dir: str = "checkpoints"):
@@ -31,8 +32,8 @@ def train_one_model(model_type: str, tensor_dict_path: str, config_overrides: di
 
     # Build config
     config = {
-        **PRETRAIN_DEFAULT_CONFIG,
-        **DEFAULT_CONFIGS[model_type],
+        **PRETRAIN_CONFIG,
+        **MODEL_CONFIGS[model_type],
         "model_type": model_type,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     }

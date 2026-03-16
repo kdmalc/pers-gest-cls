@@ -31,13 +31,14 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from collections import defaultdict
 
+from pretrain_data_pipeline import ensure_channel_first
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Feature extraction
 # ─────────────────────────────────────────────────────────────────────────────
 
 @torch.no_grad()
-def extract_features(model, tensor_dict, pids, gestures, device, use_imu=False):
+def extract_features(model, tensor_dict, pids, target_reps, device, use_imu=False):
     """
     Extract backbone features for all (pid, gesture, trial) combinations.
 
@@ -51,7 +52,11 @@ def extract_features(model, tensor_dict, pids, gestures, device, use_imu=False):
     model.eval()
     model.to(device)
 
-    sorted_gestures = sorted(gestures)
+    all_gestures = set()
+    for pid in pids:
+        if pid in tensor_dict:
+            all_gestures.update(tensor_dict[pid].keys())
+    sorted_gestures = sorted(list(all_gestures))
     label_map = {g: i for i, g in enumerate(sorted_gestures)}
 
     all_final, all_layers, all_labels, all_users = [], [], [], []
@@ -65,28 +70,20 @@ def extract_features(model, tensor_dict, pids, gestures, device, use_imu=False):
             if gest not in tensor_dict[pid]:
                 continue
             slot     = tensor_dict[pid][gest]
-            emg_data = slot['emg']   # (n_trials, T, C) or (n_trials, C, T)
-            imu_data = slot.get('imu', None)
+            emg_all = slot['emg']   # (n_trials, T, C) or (n_trials, C, T)
+            imu_all = slot.get('imu', None)
 
-            # If the LAST dimension matches 16 or 72, it is currently (N, T, C)
-            # and needs to be permuted to (N, C, T).
-            if emg_data.shape[2] in [16, 72]:
-                # Only permute if the middle dimension isn't already a channel count.
-                # This prevents double-flipping if time and channel count are the same.
-                #if x.shape[1] not in [16, 72]:
-                emg_data = emg_data.permute(0, 2, 1).contiguous()
-            if imu_data.shape[2] in [16, 72]:
-                # Only permute if the middle dimension isn't already a channel count.
-                # This prevents double-flipping if time and channel count are the same.
-                #if x.shape[1] not in [16, 72]:
-                imu_data = imu_data.permute(0, 2, 1).contiguous()
+            emg_data = ensure_channel_first(emg_all)
 
-            emg_data = emg_data.float().to(device)
+            # Slice specific validation repetitions! 
+            valid_idxs = [rep - 1 for rep in target_reps if 0 <= rep - 1 < emg_data.shape[0]]
+            if not valid_idxs: continue
+
+            emg_data = emg_data[valid_idxs].float().to(device)  # Will shape to (n_valid_trials, ...)
             imu_input = None
             if use_imu and imu_data is not None:
-                if imu_data.dim() == 3 and imu_data.shape[1] < imu_data.shape[2]:
-                    imu_data = imu_data.permute(0, 2, 1).contiguous()
-                imu_input = imu_data.float().to(device)
+                imu_data = ensure_channel_first(imu_all)
+                imu_input = imu_data[valid_idxs].float().to(device)
 
             feat_final, layer_feats = model.backbone(emg_data, imu_input)
 

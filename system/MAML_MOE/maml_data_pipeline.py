@@ -14,16 +14,14 @@ def worker_init_fn(worker_id):
 # 1. COLLATE FUNCTION (Gradient Accumulation)
 # ==========================================
 def maml_mm_collate(batch):
-    # Since batch_size=1, batch is a list of exactly 1 episode.
     episode = batch[0]
     
     def stack_samples(sample_list):
+        # Since batch_size=1, batch is a list of exactly 1 episode.
         if not sample_list: return None
         
-        # Pull EMG
         emg = torch.stack([s["emg"] for s in sample_list], dim=0).permute(0, 2, 1)
         
-        # Pull IMU (Conditional based on existence/config)
         imu = None
         if "imu" in sample_list[0] and sample_list[0]["imu"] is not None:
             imu = torch.stack([s["imu"] for s in sample_list], dim=0).permute(0, 2, 1)
@@ -49,16 +47,13 @@ def maml_mm_collate(batch):
 # 2. THE META-LEARNING DATASET
 # ==========================================
 class MetaGestureDataset(Dataset):
-    """
-    A unified Map-style Dataset for both Training (random episodes on the fly) 
-    and Val/Test (deterministic pre-generated episodes).
-    """
-    def __init__(self, tensor_dict, target_pids, target_gestures, n_way=10, k_shot=1, q_query=9, 
+    def __init__(self, tensor_dict, target_pids, target_reps, n_way=10, k_shot=1, q_query=9, 
                  episodes_per_epoch=1000, is_train=True, seed=42, num_eval_episodes=10, 
-                 debug_one_episode=False, debug_five_episodes=False, debug_one_user_only=False):
+                 debug_one_episode=False, debug_five_episodes=False, debug_one_user_only=False,
+                 use_label_shuf_meta_aug=True):
         self.data = {pid: tensor_dict[pid] for pid in target_pids}
         self.pids = list(self.data.keys())
-        self.target_gestures = target_gestures
+        self.target_reps = target_reps
         
         self.n_way = n_way
         self.k_shot = k_shot
@@ -69,6 +64,7 @@ class MetaGestureDataset(Dataset):
         self.debug_one_episode = debug_one_episode
         self.debug_five_episodes = debug_five_episodes
         self.debug_one_user_only = debug_one_user_only
+        self.use_label_shuf_meta_aug = use_label_shuf_meta_aug
         
         self.debug_episodes = []
         if self.debug_one_episode or self.debug_five_episodes:
@@ -78,10 +74,7 @@ class MetaGestureDataset(Dataset):
             
             # Use a fixed seed for RNG so Train/Val create the EXACT same episodes
             debug_rng = random.Random(seed) 
-            if self.debug_one_episode:
-                num_to_create = 1
-            elif self.debug_five_episodes: 
-                num_to_create = 5
+            num_to_create = 1 if self.debug_one_episode else 5
 
             if self.debug_one_user_only:
                 # Pick one user and repeat them for all episodes
@@ -93,17 +86,18 @@ class MetaGestureDataset(Dataset):
                 target_user_ids = debug_rng.sample(self.pids, min(num_to_create, len(self.pids)))
 
             for i, user_id in enumerate(target_user_ids):
-                available = [g for g in self.target_gestures if g in self.data[user_id]]
-                
+                # TODO: Is this correct???? Now that we switched from assumed gesture_IDs to gesture_num (repetition number...)
+                available = [g for g in self.target_reps if g in self.data[user_id]]
                 # Fresh permutation of classes and labels for EVERY episode
                 classes = debug_rng.sample(available, min(self.n_way, len(available)))
-                label_map = {c: idx for idx, c in enumerate(classes)}
+                if not self.use_label_shuf_meta_aug:
+                    classes = sorted(classes)
                 
+                label_map = {c: idx for idx, c in enumerate(classes)}
                 # Build the fixed episode
                 ep = self._build_episode(user_id, classes, label_map, debug_rng, is_train=True)
                 self.debug_episodes.append(ep)
                 
-                # FINGERPRINTING
                 fingerprint = ep['support'][0]['emg'].abs().sum().item()
                 print(f"  > Episode {i} Fixed (User {user_id}) | Map: {label_map} | Fingerprint: {fingerprint:.4f}", flush=True)
 
@@ -116,32 +110,28 @@ class MetaGestureDataset(Dataset):
         """Pre-generates validation episodes so they remain exactly the same every epoch."""
         # val_rng makes it so all the validation/eval actually DO use the same seed (so it is repeatable, should always be the same)
         val_rng = random.Random(seed) # Isolated deterministic RNG
-        
         for user_id in self.pids:
-            available_gestures = [g for g in self.target_gestures if g in self.data[user_id]]
-            
+            available_gestures = [g for g in self.target_reps if g in self.data[user_id]]
             for _ in range(self.num_eval_episodes):
-                # 1. Randomly sample and order classes to ensure randomized label permutation
+                # Randomly sample and order classes to ensure randomized label permutation
                 classes = val_rng.sample(available_gestures, min(self.n_way, len(available_gestures)))
-                label_map = {c: i for i, c in enumerate(classes)}
+                if not self.use_label_shuf_meta_aug:
+                    classes = sorted(classes)
                 
+                label_map = {c: i for i, c in enumerate(classes)}
                 episode = self._build_episode(user_id, classes, label_map, val_rng, is_train=False)
                 self.val_episodes_cache.append(episode)
 
     def _build_episode(self, user_id, classes, label_map, rng_instance, is_train):
-        """Helper to construct the support and query sets for a given set of classes."""
         support_samples, query_samples = [], []
-        
         for global_c in classes:
             local_label = label_map[global_c]
-            
             user_emg_data = self.data[user_id][global_c]['emg'] 
             user_imu_data = self.data[user_id][global_c]['imu']
             user_demo = self.data[user_id][global_c]['demo']
 
             total_trials = user_emg_data.shape[0]
             indices = list(range(total_trials))
-            
             # Shuffle indices to randomize which trials become support vs query (since we do simple fixed slicing below)
             rng_instance.shuffle(indices)
             
@@ -153,7 +143,6 @@ class MetaGestureDataset(Dataset):
                 # If evaluating or q_query is None, use all remaining trials for query
                 qry_idx = indices[self.k_shot:]
 
-            # Materialize Dictionaries
             for i in sup_idx:
                 support_samples.append({
                     'emg': user_emg_data[i],
@@ -162,7 +151,6 @@ class MetaGestureDataset(Dataset):
                     'label': local_label,
                     'global_class': global_c
                 })
-                
             for i in qry_idx:
                 query_samples.append({
                     'emg': user_emg_data[i],
@@ -186,38 +174,30 @@ class MetaGestureDataset(Dataset):
     def __len__(self):
         if self.debug_one_episode or self.debug_five_episodes:
             return self.episodes_per_epoch if self.is_train else len(self.debug_episodes)
-        
-        if self.is_train:
-            return self.episodes_per_epoch 
-        else:
-            return len(self.val_episodes_cache)
+        return self.episodes_per_epoch if self.is_train else len(self.val_episodes_cache)
 
     def __getitem__(self, idx):
-        # Handle Debug Modes (One or Five)
         if self.debug_one_episode or self.debug_five_episodes:
             # If training, we sample randomly from our pool of 1 or 5
             # If evaluating, we step through them sequentially
-            if self.is_train:
-                return random.choice(self.debug_episodes)
-            else:
-                return self.debug_episodes[idx % len(self.debug_episodes)]
+            return random.choice(self.debug_episodes) if self.is_train else self.debug_episodes[idx % len(self.debug_episodes)]
         
         # Normal Mode
         if self.is_train:
             # Generate on the fly using standard random (safe for DataLoader workers)
             user_id = random.choice(self.pids)
-            available_gestures = [g for g in self.target_gestures if g in self.data[user_id]]
-            
+            available_gestures = [g for g in self.target_reps if g in self.data[user_id]]
             # Picks k unique and permutes (returns them in random order)
-            # TODO: This is only determinstic if rng_instance is seeded with the same number every time we call the function...
-            classes = random.sample(available_gestures, min(self.n_way, len(available_gestures)))
-            label_map = {c: i for i, c in enumerate(classes)}
+            # NOTE: This is only determinstic if rng_instance is seeded with the same number every time we call the function...
+            classes = random.sample(available_gestures, min(self.n_way, len(available_gestures))) 
+            if not self.use_label_shuf_meta_aug:
+                classes = sorted(classes)
             
+            label_map = {c: i for i, c in enumerate(classes)}
             return self._build_episode(user_id, classes, label_map, random, is_train=True)
         else:
             # Return pre-computed deterministic episode
             return self.val_episodes_cache[idx]
-
 
 # ==========================================
 # 3. DATALOADER BUILDER
@@ -227,43 +207,39 @@ def get_maml_dataloaders(config, tensor_dict_path):
         tensor_dict = pickle.load(f)
         
     num_workers = int(config.get('num_workers', 4))
-    debug_one_episode = config.get('debug_one_episode', False)
-    debug_five_episodes = config.get('debug_five_episodes', False)
-    debug_one_user_only = config.get('debug_one_user_only', False)
+    use_label_shuf = config.get('use_label_shuf_meta_aug', True) 
     
-    # Train Loader (Randomly sampling all users on the fly)
     train_ds = MetaGestureDataset(
         tensor_dict, 
         target_pids=config["train_PIDs"], 
-        target_gestures=config["train_gesture_range"],
+        target_reps=config["maml_reps"],
         n_way=config['n_way'], 
         k_shot=config['k_shot'], 
         q_query=config['q_query'],
         episodes_per_epoch=config['episodes_per_epoch_train'],
         is_train=True, 
-        debug_one_episode=debug_one_episode,
-        debug_five_episodes=debug_five_episodes, 
-        debug_one_user_only=debug_one_user_only
+        debug_one_episode=config.get('debug_one_episode', False),
+        debug_five_episodes=config.get('debug_five_episodes', False), 
+        debug_one_user_only=config.get('debug_one_user_only', False),
+        use_label_shuf_meta_aug=use_label_shuf 
     )
     
-    # batch_size=1 to yield 1 episode dictionary at a time for Gradient Accumulation
     train_dl = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=num_workers, collate_fn=maml_mm_collate, worker_init_fn=worker_init_fn)
 
-    # Val Loader (Deterministic, predefined episodes per user)
     val_ds = MetaGestureDataset(
         tensor_dict,
-        # IMPORTANT: In debug_one_episode mode, use the same pool as training so the seed picks the same task
-        target_pids=config["val_PIDs"] if not (debug_one_episode or debug_five_episodes) else config["train_PIDs"], #
-        target_gestures=config["valtest_gesture_range"] if not debug_one_episode else config["train_gesture_range"],  # These are the same now, 1-10, FWIW
+        target_pids=config["val_PIDs"] if not (config.get('debug_one_episode') or config.get('debug_five_episodes')) else config["train_PIDs"],
+        target_reps=config["maml_reps"],
         n_way=config['n_way'], 
         k_shot=config["k_shot"], 
-        q_query=config.get("q_query", None), # Use None to grab all remaining for eval if desired
-        num_eval_episodes=config.get('num_eval_episodes', 10) if not debug_one_episode else 1, # Only 1 ep for val in debug
+        q_query=config.get("q_query", None),
+        num_eval_episodes=config.get('num_eval_episodes', 10),
         is_train=False,
         seed=config.get('seed', 42), 
-        debug_one_episode=debug_one_episode,
-        debug_five_episodes=debug_five_episodes, 
-        debug_one_user_only=debug_one_user_only
+        debug_one_episode=config.get('debug_one_episode', False),
+        debug_five_episodes=config.get('debug_five_episodes', False), 
+        debug_one_user_only=config.get('debug_one_user_only', False),
+        use_label_shuf_meta_aug=use_label_shuf 
     )
     
     val_dl = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=num_workers, collate_fn=maml_mm_collate)
