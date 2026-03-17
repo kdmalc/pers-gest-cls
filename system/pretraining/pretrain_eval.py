@@ -81,7 +81,7 @@ def extract_features(model, tensor_dict, pids, target_reps, device, use_imu=Fals
 
             emg_data = emg_data[valid_idxs].float().to(device)  # Will shape to (n_valid_trials, ...)
             imu_input = None
-            if use_imu and imu_data is not None:
+            if use_imu and imu_all is not None:
                 imu_data = ensure_channel_first(imu_all)
                 imu_input = imu_data[valid_idxs].float().to(device)
 
