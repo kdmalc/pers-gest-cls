@@ -18,15 +18,15 @@ PRETRAIN_CONFIG = {
 
     # ── Repetition Split (Assuming 1-indexed) ──
     "train_reps": [1, 2, 3, 4, 5, 6, 7, 8],
-    "valtest_reps": [9, 10],
+    "val_reps": [9, 10],
 
     # ── Modality & Dataloader ──
-    "use_imu": False,
+    "use_imu": True,
     "batch_size": 64,
     "num_workers": 4,
 
     # ── Augmentation ──
-    "augment": True,
+    "augment": False,
     "noise_std": 0.05,
     "max_shift": 4,
     "ch_drop_prob": 0.05,
@@ -35,15 +35,16 @@ PRETRAIN_CONFIG = {
     "num_epochs": 50,
     "learning_rate": 1e-3,
     "weight_decay": 1e-4,
-    "dropout": 0.2,
-    "label_smooth": 0.1,
+    "dropout": 0.1,
+    "label_smooth": 0.0,
     "warmup_epochs": 5,
     "use_scheduler": True,
     "use_early_stopping": True,
     "es_patience": 12,
     "es_min_delta": 1e-4,
-    "grad_clip": 1.0,
-    "use_amp": torch.cuda.is_available(),
+    "grad_clip": 5.0,
+    # TODO: Idk if this should be True or not... currently it is...
+    "use_amp": False,  #torch.cuda.is_available(),
 }
 
 MODEL_CONFIGS = {
@@ -181,8 +182,8 @@ OLD_PRETRAIN_DEFAULT_CONFIG = {
             #"P124","P110","P116","P108","P104","P122","P131","P106","P115"],
     "val_PIDs":     ["P102","P114"],        
             #["P011","P006","P105","P109"],
-    "train_gesture_range":  [1, 2, 3, 4, 5, 6, 7, 8],   # These are REPITIONS NOT CLASSES! So we should do a split here
-    "valtest_gesture_range":[9, 10],
+    "train_reps":  [1, 2, 3, 4, 5, 6, 7, 8],   # These are REPITIONS NOT CLASSES! So we should do a split here
+    "val_reps":[9, 10],
     "use_imu":              False,
     "batch_size":           64,
     "num_workers":          1,

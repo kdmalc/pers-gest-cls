@@ -79,7 +79,7 @@ if __name__ == "__main__":
     # REMOTE NOTS: /projects/my13/kai/meta-pers-gest/pers-gest-cls/dataset/meta-learning-sup-que-ds/maml_tensor_dict.pkl
     # NOTE: required=True ignores default lol 
     parser.add_argument("--tensor_dict", type=str, required=False, default='C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\maml_tensor_dict.pkl')
-    parser.add_argument("--model",       type=str, default="MetaCNNLSTM",
+    parser.add_argument("--model",       type=str, default="DeepCNNLSTM",
                         choices=["MetaCNNLSTM", "DeepCNNLSTM", "TST"])
     parser.add_argument("--all",         action="store_true",
                         help="Train all three models sequentially")

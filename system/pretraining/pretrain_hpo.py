@@ -144,8 +144,8 @@ def objective_tst(trial: optuna.Trial, tensor_dict_path: str, user_split: dict, 
     config = {
         **DEFAULT_CONFIGS["TST"],
         **user_split,
-        "train_gesture_range":   list(range(1, 11)),
-        "valtest_gesture_range": list(range(1, 11)),
+        "train_reps": [1, 2, 3, 4, 5, 6, 7, 8],
+        "val_reps": [9, 10],
         "device": device,
         # ── Architecture ──────────────────────────────────────────────────
         "d_model":   d_model_choice,
@@ -197,6 +197,7 @@ def run_hpo(
     storage: str = None,
     study_name: str = None,
 ):
+    # TODO: Why is it using sqlite and not Optuna journals...
     if user_split is None:
         user_split = DEFAULT_USER_SPLIT
     if device is None:

@@ -426,14 +426,14 @@ def run_full_eval(
       3. PCA/tSNE visualization of all val users
 
     config keys:
-      train_PIDs, val_PIDs, train_gesture_range, valtest_gesture_range,
+      train_PIDs, val_PIDs, train_reps, val_reps,
       use_imu, n_way, model_type, device
     """
     import os
     os.makedirs(save_dir, exist_ok=True)
 
     device   = config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
-    gestures = config.get('train_gesture_range', list(range(1, 11)))
+    gestures = config.get('train_reps')
     use_imu  = config.get('use_imu', False)
     n_way    = config.get('n_way', 10)
     mname    = config.get('model_type', 'Model')
@@ -459,12 +459,13 @@ def run_full_eval(
         label            = f"in-distribution (user {probe_in_pid[0]})",
     )
 
+    # TODO: I think the OOD isn't really OOD anymore, it is testing the intra-subject split gestures, not new users...
     # ── 2. Out-of-distribution linear probe ──────────────────────────────────
     results['probe_out_dist'] = linear_probe(
         model, tensor_dict,
         probe_pids       = val_pids,
         all_pids_train   = train_pids,
-        gestures         = config.get('valtest_gesture_range', gestures),
+        gestures         = config.get('val_reps'),
         device           = device,
         use_imu          = use_imu,
         n_way            = n_way,

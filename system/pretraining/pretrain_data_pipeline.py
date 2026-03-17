@@ -173,7 +173,7 @@ def get_pretrain_dataloaders(config: dict, tensor_dict_path: str):
 
     config keys used:
       train_PIDs, val_PIDs
-      train_gesture_range, valtest_gesture_range
+      train_reps, val_reps
       use_imu, batch_size, num_workers
       augment (bool, default True for train)
       noise_std, max_shift, ch_drop_prob
