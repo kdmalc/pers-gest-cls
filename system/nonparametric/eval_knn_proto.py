@@ -210,10 +210,27 @@ def pairwise_cosine_dist(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     b_n = F.normalize(b, p=2, dim=1)
     return 1.0 - (a_n @ b_n.t())
 
+def pairwise_l1(a, b):
+    # a: (N, D), b: (M, D) -> (N, M)
+    return (a.unsqueeze(1) - b.unsqueeze(0)).abs().sum(dim=-1)
+
+def pairwise_l2(a, b):
+    # a: (N, D), b: (M, D) -> (N, M)
+    #return torch.linalg.norm(a - b)  # --> This is 1D vector version
+    return torch.linalg.norm(a - b, dim=1)  # --> This is 2D matrix version --> We return a distance for EACH corresponding pair of rows in a and b
 
 def pairwise_dist(a: torch.Tensor, b: torch.Tensor, metric: str = "euclidean") -> torch.Tensor:
     """Dispatcher: returns (N, M) pairwise distance matrix."""
-    return pairwise_cosine_dist(a, b) if metric == "cosine" else pairwise_euclidean_sq(a, b)
+    if metric.upper() == "COSINE":
+        return pairwise_cosine_dist(a, b) 
+    elif metric.upper() == "EUC" or metric == "EUCLIDEAN":
+        return  pairwise_euclidean_sq(a, b)
+    elif metric.upper() == "L1":
+        return pairwise_l1(a, b) 
+    elif metric.upper() == "L2":
+        return pairwise_l2(a, b) 
+    else:
+        raise ValueError(f"metric {metric} not recognized!")
 
 
 # =============================================================================
@@ -415,52 +432,76 @@ def _apply_spatial_pca(
 
 
 def pca_encode(
-    support_emg:  torch.Tensor,           # (N_support, C_emg, T)
-    query_emg:    torch.Tensor,           # (N_query,   C_emg, T)
-    support_imu:  Optional[torch.Tensor], # (N_support, C_imu, T) | None
-    query_imu:    Optional[torch.Tensor], # (N_query,   C_imu, T) | None
-    emg_pca_dims: int = 8,
-    imu_pca_dims: int = 16,
-    shared_pca:   bool = False,
+    support_emg:        torch.Tensor,
+    query_emg:          torch.Tensor,
+    support_imu:        Optional[torch.Tensor],
+    query_imu:          Optional[torch.Tensor],
+    emg_pca_dims:       int  = 8,
+    imu_pca_dims:       int  = 16,
+    shared_pca:         bool = False,
+    per_class_pca:      bool = False,           # NEW
+    support_labels:     Optional[torch.Tensor] = None,   # required if per_class_pca
+    n_classes:          int  = 10,              # required if per_class_pca
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Channel-wise (spatial) PCA with options for separate or shared modality projection.
+    Channel-wise spatial PCA encode.
+
+    per_class_pca=False  (default):
+        Returns (sup_proj, qry_proj) — projected feature tensors.
+        Feed these to KNN / ProtoNet as before.
+
+    per_class_pca=True  ($B-style):
+        Returns (class_dists, class_dists_sup) where both are
+        (N, n_classes) L1-distance matrices. Classify by argmin.
+        support_labels and n_classes must be provided.
+        For multi-modal: per-class PCAs fitted separately per modality,
+        distances summed across modalities before argmin.
     """
-    # If no IMU, just do EMG and return early
+    if per_class_pca:
+        assert support_labels is not None, "support_labels required for per_class_pca"
+
+        # ── EMG per-class models ──────────────────────────────────────────────
+        emg_models = _fit_per_class_pcas(
+            support_emg, support_labels, emg_pca_dims, n_classes
+        )
+        emg_qry_dists = _per_class_pca_distances(query_emg,   emg_models)  # (N_qry, K)
+        emg_sup_dists = _per_class_pca_distances(support_emg, emg_models)  # (N_sup, K)
+
+        if support_imu is None:
+            return emg_qry_dists, emg_sup_dists
+
+        # ── IMU per-class models (separate, then sum distances) ───────────────
+        imu_models = _fit_per_class_pcas(
+            support_imu, support_labels, imu_pca_dims, n_classes
+        )
+        imu_qry_dists = _per_class_pca_distances(query_imu,   imu_models)
+        imu_sup_dists = _per_class_pca_distances(support_imu, imu_models)
+
+        # Sum distances across modalities — same as $B concatenating modality
+        # blocks and computing one L1 score, because L1 is additive over partitions
+        return (emg_qry_dists + imu_qry_dists), (emg_sup_dists + imu_sup_dists)
+
+    # ── Original shared/separate path (unchanged) ────────────────────────────
     if support_imu is None:
-        emg_components, emg_mean = _fit_spatial_pca(support_emg, emg_pca_dims)
-        sup_proj = _apply_spatial_pca(support_emg, emg_components, emg_mean)
-        qry_proj = _apply_spatial_pca(query_emg,   emg_components, emg_mean)
-        return sup_proj, qry_proj
+        components, mean = _fit_spatial_pca(support_emg, emg_pca_dims)
+        return (_apply_spatial_pca(support_emg, components, mean),
+                _apply_spatial_pca(query_emg,   components, mean))
 
     if shared_pca:
-        assert emg_pca_dims == imu_pca_dims, (
-            f"AssertionError: emg_pca_dims ({emg_pca_dims}) and imu_pca_dims "
-            f"({imu_pca_dims}) must be equal when shared_pca is True."
-        )
-        
-        # Concatenate raw channels: (N, C_emg + C_imu, T)
-        sup_concat = torch.cat([support_emg, support_imu], dim=1)
-        qry_concat = torch.cat([query_emg, query_imu], dim=1)
-
-        components, mean = _fit_spatial_pca(sup_concat, emg_pca_dims)
-        sup_proj = _apply_spatial_pca(sup_concat, components, mean)
-        qry_proj = _apply_spatial_pca(qry_concat, components, mean)
-        return sup_proj, qry_proj
+        assert emg_pca_dims == imu_pca_dims
+        sup_cat    = torch.cat([support_emg, support_imu], dim=1)
+        qry_cat    = torch.cat([query_emg,   query_imu],   dim=1)
+        components, mean = _fit_spatial_pca(sup_cat, emg_pca_dims)
+        return (_apply_spatial_pca(sup_cat, components, mean),
+                _apply_spatial_pca(qry_cat, components, mean))
 
     else:
-        # ── EMG (separate) ──
-        emg_components, emg_mean = _fit_spatial_pca(support_emg, emg_pca_dims)
-        sup_emg_proj = _apply_spatial_pca(support_emg, emg_components, emg_mean)
-        qry_emg_proj = _apply_spatial_pca(query_emg,   emg_components, emg_mean)
-
-        # ── IMU (separate) ──
-        imu_components, imu_mean = _fit_spatial_pca(support_imu, imu_pca_dims)
-        sup_imu_proj = _apply_spatial_pca(support_imu, imu_components, imu_mean)
-        qry_imu_proj = _apply_spatial_pca(query_imu,   imu_components, imu_mean)
-
-        sup_proj = torch.cat([sup_emg_proj, sup_imu_proj], dim=-1)
-        qry_proj = torch.cat([qry_emg_proj, qry_imu_proj], dim=-1)
+        emg_comp, emg_mean = _fit_spatial_pca(support_emg, emg_pca_dims)
+        imu_comp, imu_mean = _fit_spatial_pca(support_imu, imu_pca_dims)
+        sup_proj = torch.cat([_apply_spatial_pca(support_emg, emg_comp, emg_mean),
+                               _apply_spatial_pca(support_imu, imu_comp, imu_mean)], dim=-1)
+        qry_proj = torch.cat([_apply_spatial_pca(query_emg,   emg_comp, emg_mean),
+                               _apply_spatial_pca(query_imu,  imu_comp, imu_mean)], dim=-1)
         return sup_proj, qry_proj
 
 
@@ -730,34 +771,35 @@ def eval_one_user(
     feature_fn:       Optional[Callable],
     use_imu:          bool,
     aug_support:      bool,
-    emg_pca_dims:     int,     # <--- Changed
-    imu_pca_dims:     int,     # <--- Added
-    shared_pca:       bool,    # <--- Added
+    emg_pca_dims:     int,
+    imu_pca_dims:     int,
+    shared_pca:       bool,
     config:           dict,
 ) -> dict:
     """
     Run all evaluation modes for a single user under one shot condition.
 
     Pipeline per method:
-        raw   : augment (C,T) -> feature_fn or flatten -> KNN / ProtoNet
-        pca   : augment (C,T) -> channel-wise PCA -> KNN / ProtoNet
-        enc   : augment (C,T) -> neural encoder -> ProtoNet
+        raw        : augment (C,T) -> feature_fn or flatten -> KNN / ProtoNet
+        pca        : augment (C,T) -> shared support PCA -> KNN / ProtoNet
+        dollar_B   : augment (C,T) -> per-class PCA -> argmin L1  [$B-faithful]
+        enc        : augment (C,T) -> neural encoder -> ProtoNet
 
-    Note: PCA and neural encoding both receive raw (C, T) tensors, not
-    feature_fn outputs. feature_fn is used only for the raw track.
-    This is intentional — the PCA learns spatial filters directly from
-    the time series, and the neural encoder was trained on raw signals.
+    per_class_pca and the shared PCA tracks are mutually exclusive.
+    Set config["per_class_pca"] = True to run $B-style, False for shared PCA.
 
     Returns a flat dict:
         "knn_raw"       : float accuracy
-        "knn_pca"       : float accuracy
         "proto_raw"     : float accuracy
-        "proto_pca"     : float accuracy
-        "proto_encoded" : float accuracy | None
+        "knn_pca"       : float accuracy  | None  (shared PCA path only)
+        "proto_pca"     : float accuracy  | None  (shared PCA path only)
+        "dollar_B"      : float accuracy  | None  (per-class PCA path only)
+        "proto_encoded" : float accuracy  | None  (encoder path only)
         "n_support"     : int (un-augmented)
         "n_support_aug" : int (after augmentation)
         "n_query"       : int
     """
+    # ── Episode ───────────────────────────────────────────────────────────────
     support, query = build_episode(
         user_data, k_shot, n_way, rng,
         support_reps, query_reps, all_reps,
@@ -772,52 +814,75 @@ def eval_one_user(
 
     n_support_orig = sup_emg.size(0)
 
-    # ── Optional support augmentation (raw time series, before any encoding) ─
-    # Query is NEVER augmented. Originals stay at indices 0..n_support_orig-1.
+    # ── Optional support augmentation ────────────────────────────────────────
     aug_sup_emg, aug_sup_labels = sup_emg, sup_labels
     if aug_support:
         aug_sup_emg, aug_sup_labels = expand_support_with_aug(sup_emg, sup_labels, config)
-        # Note: we do not augment IMU here (extend if needed for your use case)
 
-    # ── Raw features: flatten (C,T)->D or apply feature_fn ──────────────────
-    # feature_fn receives the raw time series AFTER augmentation.
-    # PCA and neural encoding bypass feature_fn and work on (C,T) directly.
+    # ── Debug sanity checks ───────────────────────────────────────────────────
+    if config.get("debug_mode", False):
+        assert sup_labels.unique().numel() == n_way, \
+            f"Support missing classes: {sup_labels.unique()}"
+        assert qry_labels.unique().numel() == n_way, \
+            f"Query missing classes: {qry_labels.unique()}"
+
+    # ── 1 & 2. Raw features: KNN and ProtoNet ────────────────────────────────
     sup_flat = extract_features(aug_sup_emg, sup_imu, feature_fn, use_imu)
-    qry_flat = extract_features(qry_emg,    qry_imu, feature_fn, use_imu)
+    qry_flat = extract_features(qry_emg,     qry_imu, feature_fn, use_imu)
 
-    knn_k = aug_sup_emg.size(0)   # use the full support pool as neighbours
-
-    # ── 1. KNN (raw / engineered features) ───────────────────────────────────
     knn_raw_pred = knn_classify(sup_flat, aug_sup_labels, qry_flat,
-                                k=knn_k, metric=metric, n_classes=n_way)
+                                k=1, metric=metric, n_classes=n_way)
     knn_raw_acc  = (knn_raw_pred == qry_labels).float().mean().item()
 
-    # ── 2. ProtoNet (raw / engineered features) ──────────────────────────────
     proto_raw_pred = proto_classify(sup_flat, aug_sup_labels, qry_flat,
                                     metric=metric, n_classes=n_way)
     proto_raw_acc  = (proto_raw_pred == qry_labels).float().mean().item()
 
-    # ── 3 & 4. Channel-wise PCA -> KNN and ProtoNet ──────────────────────────
-    # PCA works on raw (C, T) tensors — separate PCA per modality if IMU present (and toggle is on for that).
-    # Augmented support is used so the spatial filter reflects all available data.
-    sup_pca, qry_pca = pca_encode(
-        aug_sup_emg, qry_emg,
-        sup_imu if use_imu else None,
-        qry_imu if use_imu else None,
-        emg_pca_dims,
-        imu_pca_dims,
-        shared_pca
-    )
+    if config.get("debug_mode", False) and k_shot == 1:
+        assert (knn_raw_pred == proto_raw_pred).all(), \
+            "k=1 KNN and ProtoNet disagree — feature bug upstream"
 
-    knn_pca_pred = knn_classify(sup_pca, aug_sup_labels, qry_pca,
-                                k=knn_k, metric=metric, n_classes=n_way)
-    knn_pca_acc  = (knn_pca_pred == qry_labels).float().mean().item()
+    # ── 3. PCA track (mutually exclusive branches) ────────────────────────────
+    per_class_pca = config.get("per_class_pca", False)
 
-    proto_pca_pred = proto_classify(sup_pca, aug_sup_labels, qry_pca,
-                                    metric=metric, n_classes=n_way)
-    proto_pca_acc  = (proto_pca_pred == qry_labels).float().mean().item()
+    knn_pca_acc   = None
+    proto_pca_acc = None
+    dollar_B_acc  = None
 
-    # ── 5. ProtoNet on neural encoder outputs ────────────────────────────────
+    if per_class_pca:
+        # $B-faithful: per-class PCA, query projected into each class's own
+        # subspace, L1 distance to class template, argmin classification.
+        qry_dists, _ = pca_encode(
+            aug_sup_emg, qry_emg,
+            sup_imu if use_imu else None,
+            qry_imu if use_imu else None,
+            emg_pca_dims, imu_pca_dims, shared_pca,
+            per_class_pca=True,
+            support_labels=aug_sup_labels,
+            n_classes=n_way,
+        )
+        dollar_B_pred = qry_dists.argmin(dim=1)
+        dollar_B_acc  = (dollar_B_pred == qry_labels).float().mean().item()
+
+    else:
+        # Shared support PCA: one PCA fitted on all support samples,
+        # features handed to KNN and ProtoNet as usual.
+        sup_pca, qry_pca = pca_encode(
+            aug_sup_emg, qry_emg,
+            sup_imu if use_imu else None,
+            qry_imu if use_imu else None,
+            emg_pca_dims, imu_pca_dims, shared_pca,
+        )
+
+        knn_pca_pred = knn_classify(sup_pca, aug_sup_labels, qry_pca,
+                                    k=1, metric=metric, n_classes=n_way)
+        knn_pca_acc  = (knn_pca_pred == qry_labels).float().mean().item()
+
+        proto_pca_pred = proto_classify(sup_pca, aug_sup_labels, qry_pca,
+                                        metric=metric, n_classes=n_way)
+        proto_pca_acc  = (proto_pca_pred == qry_labels).float().mean().item()
+
+    # ── 4. Neural encoder -> ProtoNet ─────────────────────────────────────────
     proto_enc_acc = None
     if encoder is not None:
         sup_enc = neural_encode_batch(encoder, aug_sup_emg, sup_imu, device)
@@ -828,9 +893,10 @@ def eval_one_user(
 
     return {
         "knn_raw":       knn_raw_acc,
-        "knn_pca":       knn_pca_acc,
         "proto_raw":     proto_raw_acc,
+        "knn_pca":       knn_pca_acc,
         "proto_pca":     proto_pca_acc,
+        "dollar_B":      dollar_B_acc,
         "proto_encoded": proto_enc_acc,
         "n_support":     n_support_orig,
         "n_support_aug": aug_sup_emg.size(0),
@@ -915,6 +981,7 @@ def run_one_shot_condition(
         "knn_raw": [], "knn_pca": [],
         "proto_raw": [], "proto_pca": [],
         "proto_encoded": [],
+        "dollar_B": [],
     }
     per_user: Dict[Any, dict] = {}
 
@@ -963,25 +1030,53 @@ def run_one_shot_condition(
                 print(f"  [ERROR] PID {pid}: {e} -- skipping.")
             continue
 
-        for key in ["knn_raw", "knn_pca", "proto_raw", "proto_pca"]:
-            accs[key].append(res[key])
+        # ── Accumulate results ────────────────────────────────────────────────
+        per_class_pca = config.get("per_class_pca", False)
+
+        # Raw tracks always run
+        accs["knn_raw"].append(res["knn_raw"])
+        accs["proto_raw"].append(res["proto_raw"])
+
+        # PCA tracks are mutually exclusive
+        if per_class_pca:
+            if res["dollar_B"] is not None:
+                accs["dollar_B"].append(res["dollar_B"])
+        else:
+            if res["knn_pca"] is not None:
+                accs["knn_pca"].append(res["knn_pca"])
+            if res["proto_pca"] is not None:
+                accs["proto_pca"].append(res["proto_pca"])
+
+        # Encoder track only runs when encoder is provided
         if encoder is not None and res["proto_encoded"] is not None:
             accs["proto_encoded"].append(res["proto_encoded"])
 
         per_user[pid] = res
 
         if verbose:
-            enc_str = (f"  enc={res['proto_encoded']*100:.1f}%"
-                       if encoder and res["proto_encoded"] is not None else "")
-            aug_str = (f"  aug={res['n_support_aug']}" if aug_support else "")
-            print(f"  PID {str(pid):>4} | "
-                  f"knn={res['knn_raw']*100:.1f}%  "
-                  f"knn_pca={res['knn_pca']*100:.1f}%  "
-                  f"proto={res['proto_raw']*100:.1f}%  "
-                  f"proto_pca={res['proto_pca']*100:.1f}%"
-                  f"{enc_str}  "
-                  f"[sup={res['n_support']}, qry={res['n_query']}]"
-                  f"{aug_str}")
+            per_class_pca = config.get("per_class_pca", False)
+            aug_str       = f"  aug={res['n_support_aug']}" if aug_support else ""
+            enc_str       = (f"  enc={res['proto_encoded']*100:.1f}%"
+                             if encoder and res["proto_encoded"] is not None else "")
+
+            if per_class_pca:
+                pca_str = (f"  $B={res['dollar_B']*100:.1f}%"
+                           if res["dollar_B"] is not None else "")
+                print(f"  PID {str(pid):>4} | "
+                      f"knn={res['knn_raw']*100:.1f}%  "
+                      f"proto={res['proto_raw']*100:.1f}%"
+                      f"{pca_str}{enc_str}  "
+                      f"[sup={res['n_support']}, qry={res['n_query']}]"
+                      f"{aug_str}")
+            else:
+                print(f"  PID {str(pid):>4} | "
+                      f"knn={res['knn_raw']*100:.1f}%  "
+                      f"knn_pca={res['knn_pca']*100:.1f}%  "
+                      f"proto={res['proto_raw']*100:.1f}%  "
+                      f"proto_pca={res['proto_pca']*100:.1f}%"
+                      f"{enc_str}  "
+                      f"[sup={res['n_support']}, qry={res['n_query']}]"
+                      f"{aug_str}")
 
     def _summarise(key: str) -> dict:
         a = accs[key]
@@ -1002,8 +1097,11 @@ def run_one_shot_condition(
     if verbose:
         chance  = 100.0 / n_way
         n_users = len(accs["knn_raw"])
-        rows = [("knn_raw","KNN (raw)"), ("knn_pca","KNN (PCA)"),
-                ("proto_raw","ProtoNet (raw)"), ("proto_pca","ProtoNet (PCA)")]
+        rows = [("knn_raw", "KNN (raw)"), ("proto_raw", "ProtoNet (raw)")]
+        if per_class_pca:
+            rows.append(("dollar_B", "$B (per-class PCA)"))
+        else:
+            rows += [("knn_pca", "KNN (PCA)"), ("proto_pca", "ProtoNet (PCA)")]
         if encoder is not None:
             rows.append(("proto_encoded", f"ProtoNet ({type(encoder).__name__})"))
         print(f"\n  {'Method':<30}  {'Mean':>8}  {'Std':>7}  {'Users':>6}")
@@ -1127,8 +1225,8 @@ def build_config(
         config["pca_n_components"] = 16
     """
     return {
-        "eval_PIDs":           eval_pids  if eval_pids  is not None else list(range(1, 25)),
-        "maml_reps":           maml_reps  if maml_reps  is not None else list(range(1, 11)),
+        "eval_PIDs":           eval_pids,
+        "maml_reps":           maml_reps,
         "n_way":               n_way,
         "knn_metric":          metric,
         "seed":                seed,
@@ -1286,3 +1384,71 @@ def plot_pca_variance(emg_data: Optional[torch.Tensor] = None,
 
 # Example Usage:
 # plot_pca_variance(my_emg_tensor, my_imu_tensor)
+
+###########################################################
+# $B per-class PCA... requires some finagling...
+
+def _fit_per_class_pcas(
+    support:    torch.Tensor,   # (N_support, C, T)
+    labels:     torch.Tensor,   # (N_support,)
+    n_components: int,
+    n_classes:  int,
+) -> List[dict]:
+    """
+    Fit one spatial PCA per class on the support set.
+
+    Returns a list of length n_classes, each entry:
+        {
+          "components": (n_pc, C)  -- spatial filters (rows = filters)
+          "mean":       (C,)       -- channel mean for centering
+          "template":   (n_pc*T,)  -- mean projected support vector for this class
+        }
+
+    "template" is the per-class prototype in PCA space — the thing you
+    compare each query against. For k-shot > 1 it's the mean of all
+    k projected support trials, which is $B's natural k-shot extension.
+    """
+    C, T = support.shape[1], support.shape[2]
+    models = []
+
+    for c in range(n_classes):
+        mask  = (labels == c)
+        sup_c = support[mask]           # (k_shot, C, T)
+
+        components, mean = _fit_spatial_pca(sup_c, n_components)   # existing fn
+        # components: (n_pc, C),  mean: (C,)
+
+        # Project each support trial and average -> template
+        projected = _apply_spatial_pca(sup_c, components, mean)    # (k_shot, n_pc*T)
+        template  = projected.mean(dim=0)                          # (n_pc*T,)
+
+        models.append({
+            "components": components,   # (n_pc, C)
+            "mean":       mean,         # (C,)
+            "template":   template,     # (n_pc*T,)
+        })
+
+    return models
+
+
+def _per_class_pca_distances(
+    query:      torch.Tensor,   # (N_query, C, T)
+    pca_models: List[dict],     # output of _fit_per_class_pcas
+) -> torch.Tensor:
+    """
+    Project each query into every class's PCA space and compute L1 distance
+    to that class's template.
+
+    Returns (N_query, n_classes) distance matrix.
+    Classify by argmin over classes.
+    """
+    N_qry     = query.shape[0]
+    n_classes = len(pca_models)
+    dists     = torch.zeros(N_qry, n_classes, device=query.device)
+
+    for c, model in enumerate(pca_models):
+        proj     = _apply_spatial_pca(query, model["components"], model["mean"])
+        # proj: (N_qry, n_pc*T)
+        dists[:, c] = (proj - model["template"].unsqueeze(0)).abs().sum(dim=-1)
+
+    return dists   # (N_query, n_classes) — argmin gives predicted class
