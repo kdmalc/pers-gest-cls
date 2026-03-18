@@ -1,37 +1,48 @@
+# Train/test split: on repetition, NOT user!
+# Subject specific! There is no mutli-user model. Each user trains their own KNN/Proto
+# PCA (if used) is fit per user per episode
+# proto_encoded allows for a pretrained multi-subject encoder to be applied followed by subject-specific Proto
+
 """
 eval_knn_proto.py
 =================
 Subject-specific few-shot evaluation: KNN and Prototypical Networks.
 Everything runs in pure PyTorch — no sklearn dependency.
 
-This is the single unified file combining the primitive classifiers,
-episode builder, augmentation helpers, PCA encoder, and the full
-multi-shot evaluation runner.
-
-─────────────────────────────────────────────────────────────────────
+═══════════════════════════════════════════════════════════════════════
 Evaluation Modes
-─────────────────────────────────────────────────────────────────────
-  1. knn_raw        : KNN on flattened raw EMG features (input space)
-  2. knn_pca        : KNN on PCA-projected features (fit on support only)
-  3. proto_raw      : ProtoNet on raw EMG features (per-class mean in input space)
-  4. proto_pca      : ProtoNet on PCA-projected features (fit on support only)
+═══════════════════════════════════════════════════════════════════════
+  1. knn_raw        : KNN on raw features (flattened or feature_fn output)
+  2. knn_pca        : KNN after channel-wise PCA dimensionality reduction
+  3. proto_raw      : ProtoNet on raw features (per-class mean)
+  4. proto_pca      : ProtoNet after channel-wise PCA
   5. proto_encoded  : ProtoNet on outputs of a pretrained neural encoder
 
-─────────────────────────────────────────────────────────────────────
-Setup
-─────────────────────────────────────────────────────────────────────
-  - One episode per user (no episodic meta-training — pure evaluation).
-  - Support set : k_shot samples per class
-  - Query  set  : all remaining samples (never augmented at eval time)
+═══════════════════════════════════════════════════════════════════════
+Subject-Specificity
+═══════════════════════════════════════════════════════════════════════
+  Every user is evaluated completely independently. There is no shared
+  model or cross-user information for methods 1-4. Each user's support
+  set defines that user's prototypes/neighbours and has zero effect on
+  any other user's predictions.
 
-─────────────────────────────────────────────────────────────────────
+  The only thing shared across users is the neural encoder (method 5),
+  which is pretrained on a separate set of users and then frozen. The
+  encoder generalises; the prototypes personalise. This is the correct
+  decomposition for subject-adaptive BCIs.
+
+  There is NO user-level train/test split in this file because KNN and
+  ProtoNet have no learnable cross-user parameters. The only split that
+  matters here is the within-user repetition split (support vs. query).
+
+═══════════════════════════════════════════════════════════════════════
 Support / Query Split Modes
-─────────────────────────────────────────────────────────────────────
+═══════════════════════════════════════════════════════════════════════
   Fixed-rep (default, deployment-realistic):
       Support = first k_shot repetition indices (e.g. rep 1 for 1-shot)
       Query   = all remaining repetition indices
-      This simulates real BCI calibration: collect 1 trial per gesture,
-      then classify everything else immediately.
+      Simulates real BCI calibration: collect 1 trial per gesture, then
+      immediately classify everything else.
 
   Explicit override:
       config["support_reps"] = [1]
@@ -39,65 +50,119 @@ Support / Query Split Modes
 
   Random-shuffle (matches MetaGestureDataset / MAML pipeline):
       config["use_fixed_rep_split"] = False
-      All reps shuffled; first k_shot -> support, rest -> query.
-      Use this for apples-to-apples comparisons against MAML numbers.
+      All reps shuffled per gesture; first k_shot -> support, rest -> query.
+      Use for apples-to-apples comparisons against MAML numbers.
 
-─────────────────────────────────────────────────────────────────────
+═══════════════════════════════════════════════════════════════════════
+Feature Engineering Hook (feature_fn)
+═══════════════════════════════════════════════════════════════════════
+  An optional callable that maps a raw (C, T) time-series tensor to a
+  1-D feature vector. It is applied AFTER augmentation and BEFORE any
+  PCA or classifier. This is the correct order:
+
+      raw time-series -> augment -> feature_fn -> PCA / KNN / ProtoNet
+
+  Augmenting engineered features directly (e.g. adding noise to an RMS
+  value) is rarely meaningful; augmentation should always operate on
+  the time-series before feature extraction.
+
+  Usage:
+      def my_features(x: torch.Tensor) -> torch.Tensor:
+          # x: (C, T) float tensor
+          rms  = x.pow(2).mean(dim=-1).sqrt()     # (C,)
+          mav  = x.abs().mean(dim=-1)              # (C,)
+          return torch.cat([rms, mav])             # (2*C,)
+
+      results = run_all_conditions(tensor_dict, config, feature_fn=my_features)
+
+  If feature_fn is None (default), samples are flattened: (C, T) -> (C*T,).
+
+═══════════════════════════════════════════════════════════════════════
+PCA Design  (channel-wise / spatial PCA, paper-style)
+═══════════════════════════════════════════════════════════════════════
+  Three formulations exist for PCA on multi-channel time series:
+
+  (1) Sample-wise PCA  [NOT used]:
+      Flatten each trial to (C*T,), stack N trials -> (N, C*T).
+      PCA caps at min(N-1, C*T). For 1-shot 10-way: only 9 components,
+      regardless of C or T, because your 10 data points only span a
+      9-dimensional subspace of the C*T-dimensional feature space.
+
+  (2) Channel-wise PCA + mean-pool over time  [previous version, not used]:
+      Covariance is (C, C); components are spatial filters.
+      After projecting (C,T) -> (nPC,T), mean-pool -> (nPC,) per trial.
+      Cap: C-1 = up to 15 for 16-ch EMG. Compact but discards time.
+
+  (3) Channel-wise PCA + keep time  [THIS implementation, matches paper]:
+      Same spatial filter as (2). After projecting (C,T) -> (nPC,T),
+      FLATTEN -> (nPC*T,) per trial. Full temporal structure preserved.
+      Cap: C-1 per modality, independent of k_shot.
+      Output dimension: nPC * T (e.g. 8 * 200 = 1600 for EMG).
+
+  This matches the referenced paper exactly: their D matrix is (C, T),
+  covariance is (C,C), eigenvectors are spatial filters, output per
+  trial is (nPC * T,) flattened. They use nPC=50 on 88 channels.
+
+  PCA fit on support ONLY. Same filters applied to query (no leakage).
+  For k_shot > 1, per-trial covariances are averaged before eigen-decomp.
+
+  Multi-modality (EMG + IMU):
+    Separate PCA per modality; projected features concatenated.
+    Prevents high-variance IMU from dominating the shared filter space.
+
+  config["pca_n_components"] = 8   # components PER MODALITY (cap: C-1)
+
+═══════════════════════════════════════════════════════════════════════
 Support Augmentation (optional)
-─────────────────────────────────────────────────────────────────────
-  Augmentation is applied to support samples only (never query).
+═══════════════════════════════════════════════════════════════════════
+  Augmentation is applied to the raw (C, T) time-series BEFORE feature_fn
+  and BEFORE PCA. Query samples are never augmented.
+
   Each support sample gets n_copies augmented variants appended.
-  For ProtoNet: augmented copies are folded into the per-class mean,
-                making the prototype more robust to signal variability.
-  For KNN:      augmented copies act as extra support neighbours,
-                effectively increasing k without adding real data.
+    ProtoNet: augmented copies fold into the per-class prototype mean.
+    KNN:      augmented copies become extra support neighbours.
 
   config["aug_support"]   = True
-  config["aug_n_copies"]  = 4       # augmented copies per support sample
-  config["aug_noise_std"] = 0.05    # Gaussian noise relative to signal std
+  config["aug_n_copies"]  = 4
+  config["aug_noise_std"] = 0.05    # Gaussian noise (relative to signal std)
   config["aug_max_shift"] = 4       # max circular temporal shift (samples)
   config["aug_ch_drop"]   = 0.10    # per-channel zero-out probability
 
-─────────────────────────────────────────────────────────────────────
-PCA Encoder
-─────────────────────────────────────────────────────────────────────
-  PCA is fit on the support set only (per-user, per-episode).
-  Fitting on query would be data leakage and is never done here.
-  With k=1 and 10-way, support has 10 points -> PCA components are
-  automatically capped at min(n_support - 1, pca_n_components).
-  Even 9 components can be highly informative for separating 10 classes.
-
-  config["pca_n_components"] = 16   # target dimensionality after PCA
-
-─────────────────────────────────────────────────────────────────────
+═══════════════════════════════════════════════════════════════════════
 Usage
-─────────────────────────────────────────────────────────────────────
+═══════════════════════════════════════════════════════════════════════
   As a script:
       python eval_knn_proto.py --tensor_dict path/to/tensor_dict.pkl
 
-  As a library:
+  As a library — raw baselines:
       from eval_knn_proto import build_config, run_all_conditions
+      results = run_all_conditions(tensor_dict, build_config())
 
-      # Raw + PCA baselines, no neural encoder
-      config  = build_config()
-      results = run_all_conditions(tensor_dict, config)
+  With engineered features:
+      def rms_mav(x):   # x: (C, T) -> (2C,)
+          return torch.cat([x.pow(2).mean(-1).sqrt(), x.abs().mean(-1)])
+      results = run_all_conditions(tensor_dict, config, feature_fn=rms_mav)
 
-      # Add a pretrained neural encoder
+  With a neural encoder:
       results = run_all_conditions(tensor_dict, config, encoder=model.backbone)
 
-─────────────────────────────────────────────────────────────────────
+  Both together (features for raw/PCA tracks, encoder for encoded track):
+      results = run_all_conditions(tensor_dict, config,
+                                   feature_fn=rms_mav, encoder=model.backbone)
+
+═══════════════════════════════════════════════════════════════════════
 Config Keys Reference
-─────────────────────────────────────────────────────────────────────
+═══════════════════════════════════════════════════════════════════════
   eval_PIDs           : list of participant IDs to evaluate
   maml_reps           : list of 1-indexed repetition indices in the full pool
   n_way               : int, number of gesture classes (default 10)
   knn_metric          : "euclidean" | "cosine" (default "euclidean")
   seed                : int for reproducible RNG (default 42)
   use_imu             : bool, include IMU modality (default False)
-  use_fixed_rep_split : bool, use fixed-rep split vs random shuffle (default True)
+  use_fixed_rep_split : bool, fixed-rep split vs random shuffle (default True)
   support_reps        : list[int] | None, explicit 1-indexed support rep indices
   query_reps          : list[int] | None, explicit 1-indexed query rep indices
-  pca_n_components    : int, PCA output dimension (default 16)
+  pca_n_components    : int, PCA components PER MODALITY (default 8)
   aug_support         : bool, augment support set (default False)
   aug_n_copies        : int, augmented copies per support sample (default 4)
   aug_noise_std       : float (default 0.05)
@@ -108,8 +173,7 @@ Config Keys Reference
 
 import pickle
 import random
-import argparse
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Callable, Dict, Any, List, Tuple
 
 import torch
 import torch.nn as nn
@@ -125,9 +189,9 @@ def pairwise_euclidean_sq(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     Squared Euclidean distance between every row of a and every row of b.
     a : (N, D)  b : (M, D)  ->  returns (N, M)
 
-    Uses the expansion ||a - b||^2 = ||a||^2 + ||b||^2 - 2*(a*b^T),
-    which is ~10x faster than looping and avoids materialising (N, M, D).
-    Clamped to zero to suppress floating-point negatives near the diagonal.
+    Uses the expansion ||a - b||^2 = ||a||^2 + ||b||^2 - 2*(a*b^T).
+    This avoids materialising the (N, M, D) difference tensor and is
+    ~10x faster than looping. Clamped to suppress floating-point negatives.
     """
     a_sq = (a * a).sum(dim=1, keepdim=True)      # (N, 1)
     b_sq = (b * b).sum(dim=1, keepdim=True).t()  # (1, M)
@@ -141,7 +205,6 @@ def pairwise_cosine_dist(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     a : (N, D)  b : (M, D)  ->  returns (N, M)
 
     Values in [0, 2]: 0 = identical direction, 1 = orthogonal, 2 = opposite.
-    L2-normalises both matrices before the dot product for numerical stability.
     """
     a_n = F.normalize(a, p=2, dim=1)
     b_n = F.normalize(b, p=2, dim=1)
@@ -149,13 +212,8 @@ def pairwise_cosine_dist(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 def pairwise_dist(a: torch.Tensor, b: torch.Tensor, metric: str = "euclidean") -> torch.Tensor:
-    """
-    Dispatcher returning an (N, M) pairwise distance matrix.
-    metric : "euclidean" (default) | "cosine"
-    """
-    if metric == "cosine":
-        return pairwise_cosine_dist(a, b)
-    return pairwise_euclidean_sq(a, b)
+    """Dispatcher: returns (N, M) pairwise distance matrix."""
+    return pairwise_cosine_dist(a, b) if metric == "cosine" else pairwise_euclidean_sq(a, b)
 
 
 # =============================================================================
@@ -164,7 +222,7 @@ def pairwise_dist(a: torch.Tensor, b: torch.Tensor, metric: str = "euclidean") -
 
 def knn_classify(
     support_feats:  torch.Tensor,   # (N_support, D)
-    support_labels: torch.Tensor,   # (N_support,)  -- integer class indices
+    support_labels: torch.Tensor,   # (N_support,)  -- integer class indices 0..n_classes-1
     query_feats:    torch.Tensor,   # (N_query, D)
     k:              int,
     metric:         str = "euclidean",
@@ -172,30 +230,25 @@ def knn_classify(
 ) -> torch.Tensor:
     """
     Pure-PyTorch k-Nearest-Neighbour classifier.
-    Returns predicted class indices for each query sample: (N_query,).
+    Returns predicted class indices: (N_query,) long tensor.
 
     Algorithm:
         1. Compute (N_query, N_support) pairwise distance matrix.
-        2. For each query, select the k closest support indices.
-        3. Accumulate one vote per neighbour into a (N_query, n_classes) count matrix.
-        4. Return argmax over classes (majority vote).
+        2. For each query, find the k closest support indices (topk, smallest).
+        3. Accumulate votes: scatter neighbour labels into (N_query, n_classes).
+        4. Return argmax (majority vote).
 
-    This is fully vectorised -- no Python loops over queries.
-    The scatter_add_ vote accumulation is also differentiable w.r.t. feature
-    vectors if you ever want to fine-tune through the classifier.
+    Fully vectorised — no Python loops over queries.
 
-    Note on k=1 equivalence with ProtoNet:
-        When k_shot=1, each class has exactly one support sample.
-        knn_classify(k=1) and proto_classify give identical predictions
-        because the single neighbour IS the prototype. This is a useful
-        sanity check: if they disagree at k=1, something is wrong.
+    Sanity check: with k_shot=1, knn_classify(k=1) and proto_classify must
+    produce identical predictions (one neighbour == one prototype). If they
+    disagree at k=1, something is wrong upstream.
     """
     dist          = pairwise_dist(query_feats, support_feats, metric)           # (Q, S)
     k_eff         = min(k, support_feats.size(0))
     _, nn_indices = dist.topk(k_eff, dim=1, largest=False, sorted=True)         # (Q, k)
     nn_labels     = support_labels[nn_indices]                                   # (Q, k)
 
-    # Majority vote: scatter neighbour labels into a per-class count matrix
     votes = torch.zeros(query_feats.size(0), n_classes,
                         device=query_feats.device, dtype=torch.float32)
     votes.scatter_add_(dim=1, index=nn_labels,
@@ -212,20 +265,19 @@ def proto_classify(
 ) -> torch.Tensor:
     """
     Prototypical Network classifier.
-    Returns predicted class indices for each query sample: (N_query,).
+    Returns predicted class indices: (N_query,) long tensor.
 
     Algorithm:
         1. Prototype_c = mean of all support embeddings with label c.
         2. Classify each query as the class whose prototype is nearest.
 
-    Compared to KNN, ProtoNet compresses within-class information into a
-    single representative point before comparing. With k=1 they are identical.
-    With k>1, ProtoNet's averaging makes it more robust to outlier support
-    samples than KNN's individual-neighbour voting.
+    vs. KNN: ProtoNet compresses within-class info into one representative
+    point before comparing. With k=1 they are identical. With k>1, ProtoNet's
+    averaging is more robust to outlier support samples than KNN's voting.
 
-    When the encoder is learned end-to-end with episodic cross-entropy loss,
-    the embedding space is explicitly shaped so that within-class points cluster
-    and between-class prototypes separate -- this is the core ProtoNet insight.
+    With a learned encoder, the embedding space is explicitly shaped so
+    within-class points cluster and between-class prototypes separate —
+    this is the core ProtoNet training objective.
     """
     D          = support_feats.size(1)
     prototypes = torch.zeros(n_classes, D,
@@ -236,86 +288,198 @@ def proto_classify(
             prototypes[c] = support_feats[mask].mean(dim=0)
 
     dist = pairwise_dist(query_feats, prototypes, metric)   # (Q, n_classes)
-    return dist.argmin(dim=1)   # (Q,)
+    return dist.argmin(dim=1)
 
 
 # =============================================================================
 # SECTION 3: Encoders
 # =============================================================================
 
-def pca_encode(
-    support_feats: torch.Tensor,   # (N_support, D_in) -- flat features
-    query_feats:   torch.Tensor,   # (N_query,   D_in)
-    n_components:  int = 16,
+# ── Background: three PCA formulations for multi-channel time series ─────────
+#
+# Given a single trial of shape (C, T):
+#
+# Formulation 1 — Sample-wise PCA  [NOT used here; included for reference]
+#   Flatten all N support trials to (N, C*T), run PCA over the N-sample dim.
+#   Output: (N, k) where k <= min(N-1, C*T).
+#   Problem: for 1-shot 10-way, N=10, so k <= 9 regardless of C or T.
+#   The rank of a (10, 3200) matrix is at most 10 — the extra 3190 dimensions
+#   of feature space are unreachable because you only have 10 data points to
+#   span them. After mean-centering you lose one more degree of freedom -> 9.
+#   This is why sample count caps components: PCA can only find directions
+#   that exist in the subspace your data actually occupies.
+#
+# Formulation 2 — Channel-wise PCA + mean-pool over time  [previous version]
+#   Stack all (N*T) timestep-vectors as rows: (N*T, C).
+#   PCA covariance is (C, C); components are spatial filters over channels.
+#   Cap: min(N*T - 1, C) = up to 16 for EMG. Not capped by k_shot.
+#   Project each trial (C, T) -> (nPC, T), then mean-pool -> (nPC,).
+#   Pro: compact vector per trial. Con: temporal structure discarded.
+#
+# Formulation 3 — Channel-wise PCA + keep time  [what the paper does; used here]
+#   Same spatial filter fit as Formulation 2 (covariance is still C×C).
+#   After projecting: (C, T) -> (nPC, T), then FLATTEN -> (nPC * T,).
+#   Output per trial: (nPC * T,). Cap on nPC: C-1 (single-trial covariance).
+#   Pro: temporal structure fully preserved, matches paper's approach.
+#   Con: output dimension is nPC * T (e.g. 8 * 200 = 1600), not as compact.
+#
+# The paper fits the covariance on a single TEMPLATE TRIAL (their "support"),
+# so their cap is C-1 regardless of k_shot. That is what we implement below.
+# For k_shot > 1 we average the per-trial covariances before computing the SVD,
+# which is a natural generalisation (each extra support sample refines the
+# spatial filter estimate).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _fit_spatial_pca(
+    support_emg: torch.Tensor,   # (N_support, C, T)
+    n_components: int,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    PCA dimensionality reduction, fit on support only, applied to both sets.
+    Fit a channel-wise (spatial) PCA on the support set.
 
-    Critically, PCA is fit on the SUPPORT SET ONLY. Fitting on query (or on
-    the combined set) would be data leakage, since PCA would use query signal
-    structure to define the projection axes.
+    Constructs the C×C covariance matrix by averaging per-trial covariances,
+    then returns the top-n_components eigenvectors (spatial filters) and the
+    channel mean used for centering.
 
-    With k=1 and 10-way, support has 10 points in a potentially very high-
-    dimensional space (e.g. 16 channels x 200 timesteps = 3200 dims). PCA
-    components are automatically capped at min(n_support - 1, n_components)
-    to keep the SVD well-defined. Even 9 components is often sufficient to
-    separate 10 gesture classes if the signal is well-structured.
-
-    Algorithm:
-        1. Compute support mean; subtract from both support and query.
-           (Query is centred using support mean -- NOT its own mean.)
-        2. Thin SVD of centred support -> principal components (right singular vectors).
-        3. Project both support and query onto the top-n_components components.
+    Why average per-trial covariances (rather than stacking all timesteps)?
+        Stacking (N*T, C) and taking one big covariance is equivalent but
+        weights all timesteps equally regardless of which trial they came from.
+        Averaging per-trial covariances weights each trial equally, which is
+        more appropriate when trials may have different lengths or when you
+        want the filter to represent the average trial structure.
+        For fixed-length trials the two approaches give the same result.
 
     Returns
     -------
-    sup_proj : (N_support, n_components)
-    qry_proj : (N_query,   n_components)
+    components : (n_components, C)  -- rows are spatial filters (eigenvectors)
+    mean       : (C,)               -- channel mean for centering
     """
-    # Cap components: SVD requires n_components <= min(n_samples - 1, n_features)
-    n_components = min(n_components, support_feats.size(0) - 1, support_feats.size(1))
+    N, C, T = support_emg.shape
+    n_components = min(n_components, C - 1)
     if n_components < 1:
-        # Degenerate case (e.g. only 1 support sample) -- return features unchanged
-        return support_feats, query_feats
+        n_components = 1   # always return at least 1 component
 
-    # Step 1: centre using support mean only (applying same shift to query)
-    mean        = support_feats.mean(dim=0, keepdim=True)   # (1, D_in)
-    sup_centred = support_feats - mean
-    qry_centred = query_feats   - mean                      # same shift, NOT query mean
+    # Channel mean across all support trials and all timesteps
+    # Shape: (C,)
+    mean = support_emg.mean(dim=(0, 2))
 
-    # Step 2: thin SVD of centred support
-    # sup_centred = U @ diag(S) @ Vt,  Vt shape: (min(N,D), D_in)
+    # Average covariance: mean over trials of (1/(T-1)) * X_centred @ X_centred^T
+    # Each X_centred is (C, T); covariance is (C, C)
+    cov = torch.zeros(C, C, device=support_emg.device, dtype=support_emg.dtype)
+    for i in range(N):
+        x = support_emg[i] - mean.unsqueeze(-1)   # (C, T)  -- centre each trial
+        cov += (x @ x.t()) / (T - 1)
+    cov /= N   # average across trials
+
+    # Eigendecomposition of the symmetric covariance matrix.
+    # torch.linalg.eigh is faster and more numerically stable than eig for
+    # symmetric matrices. Returns eigenvalues in ASCENDING order, so we flip.
     try:
-        _, _, Vt = torch.linalg.svd(sup_centred, full_matrices=False)
+        eigenvalues, eigenvectors = torch.linalg.eigh(cov)   # both (C,), (C, C)
     except Exception:
-        # If SVD fails (e.g. all-zero support after centering), return unchanged
-        return support_feats, query_feats
+        # Fallback: identity projection (no dimensionality reduction)
+        components = torch.eye(C, device=support_emg.device)[:n_components]
+        return components, mean
 
-    components = Vt[:n_components]   # (n_components, D_in) -- principal axes
+    # Flip to descending order (largest variance first)
+    eigenvectors = eigenvectors.flip(dims=[1])   # (C, C) -- columns are eigenvectors
+    components   = eigenvectors[:, :n_components].t()   # (n_components, C)
 
-    # Step 3: project onto principal components
-    sup_proj = sup_centred @ components.t()   # (N_support, n_components)
-    qry_proj = qry_centred @ components.t()   # (N_query,   n_components)
+    return components, mean
 
-    return sup_proj, qry_proj
+
+def _apply_spatial_pca(
+    emg_batch:  torch.Tensor,   # (N, C, T)
+    components: torch.Tensor,   # (n_components, C)
+    mean:       torch.Tensor,   # (C,)
+) -> torch.Tensor:
+    """
+    Apply pre-fit spatial filters to a batch of trials and return flattened vectors.
+
+    Pipeline per trial:
+        (C, T) -- centre --> (C, T) -- project channels --> (nPC, T) -- flatten --> (nPC*T,)
+
+    This matches the paper's approach: the full temporal structure is preserved
+    after the channel projection, and the result is flattened for KNN/ProtoNet.
+
+    Returns : (N, n_components * T)
+    """
+    # Centre: subtract channel mean; mean shape (C,) -> broadcast to (C, 1)
+    x_centred = emg_batch - mean.unsqueeze(-1)              # (N, C, T)
+    # Project channels: components (nPC, C) x x_centred (N, C, T)
+    # einsum 'kc,nct->nkt': for each trial n and timestep t, project C channels -> nPC dims
+    projected = torch.einsum('kc,nct->nkt', components, x_centred)   # (N, nPC, T)
+    # Flatten nPC*T into a single feature vector per trial
+    N = emg_batch.size(0)
+    return projected.reshape(N, -1)                         # (N, nPC*T)
+
+
+def pca_encode(
+    support_emg:  torch.Tensor,           # (N_support, C_emg, T)
+    query_emg:    torch.Tensor,           # (N_query,   C_emg, T)
+    support_imu:  Optional[torch.Tensor], # (N_support, C_imu, T) | None
+    query_imu:    Optional[torch.Tensor], # (N_query,   C_imu, T) | None
+    emg_pca_dims: int = 8,
+    imu_pca_dims: int = 16,
+    shared_pca:   bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Channel-wise (spatial) PCA with options for separate or shared modality projection.
+    """
+    # If no IMU, just do EMG and return early
+    if support_imu is None:
+        emg_components, emg_mean = _fit_spatial_pca(support_emg, emg_pca_dims)
+        sup_proj = _apply_spatial_pca(support_emg, emg_components, emg_mean)
+        qry_proj = _apply_spatial_pca(query_emg,   emg_components, emg_mean)
+        return sup_proj, qry_proj
+
+    if shared_pca:
+        assert emg_pca_dims == imu_pca_dims, (
+            f"AssertionError: emg_pca_dims ({emg_pca_dims}) and imu_pca_dims "
+            f"({imu_pca_dims}) must be equal when shared_pca is True."
+        )
+        
+        # Concatenate raw channels: (N, C_emg + C_imu, T)
+        sup_concat = torch.cat([support_emg, support_imu], dim=1)
+        qry_concat = torch.cat([query_emg, query_imu], dim=1)
+
+        components, mean = _fit_spatial_pca(sup_concat, emg_pca_dims)
+        sup_proj = _apply_spatial_pca(sup_concat, components, mean)
+        qry_proj = _apply_spatial_pca(qry_concat, components, mean)
+        return sup_proj, qry_proj
+
+    else:
+        # ── EMG (separate) ──
+        emg_components, emg_mean = _fit_spatial_pca(support_emg, emg_pca_dims)
+        sup_emg_proj = _apply_spatial_pca(support_emg, emg_components, emg_mean)
+        qry_emg_proj = _apply_spatial_pca(query_emg,   emg_components, emg_mean)
+
+        # ── IMU (separate) ──
+        imu_components, imu_mean = _fit_spatial_pca(support_imu, imu_pca_dims)
+        sup_imu_proj = _apply_spatial_pca(support_imu, imu_components, imu_mean)
+        qry_imu_proj = _apply_spatial_pca(query_imu,   imu_components, imu_mean)
+
+        sup_proj = torch.cat([sup_emg_proj, sup_imu_proj], dim=-1)
+        qry_proj = torch.cat([qry_emg_proj, qry_imu_proj], dim=-1)
+        return sup_proj, qry_proj
 
 
 @torch.no_grad()
 def neural_encode_batch(
     encoder:   nn.Module,
     emg_batch: torch.Tensor,            # (N, C, T)
-    imu_batch: Optional[torch.Tensor],  # (N, C_imu, T) or None
+    imu_batch: Optional[torch.Tensor],  # (N, C_imu, T) | None
     device:    torch.device,
 ) -> torch.Tensor:
     """
     Run a pretrained neural encoder and return feature vectors: (N, D).
 
-    Handles two common backbone calling conventions:
-      (a) encoder(emg, imu) returns (features, aux_output)  -> takes features[0]
+    Handles two calling conventions:
+      (a) encoder(emg, imu) returns (features, aux)  -> uses features
       (b) encoder(emg, imu) returns features directly
 
-    The encoder is set to eval() mode before inference. This suppresses
-    BatchNorm running-stat updates and Dropout stochasticity.
+    Set to eval() mode before inference (suppresses BatchNorm stat updates
+    and Dropout). Left in eval() after — caller should manage model state.
     """
     encoder.eval()
     out   = encoder(emg_batch.to(device),
@@ -325,7 +489,51 @@ def neural_encode_batch(
 
 
 # =============================================================================
-# SECTION 4: Data Augmentation Helpers
+# SECTION 4: Feature Extraction (raw flatten OR feature_fn)
+# =============================================================================
+
+def extract_features(
+    emg_batch:  torch.Tensor,              # (N, C, T)
+    imu_batch:  Optional[torch.Tensor],    # (N, C_imu, T) | None
+    feature_fn: Optional[Callable],        # (C, T) -> (D,) | None
+    use_imu:    bool,
+) -> torch.Tensor:
+    """
+    Convert a batch of raw (C, T) time-series tensors into feature vectors.
+
+    Two modes:
+        feature_fn=None  : flatten the time series to (C*T,), then optionally
+                           concatenate flattened IMU. Simple but very high-D.
+        feature_fn given : apply it to each sample independently, then optionally
+                           concatenate IMU features. The feature_fn operates on
+                           the raw TIME SERIES before any reduction, which is the
+                           correct place for feature engineering (see module docs).
+
+    If use_imu=True and imu_batch is not None, IMU features are appended to EMG
+    features along the last dimension. Both use the same feature_fn (or flatten).
+
+    Returns : (N, D_total) float tensor
+    """
+    N = emg_batch.size(0)
+
+    if feature_fn is None:
+        emg_feats = emg_batch.reshape(N, -1).float()   # (N, C*T)
+    else:
+        emg_feats = torch.stack([feature_fn(emg_batch[i]) for i in range(N)]).float()
+
+    if not use_imu or imu_batch is None:
+        return emg_feats
+
+    if feature_fn is None:
+        imu_feats = imu_batch.reshape(N, -1).float()
+    else:
+        imu_feats = torch.stack([feature_fn(imu_batch[i]) for i in range(N)]).float()
+
+    return torch.cat([emg_feats, imu_feats], dim=-1)   # (N, D_emg + D_imu)
+
+
+# =============================================================================
+# SECTION 5: Data Augmentation Helpers
 # =============================================================================
 
 def _aug_gaussian_noise(x: torch.Tensor, std: float) -> torch.Tensor:
@@ -349,9 +557,9 @@ def _aug_temporal_shift(x: torch.Tensor, max_shift: int) -> torch.Tensor:
 
 def _aug_channel_dropout(x: torch.Tensor, drop_prob: float) -> torch.Tensor:
     """
-    Zero out entire EMG channels independently with probability drop_prob.
+    Zero out entire channels independently with probability drop_prob.
     Simulates poor electrode contact or transient signal loss.
-    x : (C, T)  ->  mask shape (C, 1) broadcasts over time dimension.
+    x : (C, T) -- mask shape (C, 1) broadcasts over time.
     """
     mask = (torch.rand(x.size(0), 1, device=x.device) > drop_prob).float()
     return x * mask
@@ -360,7 +568,13 @@ def _aug_channel_dropout(x: torch.Tensor, drop_prob: float) -> torch.Tensor:
 def augment_sample(x: torch.Tensor, config: dict) -> torch.Tensor:
     """
     Apply the full augmentation pipeline to a single (C, T) EMG tensor.
-    All three augmentations are applied in sequence.
+    Applied in order: noise -> temporal shift -> channel dropout.
+
+    IMPORTANT: This operates on the RAW TIME SERIES before feature_fn or PCA.
+    Augmenting engineered features directly (e.g. adding noise to an RMS
+    value) is only meaningful if the augmentation has a clear physical
+    interpretation in that feature space. When in doubt, augment here.
+
     Query samples must NEVER be passed through this function at eval time.
     """
     x = _aug_gaussian_noise(x,  config.get("aug_noise_std", 0.05))
@@ -375,24 +589,25 @@ def expand_support_with_aug(
     config:     dict,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Create augmented copies of every support sample and append them,
-    returning an expanded (sup_emg, sup_labels) pair.
+    Create n_copies augmented variants of each support sample and append them.
 
     Returned shapes:
         sup_emg    : (N_sup * (1 + n_copies), C, T)
         sup_labels : (N_sup * (1 + n_copies),)
 
+    Originals are always at indices 0..N_sup-1; augmented copies follow.
     Augmented copies carry the same label as their source sample.
-    The original samples are always kept at indices 0..N_sup-1,
-    so indexing [:N_sup] always recovers the originals.
 
     Effect on classifiers:
-        ProtoNet -- augmented copies fold into the per-class mean, making
-                    the prototype more robust to noise and inter-trial variability.
-                    This is the more principled use since it pools information
-                    before the distance comparison.
-        KNN      -- augmented copies become extra support neighbours, effectively
-                    raising the pool size without adding real calibration data.
+        ProtoNet -- augmented copies fold into the per-class prototype mean,
+                    making the prototype more robust to signal variability.
+                    This is the more principled use.
+        KNN      -- augmented copies become extra support neighbours,
+                    effectively inflating k without adding real data.
+
+    NOTE: Augmentation happens here on the raw time series, BEFORE feature_fn
+    or PCA. The subsequent pipeline sees augmented (C, T) tensors and processes
+    them identically to the real support samples.
     """
     n_copies        = int(config.get("aug_n_copies", 4))
     aug_emg_list    = [sup_emg]
@@ -409,7 +624,7 @@ def expand_support_with_aug(
 
 
 # =============================================================================
-# SECTION 5: Episode Builder
+# SECTION 6: Episode Builder
 # =============================================================================
 
 def build_episode(
@@ -417,35 +632,34 @@ def build_episode(
     k_shot:       int,
     n_way:        int,
     rng:          random.Random,
-    support_reps: Optional[List[int]],   # 1-indexed rep indices; None -> random shuffle
-    query_reps:   Optional[List[int]],   # 1-indexed rep indices; None -> random shuffle
+    support_reps: Optional[List[int]],   # 1-indexed; None -> random shuffle
+    query_reps:   Optional[List[int]],   # 1-indexed; None -> random shuffle
     all_reps:     List[int],             # full rep pool (1-indexed)
 ) -> Tuple[dict, dict]:
     """
     Build one support / query episode for a single user.
 
     Gesture selection:
-        n_way gestures are randomly sampled from those available in all_reps
-        and sorted for deterministic local label assignment (0..n_way-1).
+        n_way gestures randomly sampled from available pool, sorted for
+        deterministic local label assignment (0..n_way-1).
 
     Split modes
     -----------
     Fixed-rep (support_reps / query_reps are lists):
-        Indices come directly from the specified 1-indexed repetition numbers.
+        Rep numbers are 1-indexed and converted to 0-indexed array positions.
         k_shot is implicitly len(support_reps).
-        Deployment-realistic default: rep 1 = calibration, reps 2-10 = workload.
+        Default: rep 1 = calibration support, reps 2-10 = query workload.
 
     Random-shuffle (support_reps / query_reps are None):
-        All repetitions in all_reps are shuffled per gesture;
-        first k_shot -> support, remainder -> query.
-        Matches MetaGestureDataset / MAML pipeline exactly.
+        All reps shuffled per gesture; first k_shot -> support, rest -> query.
+        Matches MetaGestureDataset / MAML pipeline behavior exactly.
 
     Returns
     -------
     support, query : dicts with keys
-        "emg"    : (N, C, T) float tensor
-        "imu"    : (N, C_imu, T) float tensor | None
-        "labels" : (N,) long tensor of episode-local class indices 0..n_way-1
+        "emg"    : (N, C, T) float tensor  (channel-first)
+        "imu"    : (N, C_imu, T) | None
+        "labels" : (N,) long tensor, episode-local indices 0..n_way-1
     """
     available = sorted([g for g in all_reps if g in user_data])
     if len(available) < n_way:
@@ -459,16 +673,14 @@ def build_episode(
 
     for gest in selected:
         lbl      = label_map[gest]
-        emg_data = user_data[gest]["emg"]       # (n_trials, ...)
+        emg_data = user_data[gest]["emg"]
         imu_data = user_data[gest].get("imu")
         n_trials = emg_data.shape[0]
 
         if support_reps is not None:
-            # Fixed-rep: convert 1-indexed repetition numbers to 0-indexed positions
             sup_idx = [r - 1 for r in support_reps if 0 <= r - 1 < n_trials]
             qry_idx = [r - 1 for r in query_reps   if 0 <= r - 1 < n_trials]
         else:
-            # Random-shuffle: matches MetaGestureDataset behavior
             idxs = list(range(n_trials))
             rng.shuffle(idxs)
             sup_idx = idxs[:k_shot]
@@ -485,10 +697,9 @@ def build_episode(
                 l_list.append(lbl)
 
     def _pack(e_list, i_list, l_list) -> dict:
-        """Stack sample lists into tensors and enforce (N, C, T) channel-first layout."""
+        """Stack sample lists and enforce (N, C, T) channel-first layout."""
         emg = torch.stack(e_list).float()
-        # Detect (N, T, C) layout: if the last dim matches known channel counts, permute
-        if emg.dim() == 3 and emg.shape[-1] in [16, 72]:
+        if emg.dim() == 3 and emg.shape[-1] in [16, 72]:   # (N,T,C) -> (N,C,T)
             emg = emg.permute(0, 2, 1).contiguous()
         imu = None
         if i_list:
@@ -502,7 +713,7 @@ def build_episode(
 
 
 # =============================================================================
-# SECTION 6: Per-User Evaluation (single shot condition)
+# SECTION 7: Per-User Evaluation (single shot condition)
 # =============================================================================
 
 def eval_one_user(
@@ -516,22 +727,35 @@ def eval_one_user(
     device:           torch.device,
     metric:           str,
     encoder:          Optional[nn.Module],
+    feature_fn:       Optional[Callable],
     use_imu:          bool,
     aug_support:      bool,
-    pca_n_components: int,
+    emg_pca_dims:     int,     # <--- Changed
+    imu_pca_dims:     int,     # <--- Added
+    shared_pca:       bool,    # <--- Added
     config:           dict,
 ) -> dict:
     """
     Run all evaluation modes for a single user under one shot condition.
+
+    Pipeline per method:
+        raw   : augment (C,T) -> feature_fn or flatten -> KNN / ProtoNet
+        pca   : augment (C,T) -> channel-wise PCA -> KNN / ProtoNet
+        enc   : augment (C,T) -> neural encoder -> ProtoNet
+
+    Note: PCA and neural encoding both receive raw (C, T) tensors, not
+    feature_fn outputs. feature_fn is used only for the raw track.
+    This is intentional — the PCA learns spatial filters directly from
+    the time series, and the neural encoder was trained on raw signals.
 
     Returns a flat dict:
         "knn_raw"       : float accuracy
         "knn_pca"       : float accuracy
         "proto_raw"     : float accuracy
         "proto_pca"     : float accuracy
-        "proto_encoded" : float accuracy | None  (None if encoder=None)
-        "n_support"     : int (un-augmented support count)
-        "n_support_aug" : int (support count after augmentation)
+        "proto_encoded" : float accuracy | None
+        "n_support"     : int (un-augmented)
+        "n_support_aug" : int (after augmentation)
         "n_query"       : int
     """
     support, query = build_episode(
@@ -539,8 +763,8 @@ def eval_one_user(
         support_reps, query_reps, all_reps,
     )
 
-    sup_emg    = support["emg"].to(device)     # (N_sup, C, T)
-    qry_emg    = query["emg"].to(device)       # (N_qry, C, T)
+    sup_emg    = support["emg"].to(device)
+    qry_emg    = query["emg"].to(device)
     sup_labels = support["labels"].to(device)
     qry_labels = query["labels"].to(device)
     sup_imu    = support["imu"].to(device) if (use_imu and support["imu"] is not None) else None
@@ -548,34 +772,42 @@ def eval_one_user(
 
     n_support_orig = sup_emg.size(0)
 
-    # ── Optional support augmentation ────────────────────────────────────────
-    # Augmented copies are appended; originals remain at indices 0..n_support_orig-1.
-    # Query is NEVER augmented.
+    # ── Optional support augmentation (raw time series, before any encoding) ─
+    # Query is NEVER augmented. Originals stay at indices 0..n_support_orig-1.
     aug_sup_emg, aug_sup_labels = sup_emg, sup_labels
     if aug_support:
         aug_sup_emg, aug_sup_labels = expand_support_with_aug(sup_emg, sup_labels, config)
+        # Note: we do not augment IMU here (extend if needed for your use case)
 
-    # ── Flatten (C, T) -> D for raw-feature methods ──────────────────────────
-    sup_flat = aug_sup_emg.reshape(aug_sup_emg.size(0), -1)   # (N_sup_aug, C*T)
-    qry_flat = qry_emg.reshape(qry_emg.size(0), -1)           # (N_qry, C*T)
+    # ── Raw features: flatten (C,T)->D or apply feature_fn ──────────────────
+    # feature_fn receives the raw time series AFTER augmentation.
+    # PCA and neural encoding bypass feature_fn and work on (C,T) directly.
+    sup_flat = extract_features(aug_sup_emg, sup_imu, feature_fn, use_imu)
+    qry_flat = extract_features(qry_emg,    qry_imu, feature_fn, use_imu)
 
-    # Use the full support pool as neighbours (k = all available support)
-    knn_k = aug_sup_emg.size(0)
+    knn_k = aug_sup_emg.size(0)   # use the full support pool as neighbours
 
-    # ── 1. KNN on raw features ───────────────────────────────────────────────
+    # ── 1. KNN (raw / engineered features) ───────────────────────────────────
     knn_raw_pred = knn_classify(sup_flat, aug_sup_labels, qry_flat,
                                 k=knn_k, metric=metric, n_classes=n_way)
     knn_raw_acc  = (knn_raw_pred == qry_labels).float().mean().item()
 
-    # ── 2. ProtoNet on raw features ──────────────────────────────────────────
+    # ── 2. ProtoNet (raw / engineered features) ──────────────────────────────
     proto_raw_pred = proto_classify(sup_flat, aug_sup_labels, qry_flat,
                                     metric=metric, n_classes=n_way)
     proto_raw_acc  = (proto_raw_pred == qry_labels).float().mean().item()
 
-    # ── 3 & 4. PCA projection -> KNN and ProtoNet ────────────────────────────
-    # PCA is fit on (possibly augmented) support features; same projection applied to query.
-    # n_components is capped inside pca_encode to keep the SVD well-defined.
-    sup_pca, qry_pca = pca_encode(sup_flat, qry_flat, n_components=pca_n_components)
+    # ── 3 & 4. Channel-wise PCA -> KNN and ProtoNet ──────────────────────────
+    # PCA works on raw (C, T) tensors — separate PCA per modality if IMU present (and toggle is on for that).
+    # Augmented support is used so the spatial filter reflects all available data.
+    sup_pca, qry_pca = pca_encode(
+        aug_sup_emg, qry_emg,
+        sup_imu if use_imu else None,
+        qry_imu if use_imu else None,
+        emg_pca_dims,
+        imu_pca_dims,
+        shared_pca
+    )
 
     knn_pca_pred = knn_classify(sup_pca, aug_sup_labels, qry_pca,
                                 k=knn_k, metric=metric, n_classes=n_way)
@@ -607,31 +839,28 @@ def eval_one_user(
 
 
 # =============================================================================
-# SECTION 7: Single-Shot-Condition Runner (across all users)
+# SECTION 8: Single-Shot-Condition Runner (across all users)
 # =============================================================================
 
 def run_one_shot_condition(
     tensor_dict: dict,
     config:      dict,
     k_shot:      int,
-    encoder:     Optional[nn.Module] = None,
+    encoder:     Optional[nn.Module]  = None,
+    feature_fn:  Optional[Callable]   = None,
     verbose:     bool = True,
 ) -> dict:
     """
     Run all evaluation modes for a given k_shot across all eval_PIDs.
 
-    Support / query split is determined from config (see module docstring).
-    Users with insufficient gestures or trials are skipped with a warning.
-
     Returns
     -------
-    results : dict with one key per method ("knn_raw", "knn_pca", "proto_raw",
-              "proto_pca", "proto_encoded"), each containing:
+    results : dict with one entry per method:
         {
           "per_user" : {pid: acc_float},
           "mean_acc" : float,
           "std_acc"  : float,
-          "all_accs" : [float, ...]   # same order as valid eval_PIDs
+          "all_accs" : [float, ...]
         }
     """
     device           = torch.device(config.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
@@ -640,47 +869,48 @@ def run_one_shot_condition(
     seed             = int(config.get("seed",             42))
     use_imu          = bool(config.get("use_imu",         False))
     aug_support      = bool(config.get("aug_support",     False))
-    pca_n_components = int(config.get("pca_n_components", 16))
+    emg_pca_dims     = int(config.get("emg_pca_dims",     8))      # <--- Changed
+    imu_pca_dims     = int(config.get("imu_pca_dims",     8))      # <--- Added
+    shared_pca       = bool(config.get("shared_pca",      False))  # <--- Added
     all_reps         = config["maml_reps"]
     eval_pids        = config.get("eval_PIDs", config.get("val_PIDs", []))
 
     if not eval_pids:
         raise ValueError("config must contain 'eval_PIDs' (or 'val_PIDs') -- got empty list.")
 
-    # ── Determine support / query rep split ──────────────────────────────────
-    # Priority: (1) explicit lists > (2) fixed-auto > (3) random shuffle
+    # ── Support / query rep split ─────────────────────────────────────────────
     if "support_reps" in config and "query_reps" in config:
         support_reps = config["support_reps"]
         query_reps   = config["query_reps"]
-        split_mode   = f"fixed-explicit (sup={support_reps})"
+        split_mode   = f"fixed-explicit  sup={support_reps}"
     elif config.get("use_fixed_rep_split", True):
         sorted_reps  = sorted(all_reps)
         support_reps = sorted_reps[:k_shot]
         query_reps   = sorted_reps[k_shot:]
-        preview      = query_reps[:3]
-        ellipsis     = "..." if len(query_reps) > 3 else ""
-        split_mode   = f"fixed-auto (sup={support_reps}, qry={preview}{ellipsis})"
+        split_mode   = f"fixed-auto  sup={support_reps}  qry={query_reps[:3]}{'...' if len(query_reps)>3 else ''}"
     else:
         support_reps = None
         query_reps   = None
-        split_mode   = "random-shuffle (matches MAML pipeline)"
+        split_mode   = "random-shuffle (matches MAML)"
 
-    # Isolated RNG: does not perturb global random state, so calling this
-    # function cannot affect reproducibility of your training runs.
+    # Isolated RNG — does not perturb global random state
     rng = random.Random(seed)
 
     if verbose:
+        fn_name = feature_fn.__name__ if feature_fn is not None else "flatten (C*T)"
         print(f"\n{'='*65}")
         print(f"  {k_shot}-shot  {n_way}-way  |  metric={metric}")
-        print(f"  split   : {split_mode}")
-        print(f"  aug     : {aug_support}" +
-              (f"  (n_copies={config.get('aug_n_copies',4)})" if aug_support else ""))
-        print(f"  PCA dims: {pca_n_components}  |  device={device}")
-        print(f"  encoder : {type(encoder).__name__ if encoder else 'None'}")
-        print(f"  users   : {len(eval_pids)}")
+        print(f"  split      : {split_mode}")
+        print(f"  feature_fn : {fn_name}")
+        print(f"  aug        : {aug_support}" +
+              (f"  n_copies={config.get('aug_n_copies',4)}" if aug_support else ""))
+        print(f"  EMG PCA dims   : {emg_pca_dims}")
+        if use_imu:
+            print(f"  IMU PCA dims   : {imu_pca_dims}")
+        print(f"  encoder    : {type(encoder).__name__ if encoder else 'None'}")
+        print(f"  users      : {len(eval_pids)}")
         print(f"{'='*65}")
 
-    # Per-method accumulation
     accs: Dict[str, List[float]] = {
         "knn_raw": [], "knn_pca": [],
         "proto_raw": [], "proto_pca": [],
@@ -699,14 +929,13 @@ def run_one_shot_condition(
 
         if len(available) < n_way:
             if verbose:
-                print(f"  [WARN] PID {pid}: only {len(available)} gestures (need {n_way}) -- skipping.")
+                print(f"  [WARN] PID {pid}: {len(available)} gestures < {n_way} -- skipping.")
             continue
 
         min_trials = min(user_data[g]["emg"].shape[0] for g in available[:n_way])
         if min_trials < k_shot + 1:
             if verbose:
-                print(f"  [WARN] PID {pid}: only {min_trials} trial(s) per gesture "
-                      f"(need >= {k_shot + 1}) -- skipping.")
+                print(f"  [WARN] PID {pid}: {min_trials} trials < {k_shot+1} needed -- skipping.")
             continue
 
         try:
@@ -721,9 +950,12 @@ def run_one_shot_condition(
                 device           = device,
                 metric           = metric,
                 encoder          = encoder,
+                feature_fn       = feature_fn,
                 use_imu          = use_imu,
                 aug_support      = aug_support,
-                pca_n_components = pca_n_components,
+                emg_pca_dims     = emg_pca_dims,    # <--- Changed
+                imu_pca_dims     = imu_pca_dims,    # <--- Added
+                shared_pca       = shared_pca,      # <--- Added
                 config           = config,
             )
         except Exception as e:
@@ -741,7 +973,7 @@ def run_one_shot_condition(
         if verbose:
             enc_str = (f"  enc={res['proto_encoded']*100:.1f}%"
                        if encoder and res["proto_encoded"] is not None else "")
-            aug_str = (f"  aug_sup={res['n_support_aug']}" if aug_support else "")
+            aug_str = (f"  aug={res['n_support_aug']}" if aug_support else "")
             print(f"  PID {str(pid):>4} | "
                   f"knn={res['knn_raw']*100:.1f}%  "
                   f"knn_pca={res['knn_pca']*100:.1f}%  "
@@ -752,7 +984,6 @@ def run_one_shot_condition(
                   f"{aug_str}")
 
     def _summarise(key: str) -> dict:
-        """Aggregate per-user accuracies for one method into summary statistics."""
         a = accs[key]
         if not a:
             return {}
@@ -771,12 +1002,8 @@ def run_one_shot_condition(
     if verbose:
         chance  = 100.0 / n_way
         n_users = len(accs["knn_raw"])
-        rows = [
-            ("knn_raw",   "KNN (raw)"),
-            ("knn_pca",   "KNN (PCA)"),
-            ("proto_raw", "ProtoNet (raw)"),
-            ("proto_pca", "ProtoNet (PCA)"),
-        ]
+        rows = [("knn_raw","KNN (raw)"), ("knn_pca","KNN (PCA)"),
+                ("proto_raw","ProtoNet (raw)"), ("proto_pca","ProtoNet (PCA)")]
         if encoder is not None:
             rows.append(("proto_encoded", f"ProtoNet ({type(encoder).__name__})"))
         print(f"\n  {'Method':<30}  {'Mean':>8}  {'Std':>7}  {'Users':>6}")
@@ -792,7 +1019,7 @@ def run_one_shot_condition(
 
 
 # =============================================================================
-# SECTION 8: Multi-Shot Runner + Comparison Table
+# SECTION 9: Multi-Shot Runner + Comparison Table
 # =============================================================================
 
 def run_all_conditions(
@@ -800,23 +1027,26 @@ def run_all_conditions(
     config:          dict,
     shot_conditions: List[int]           = [1, 3, 5],
     encoder:         Optional[nn.Module] = None,
+    feature_fn:      Optional[Callable]  = None,
     verbose:         bool                = True,
 ) -> Dict[int, dict]:
     """
-    Run run_one_shot_condition for each k in shot_conditions and print a
+    Run run_one_shot_condition for every k in shot_conditions and print a
     unified comparison table across all methods and shot levels.
+
+    Parameters
+    ----------
+    tensor_dict     : {pid: {gesture: {"emg": Tensor, "imu": Tensor|None, ...}}}
+    config          : see build_config() and module docstring
+    shot_conditions : list of k values to evaluate (default [1, 3, 5])
+    encoder         : optional pretrained nn.Module backbone
+    feature_fn      : optional callable (C,T) -> (D,) for raw/PCA tracks
+                      If None, trials are flattened to (C*T,).
+    verbose         : print per-user and summary tables
 
     Returns
     -------
-    all_results : {k_shot (int): result_dict}
-        result_dict has the same structure as run_one_shot_condition's output.
-
-    Typical usage:
-        config      = build_config()
-        all_results = run_all_conditions(tensor_dict, config)
-
-        # With a pretrained neural encoder:
-        all_results = run_all_conditions(tensor_dict, config, encoder=model.backbone)
+    all_results : {k_shot: result_dict}
     """
     all_results = {}
     for k in shot_conditions:
@@ -825,10 +1055,9 @@ def run_all_conditions(
         print(f"{'#'*65}")
         all_results[k] = run_one_shot_condition(
             tensor_dict, config, k_shot=k,
-            encoder=encoder, verbose=verbose,
+            encoder=encoder, feature_fn=feature_fn, verbose=verbose,
         )
 
-    # ── Final comparison table ────────────────────────────────────────────────
     method_rows = [
         ("knn_raw",   "KNN (raw)"),
         ("knn_pca",   "KNN (PCA)"),
@@ -844,6 +1073,8 @@ def run_all_conditions(
 
     print(f"\n\n{'='*75}")
     print(f"  FINAL COMPARISON TABLE  ({n_way}-way | chance={chance:.1f}%)")
+    if feature_fn is not None:
+        print(f"  feature_fn: {feature_fn.__name__}")
     print(f"{'='*75}")
 
     header = f"  {'Method':<30}"
@@ -861,12 +1092,11 @@ def run_all_conditions(
         print(row)
 
     print(f"{'='*75}\n")
-
     return all_results
 
 
 # =============================================================================
-# SECTION 9: Config Builder + Convenience Wrappers
+# SECTION 10: Config Builder + Convenience Wrappers
 # =============================================================================
 
 def build_config(
@@ -878,21 +1108,23 @@ def build_config(
     use_imu:             bool  = False,
     aug_support:         bool  = False,
     aug_n_copies:        int   = 4,
-    pca_n_components:    int   = 16,
+    emg_pca_dims:        int   = 8,       # <--- Changed
+    imu_pca_dims:        int   = 8,       # <--- Added
+    shared_pca:          bool  = False,   # <--- Added
     use_fixed_rep_split: bool  = True,
     device:              str   = None,
 ) -> dict:
     """
     Build a standard config dict with sensible defaults.
 
-    Defaults assume: 24 pretrain users (PIDs 1-24), 10 repetitions (1-indexed),
-    10-way classification, euclidean distance, no augmentation, PCA to 16 dims.
+    Defaults: 24 pretrain users (PIDs 1-24), 10 reps (1-indexed),
+    10-way, euclidean distance, no augmentation, 8 PCA dims per modality.
 
-    You can override any key after building:
+    After building, override any key directly:
         config = build_config()
-        config["support_reps"] = [1]              # always use rep 1 as support
+        config["support_reps"] = [1]
         config["query_reps"]   = list(range(2, 11))
-        config["pca_n_components"] = 32
+        config["pca_n_components"] = 16
     """
     return {
         "eval_PIDs":           eval_pids  if eval_pids  is not None else list(range(1, 25)),
@@ -906,7 +1138,9 @@ def build_config(
         "aug_noise_std":       0.05,
         "aug_max_shift":       4,
         "aug_ch_drop":         0.10,
-        "pca_n_components":    pca_n_components,
+        "emg_pca_dims":        emg_pca_dims,  # <--- Changed
+        "imu_pca_dims":        imu_pca_dims,  # <--- Added
+        "shared_pca":          shared_pca,    # <--- Added
         "use_fixed_rep_split": use_fixed_rep_split,
         "device":              device or ("cuda" if torch.cuda.is_available() else "cpu"),
     }
@@ -916,69 +1150,139 @@ def eval_from_path(
     tensor_dict_path: str,
     config:           dict,
     encoder:          Optional[nn.Module] = None,
+    feature_fn:       Optional[Callable]  = None,
     shot_conditions:  List[int]           = [1, 3, 5],
 ) -> Dict[int, dict]:
     """
-    Load tensor_dict from a pickle file and run the full multi-shot evaluation.
-    Convenience wrapper for use in notebooks or quick one-liners.
+    Load tensor_dict from pickle and run the full multi-shot evaluation.
+    Convenience wrapper for notebooks / quick one-liners.
 
-    Example:
+    Examples:
+        # Baseline
         results = eval_from_path("data/tensor_dict.pkl", build_config())
+
+        # With engineered features
+        def rms_mav(x):
+            return torch.cat([x.pow(2).mean(-1).sqrt(), x.abs().mean(-1)])
+        results = eval_from_path("data/tensor_dict.pkl", build_config(), feature_fn=rms_mav)
+
+        # With neural encoder
         results = eval_from_path("data/tensor_dict.pkl", build_config(), encoder=model.backbone)
     """
     with open(tensor_dict_path, "rb") as f:
         tensor_dict = pickle.load(f)
     return run_all_conditions(tensor_dict, config,
-                              shot_conditions=shot_conditions, encoder=encoder)
+                              shot_conditions=shot_conditions,
+                              encoder=encoder, feature_fn=feature_fn)
 
 
 # =============================================================================
-# SECTION 10: CLI Entry Point
+# SECTION 11: Example Feature Functions
 # =============================================================================
+# These are provided as starting points. Pass any of these (or your own)
+# as feature_fn to run_all_conditions / eval_from_path.
+# All functions take (C, T) float tensor and return a 1-D float tensor.
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Subject-specific KNN + ProtoNet evaluation (raw, PCA, encoded)"
-    )
-    parser.add_argument("--tensor_dict",  type=str, required=True,
-                        help="Path to maml_tensor_dict.pkl")
-    parser.add_argument("--shots",        type=int, nargs="+", default=[1, 3, 5],
-                        help="Shot conditions to evaluate (default: 1 3 5)")
-    parser.add_argument("--n_way",        type=int, default=10,
-                        help="Number of gesture classes (default: 10)")
-    parser.add_argument("--metric",       type=str, default="euclidean",
-                        choices=["euclidean", "cosine"],
-                        help="Distance metric (default: euclidean)")
-    parser.add_argument("--seed",         type=int, default=42)
-    parser.add_argument("--pca_dims",     type=int, default=16,
-                        help="PCA output dimensionality (default: 16)")
-    parser.add_argument("--aug",          action="store_true",
-                        help="Enable support-set augmentation")
-    parser.add_argument("--aug_copies",   type=int, default=4,
-                        help="Augmented copies per support sample (default: 4)")
-    parser.add_argument("--random_split", action="store_true",
-                        help="Random-shuffle split instead of fixed-rep split")
-    parser.add_argument("--eval_pids",    type=int, nargs="+", default=None,
-                        help="Participant IDs to evaluate (default: 1-24)")
-    args = parser.parse_args()
+def feat_rms_mav(x: torch.Tensor) -> torch.Tensor:
+    """RMS and MAV per channel: (C, T) -> (2*C,)"""
+    rms = x.pow(2).mean(dim=-1).sqrt()
+    mav = x.abs().mean(dim=-1)
+    return torch.cat([rms, mav])
 
-    config = build_config(
-        eval_pids           = args.eval_pids,
-        n_way               = args.n_way,
-        metric              = args.metric,
-        seed                = args.seed,
-        pca_n_components    = args.pca_dims,
-        aug_support         = args.aug,
-        aug_n_copies        = args.aug_copies,
-        use_fixed_rep_split = not args.random_split,
-    )
 
-    # No encoder -- raw + PCA baselines only.
-    # To add a neural encoder:
-    #   results = eval_from_path(..., encoder=model.backbone)
-    results = eval_from_path(
-        args.tensor_dict,
-        config,
-        encoder         = None,
-        shot_conditions = args.shots,
-    )
+def feat_rms_mav_var(x: torch.Tensor) -> torch.Tensor:
+    """RMS, MAV, variance per channel: (C, T) -> (3*C,)"""
+    rms = x.pow(2).mean(dim=-1).sqrt()
+    mav = x.abs().mean(dim=-1)
+    var = x.var(dim=-1)
+    return torch.cat([rms, mav, var])
+
+
+def feat_waveform_length(x: torch.Tensor) -> torch.Tensor:
+    """Waveform length (sum of abs diff) per channel: (C, T) -> (C,)"""
+    return x.diff(dim=-1).abs().sum(dim=-1)
+
+
+def feat_full_td(x: torch.Tensor) -> torch.Tensor:
+    """
+    Full time-domain feature set (commonly used in EMG literature):
+    RMS, MAV, variance, waveform length, zero-crossings.
+    (C, T) -> (5*C,)
+    """
+    rms = x.pow(2).mean(-1).sqrt()
+    mav = x.abs().mean(-1)
+    var = x.var(-1)
+    wl  = x.diff(dim=-1).abs().sum(-1)
+    # Zero crossings: count sign changes
+    zc  = ((x[:, :-1] * x[:, 1:]) < 0).float().sum(-1)
+    return torch.cat([rms, mav, var, wl, zc])
+
+##################################################################
+# Plotting to determine how many PCs to take
+
+import matplotlib.pyplot as plt
+
+def plot_pca_variance(emg_data: Optional[torch.Tensor] = None, 
+                      imu_data: Optional[torch.Tensor] = None, 
+                      save_path: str = "pca_variance_analysis.png"):
+    """
+    Plots cumulative explained variance for EMG, IMU, and Shared modalities.
+    Expects tensors of shape (N, C, T).
+    """
+    def get_cum_variance(x):
+        # Flatten N and T to get (N*T, C) as done in your _fit_spatial_pca
+        N, C, T = x.shape
+        x_flat = x.permute(0, 2, 1).reshape(-1, C)
+        
+        # Center the data
+        x_centered = x_flat - torch.mean(x_flat, dim=0)
+        
+        # Calculate Covariance and Eigenvalues
+        cov = torch.matmul(x_centered.T, x_centered) / (x_centered.shape[0] - 1)
+        eigenvalues, _ = torch.linalg.eigh(cov)
+        
+        # Sort descending and calculate cumulative ratio
+        eigenvalues = torch.flip(eigenvalues, dims=[0])
+        var_ratio = eigenvalues / torch.sum(eigenvalues)
+        return torch.cumsum(var_ratio, dim=0).cpu().numpy()
+
+    plots = []
+    if emg_data is not None: plots.append(('EMG', emg_data))
+    if imu_data is not None: plots.append(('IMU', imu_data))
+    if emg_data is not None and imu_data is not None:
+        shared = torch.cat([emg_data, imu_data], dim=1)
+        plots.append(('Shared (EMG+IMU)', shared))
+
+    if not plots:
+        print("No data provided to plot."); return
+
+    fig, axes = plt.subplots(1, len(plots), figsize=(6 * len(plots), 5))
+    if len(plots) == 1: axes = [axes]
+
+    for i, (label, data) in enumerate(plots):
+        cum_var = get_cum_variance(data)
+        comps = range(1, len(cum_var) + 1)
+        
+        axes[i].plot(comps, cum_var, 'o-', markersize=4, label='Variance')
+        axes[i].set_title(f'{label} PCA Analysis')
+        axes[i].set_xlabel('Number of Components')
+        axes[i].set_ylabel('Cumulative Explained Variance')
+        
+        # Add reference lines
+        axes[i].axhline(y=0.95, color='r', linestyle='--', alpha=0.6, label='95%')
+        axes[i].axhline(y=0.90, color='g', linestyle='--', alpha=0.6, label='90%')
+        
+        # Find exact 95% threshold for the user
+        idx_95 = (cum_var >= 0.95).argmax() + 1
+        axes[i].annotate(f'95% @ {idx_95} PCs', xy=(idx_95, 0.95), xytext=(idx_95, 0.80),
+                         arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=4))
+        
+        axes[i].grid(True, which='both', linestyle='--', alpha=0.5)
+        axes[i].legend(loc='lower right')
+
+    plt.tight_layout()
+    plt.savefig(save_path)
+    print(f"Analysis plot saved to {save_path}")
+
+# Example Usage:
+# plot_pca_variance(my_emg_tensor, my_imu_tensor)

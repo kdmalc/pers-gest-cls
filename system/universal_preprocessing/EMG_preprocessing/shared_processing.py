@@ -271,9 +271,11 @@ def create_khushaba_spectralmomentsFE_vectors(nested_dict, fs=2000):
 
 def load_segraw_data(pIDs, data_dir_path, modalities=("E",),
                      expt_types=("experimenter-defined",),
-                     num_emg_channels=16, num_imu_sensors=15):
+                     num_emg_channels=16, num_imu_sensors=12):
     """
     Load segmented raw CSV files into a nested dict.
+
+    NOTE: num_imu_sensors is not called but thats fine bc we manually hardcode/correct the IMU channels. Simple range(num_imu_sensors) would be incorrect
 
     modalities: tuple/list containing 'E' (EMG), 'I' (IMU), or both.
     Returns: { PID -> { gesture_id -> { gesture_num -> { modality -> [ch x time] } } } }
