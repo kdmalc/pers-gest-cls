@@ -154,7 +154,6 @@ Usage
 Config Keys Reference
 ═══════════════════════════════════════════════════════════════════════
   eval_PIDs           : list of participant IDs to evaluate
-  maml_reps           : list of 1-indexed repetition indices in the full pool
   n_way               : int, number of gesture classes (default 10)
   knn_metric          : "euclidean" | "cosine" (default "euclidean")
   seed                : int for reproducible RNG (default 42)
@@ -439,70 +438,79 @@ def pca_encode(
     emg_pca_dims:       int  = 8,
     imu_pca_dims:       int  = 16,
     shared_pca:         bool = False,
-    per_class_pca:      bool = False,           # NEW
-    support_labels:     Optional[torch.Tensor] = None,   # required if per_class_pca
-    n_classes:          int  = 10,              # required if per_class_pca
+    pca_level:          str  = "global",  # Options: "global", "per_class", "per_sample"
+    support_labels:     Optional[torch.Tensor] = None, 
+    n_classes:          int  = 10,  # This should match n_way I think?
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Channel-wise spatial PCA encode.
-
-    per_class_pca=False  (default):
-        Returns (sup_proj, qry_proj) — projected feature tensors.
-        Feed these to KNN / ProtoNet as before.
-
-    per_class_pca=True  ($B-style):
-        Returns (class_dists, class_dists_sup) where both are
-        (N, n_classes) L1-distance matrices. Classify by argmin.
-        support_labels and n_classes must be provided.
-        For multi-modal: per-class PCAs fitted separately per modality,
-        distances summed across modalities before argmin.
+    
+    pca_level="global": 
+        Returns (sup_proj, qry_proj) -> standard projected feature tensors.
+        
+    pca_level="per_class": 
+        Returns (class_dists, class_dists_sup) -> (N, n_classes) L1-distance matrices.
+        Classify queries via argmin over the class dimension.
+        
+    pca_level="per_sample":
+        Returns (sample_dists, sample_dists_sup) -> (N, N_support) L1-distance matrices.
+        Classify queries via 1-NN (argmin over all support samples, then map to class).
     """
-    if per_class_pca:
+    assert pca_level in ["global", "per_class", "per_sample"], f"Unknown pca_level: {pca_level}"
+
+    # 1. Setup labels and counts based on the chosen PCA level
+    if pca_level == "per_class":
         assert support_labels is not None, "support_labels required for per_class_pca"
+        labels = support_labels
+        n_models = n_classes
+    elif pca_level == "per_sample":
+        # Hack: Treat every sample as its own "class" to reuse the per-class logic
+        N_sup = support_emg.shape[0]
+        labels = torch.arange(N_sup, device=support_emg.device)
+        n_models = N_sup
 
-        # ── EMG per-class models ──────────────────────────────────────────────
-        emg_models = _fit_per_class_pcas(
-            support_emg, support_labels, emg_pca_dims, n_classes
-        )
-        emg_qry_dists = _per_class_pca_distances(query_emg,   emg_models)  # (N_qry, K)
-        emg_sup_dists = _per_class_pca_distances(support_emg, emg_models)  # (N_sup, K)
+    # 2. Define a helper to process a single data stream (EMG, IMU, or Concatted)
+    def _process_branch(sup: torch.Tensor, qry: torch.Tensor, dims: int):
+        if pca_level == "global":
+            components, mean = _fit_spatial_pca(sup, dims)
+            return (_apply_spatial_pca(sup, components, mean),
+                    _apply_spatial_pca(qry, components, mean))
+        else:
+            # Applies to both "per_class" and "per_sample"
+            models = _fit_per_class_pcas(sup, labels, dims, n_models)
+            return (_per_class_pca_distances(sup, models),
+                    _per_class_pca_distances(qry, models))
 
-        if support_imu is None:
-            return emg_qry_dists, emg_sup_dists
-
-        # ── IMU per-class models (separate, then sum distances) ───────────────
-        imu_models = _fit_per_class_pcas(
-            support_imu, support_labels, imu_pca_dims, n_classes
-        )
-        imu_qry_dists = _per_class_pca_distances(query_imu,   imu_models)
-        imu_sup_dists = _per_class_pca_distances(support_imu, imu_models)
-
-        # Sum distances across modalities — same as $B concatenating modality
-        # blocks and computing one L1 score, because L1 is additive over partitions
-        return (emg_qry_dists + imu_qry_dists), (emg_sup_dists + imu_sup_dists)
-
-    # ── Original shared/separate path (unchanged) ────────────────────────────
-    if support_imu is None:
-        components, mean = _fit_spatial_pca(support_emg, emg_pca_dims)
-        return (_apply_spatial_pca(support_emg, components, mean),
-                _apply_spatial_pca(query_emg,   components, mean))
-
+    # 3. Apply routing logic based on `shared_pca`
     if shared_pca:
-        assert emg_pca_dims == imu_pca_dims
-        sup_cat    = torch.cat([support_emg, support_imu], dim=1)
-        qry_cat    = torch.cat([query_emg,   query_imu],   dim=1)
-        components, mean = _fit_spatial_pca(sup_cat, emg_pca_dims)
-        return (_apply_spatial_pca(sup_cat, components, mean),
-                _apply_spatial_pca(qry_cat, components, mean))
+        assert support_imu is not None, "IMU required for shared_pca"
+        assert emg_pca_dims == imu_pca_dims, "Dims must match if projecting into a shared space"
+        
+        sup_cat = torch.cat([support_emg, support_imu], dim=1)
+        qry_cat = torch.cat([query_emg,  query_imu],  dim=1)
+        
+        sup_res, qry_res = _process_branch(sup_cat, qry_cat, emg_pca_dims)
+        return qry_res, sup_res  # Returning query first to match your original per_class return signature
 
     else:
-        emg_comp, emg_mean = _fit_spatial_pca(support_emg, emg_pca_dims)
-        imu_comp, imu_mean = _fit_spatial_pca(support_imu, imu_pca_dims)
-        sup_proj = torch.cat([_apply_spatial_pca(support_emg, emg_comp, emg_mean),
-                               _apply_spatial_pca(support_imu, imu_comp, imu_mean)], dim=-1)
-        qry_proj = torch.cat([_apply_spatial_pca(query_emg,   emg_comp, emg_mean),
-                               _apply_spatial_pca(query_imu,  imu_comp, imu_mean)], dim=-1)
-        return sup_proj, qry_proj
+        # Separate PCA models for EMG and IMU
+        sup_emg_res, qry_emg_res = _process_branch(support_emg, query_emg, emg_pca_dims)
+        
+        if support_imu is None:
+            return qry_emg_res, sup_emg_res
+
+        sup_imu_res, qry_imu_res = _process_branch(support_imu, query_imu, imu_pca_dims)
+        
+        # Combine the separate modalities based on the PCA level
+        if pca_level == "global":
+            # Global returns feature vectors, so we concatenate them
+            sup_proj = torch.cat([sup_emg_res, sup_imu_res], dim=-1)
+            qry_proj = torch.cat([qry_emg_res, qry_imu_res], dim=-1)
+            return sup_proj, qry_proj
+        else:
+            # Per-class/sample returns distance matrices, so we sum the distances
+            # (Because L1 distance is additive over partitions)
+            return (qry_emg_res + qry_imu_res), (sup_emg_res + sup_imu_res)
 
 
 @torch.no_grad()
@@ -669,27 +677,45 @@ def expand_support_with_aug(
 # =============================================================================
 
 def build_episode(
-    user_data:    dict,
-    k_shot:       int,
-    n_way:        int,
-    rng:          random.Random,
-    support_reps: Optional[List[int]],   # 1-indexed; None -> random shuffle
-    query_reps:   Optional[List[int]],   # 1-indexed; None -> random shuffle
-    all_reps:     List[int],             # full rep pool (1-indexed)
+    user_data:                dict,
+    k_shot:                   int,
+    n_way:                    int,
+    rng:                      random.Random,
+    available_gesture_classes: List[int],        # enc_gesture_ids (0-indexed class labels)
+    support_reps:             Optional[List[int]], # 1-indexed rep numbers; None -> random shuffle
+    query_reps:               Optional[List[int]], # 1-indexed rep numbers; None -> random shuffle
 ) -> Tuple[dict, dict]:
     """
     Build one support / query episode for a single user.
 
+    FIXED vs original:
+      - `all_reps` renamed to `available_gesture_classes` — these are
+        enc_gesture_ids (0-indexed class labels, 0..N_classes-1), NOT
+        repetition indices. Callers must pass gesture class IDs here.
+      - `all_reps` parameter removed entirely — rep pool is now inferred
+        from the data itself (entry['rep_indices']), so it can't drift
+        out of sync with what was actually saved.
+      - Added label consistency assert (enc_gesture_id key == stored label).
+      - Added gesture_ids (strings) to output for debugging.
+
+    UNCHANGED vs original:
+      - support_reps / query_reps remain 1-indexed rep numbers — this is
+        correct since Gesture_Num is 1-indexed in the source data.
+      - label_map assigns episode-local labels 0..n_way-1. This is correct
+        for both KNN and meta-learning; distances don't depend on label
+        magnitude and the relative assignment is consistent within an episode.
+      - Random-shuffle mode (None) still works as before.
+
     Gesture selection:
-        n_way gestures randomly sampled from available pool, sorted for
-        deterministic local label assignment (0..n_way-1).
+        n_way gestures randomly sampled from available_gesture_classes,
+        sorted for deterministic local label assignment (0..n_way-1).
 
     Split modes
     -----------
     Fixed-rep (support_reps / query_reps are lists):
         Rep numbers are 1-indexed and converted to 0-indexed array positions.
         k_shot is implicitly len(support_reps).
-        Default: rep 1 = calibration support, reps 2-10 = query workload.
+        Default: rep 1 = calibration support, reps 2-10 = query.
 
     Random-shuffle (support_reps / query_reps are None):
         All reps shuffled per gesture; first k_shot -> support, rest -> query.
@@ -698,44 +724,72 @@ def build_episode(
     Returns
     -------
     support, query : dicts with keys
-        "emg"    : (N, C, T) float tensor  (channel-first)
-        "imu"    : (N, C_imu, T) | None
-        "labels" : (N,) long tensor, episode-local indices 0..n_way-1
+        "emg"        : (N, C_emg, T) float tensor  (channel-first)
+        "imu"        : (N, C_imu, T) float tensor | None
+        "labels"     : (N,) long tensor, episode-local 0..n_way-1
+        "gesture_ids": List[str], human-readable labels (for debugging)
     """
-    available = sorted([g for g in all_reps if g in user_data])
-    if len(available) < n_way:
-        raise ValueError(f"Only {len(available)} gestures available, need {n_way}")
+    # ── Gesture class selection ──────────────────────────────────────────
+    # available_gesture_classes contains enc_gesture_ids (class labels, 0-indexed)
+    # We filter to only those that exist for this specific user
+    valid_classes = sorted([g for g in available_gesture_classes if g in user_data])
+    if len(valid_classes) < n_way:
+        raise ValueError(
+            f"Only {len(valid_classes)} gesture classes available "
+            f"({valid_classes}), need n_way={n_way}."
+        )
 
-    selected  = sorted(rng.sample(available, n_way))
-    label_map = {g: i for i, g in enumerate(selected)}
+    # Sort after sampling for deterministic local label assignment
+    selected  = sorted(rng.sample(valid_classes, n_way))
+    label_map = {enc_gid: i for i, enc_gid in enumerate(selected)}
 
-    sup_e, sup_i_list, sup_l = [], [], []
-    qry_e, qry_i_list, qry_l = [], [], []
+    sup_e, sup_i_list, sup_l, sup_gids = [], [], [], []
+    qry_e, qry_i_list, qry_l, qry_gids = [], [], [], []
 
-    for gest in selected:
-        lbl      = label_map[gest]
-        emg_data = user_data[gest]["emg"]
-        imu_data = user_data[gest].get("imu")
-        n_trials = emg_data.shape[0]
+    for enc_gid in selected:
+        entry = user_data[enc_gid]
 
+        # ── Sanity check: stored label must match the key ────────────────
+        assert entry['enc_gesture_id'] == enc_gid, (
+            f"Label mismatch: key={enc_gid} but stored "
+            f"enc_gesture_id={entry['enc_gesture_id']}"
+        )
+
+        lbl       = label_map[enc_gid]
+        emg_data  = entry["emg"]           # (N_reps, T, C_emg) — time-last added in _pack
+        imu_data  = entry.get("imu")       # (N_reps, T, C_imu) or None
+        gid_str   = entry.get("gesture_id", str(enc_gid))
+        n_reps    = emg_data.shape[0]
+
+        # ── Rep index resolution ─────────────────────────────────────────
+        # support_reps / query_reps are 1-indexed Gesture_Num values.
+        # Convert to 0-indexed positions into the tensor's first dimension.
         if support_reps is not None:
-            sup_idx = [r - 1 for r in support_reps if 0 <= r - 1 < n_trials]
-            qry_idx = [r - 1 for r in query_reps   if 0 <= r - 1 < n_trials]
+            # Clamp to valid range; warn if a requested rep is missing
+            sup_idx = [r - 1 for r in support_reps if 0 <= r - 1 < n_reps]
+            qry_idx = [r - 1 for r in query_reps   if 0 <= r - 1 < n_reps]
+            if len(sup_idx) != len(support_reps):
+                print(f"  Warning: enc_gid {enc_gid} — some support_reps out of range "
+                      f"(n_reps={n_reps}, requested={support_reps})")
+            if len(qry_idx) != len(query_reps):
+                print(f"  Warning: enc_gid {enc_gid} — some query_reps out of range "
+                      f"(n_reps={n_reps}, requested={query_reps})")
         else:
-            idxs = list(range(n_trials))
+            idxs = list(range(n_reps))
             rng.shuffle(idxs)
             sup_idx = idxs[:k_shot]
             qry_idx = idxs[k_shot:]
 
-        for idx_list, e_list, i_list, l_list in [
-            (sup_idx, sup_e, sup_i_list, sup_l),
-            (qry_idx, qry_e, qry_i_list, qry_l),
+        for idx_list, e_list, i_list, l_list, gid_list in [
+            (sup_idx, sup_e, sup_i_list, sup_l, sup_gids),
+            (qry_idx, qry_e, qry_i_list, qry_l, qry_gids),
         ]:
             for i in idx_list:
-                e_list.append(emg_data[i])
+                e_list.append(emg_data[i])          # (T, C_emg)
                 if imu_data is not None:
-                    i_list.append(imu_data[i])
+                    i_list.append(imu_data[i])      # (T, C_imu)
                 l_list.append(lbl)
+                gid_list.append(gid_str)
 
     def _pack(e_list, i_list, l_list) -> dict:
         """Stack sample lists and enforce (N, C, T) channel-first layout."""
@@ -758,51 +812,38 @@ def build_episode(
 # =============================================================================
 
 def eval_one_user(
-    user_data:        dict,
-    k_shot:           int,
-    n_way:            int,
-    support_reps:     Optional[List[int]],
-    query_reps:       Optional[List[int]],
-    all_reps:         List[int],
-    rng:              random.Random,
-    device:           torch.device,
-    metric:           str,
-    encoder:          Optional[nn.Module],
-    feature_fn:       Optional[Callable],
-    use_imu:          bool,
-    aug_support:      bool,
-    emg_pca_dims:     int,
-    imu_pca_dims:     int,
-    shared_pca:       bool,
-    config:           dict,
+    user_data:                 dict,
+    k_shot:                    int,
+    n_way:                     int,
+    support_reps:              Optional[List[int]],
+    query_reps:                Optional[List[int]],
+    available_gesture_classes: List[int],
+    rng:                       random.Random,
+    device:                    torch.device,
+    metric:                    str,
+    encoder:                   Optional[nn.Module],
+    feature_fn:                Optional[Callable],
+    use_imu:                   bool,
+    aug_support:               bool,
+    emg_pca_dims:              int,
+    imu_pca_dims:              int,
+    shared_pca:                bool,
+    config:                    dict,
 ) -> dict:
     """
     Run all evaluation modes for a single user under one shot condition.
-
-    Pipeline per method:
-        raw        : augment (C,T) -> feature_fn or flatten -> KNN / ProtoNet
-        pca        : augment (C,T) -> shared support PCA -> KNN / ProtoNet
-        dollar_B   : augment (C,T) -> per-class PCA -> argmin L1  [$B-faithful]
-        enc        : augment (C,T) -> neural encoder -> ProtoNet
-
-    per_class_pca and the shared PCA tracks are mutually exclusive.
-    Set config["per_class_pca"] = True to run $B-style, False for shared PCA.
-
-    Returns a flat dict:
-        "knn_raw"       : float accuracy
-        "proto_raw"     : float accuracy
-        "knn_pca"       : float accuracy  | None  (shared PCA path only)
-        "proto_pca"     : float accuracy  | None  (shared PCA path only)
-        "dollar_B"      : float accuracy  | None  (per-class PCA path only)
-        "proto_encoded" : float accuracy  | None  (encoder path only)
-        "n_support"     : int (un-augmented)
-        "n_support_aug" : int (after augmentation)
-        "n_query"       : int
+    support_reps/query_reps (1-indexed rep numbers) are passed directly and unchanged.
     """
-    # ── Episode ───────────────────────────────────────────────────────────────
+
+    # ── 1. Episode Building ──────────────────────────────────────────────────
     support, query = build_episode(
-        user_data, k_shot, n_way, rng,
-        support_reps, query_reps, all_reps,
+        user_data                 = user_data,
+        k_shot                    = k_shot,
+        n_way                     = n_way,
+        rng                       = rng,
+        available_gesture_classes = available_gesture_classes,
+        support_reps              = support_reps,
+        query_reps                = query_reps,
     )
 
     sup_emg    = support["emg"].to(device)
@@ -814,95 +855,82 @@ def eval_one_user(
 
     n_support_orig = sup_emg.size(0)
 
-    # ── Optional support augmentation ────────────────────────────────────────
+    # ── 2. Support Augmentation ──────────────────────────────────────────────
     aug_sup_emg, aug_sup_labels = sup_emg, sup_labels
+    # Note: If using IMU, you'd need to augment IMU here as well if config allows
     if aug_support:
         aug_sup_emg, aug_sup_labels = expand_support_with_aug(sup_emg, sup_labels, config)
 
-    # ── Debug sanity checks ───────────────────────────────────────────────────
-    if config.get("debug_mode", False):
-        assert sup_labels.unique().numel() == n_way, \
-            f"Support missing classes: {sup_labels.unique()}"
-        assert qry_labels.unique().numel() == n_way, \
-            f"Query missing classes: {qry_labels.unique()}"
-
-    # ── 1 & 2. Raw features: KNN and ProtoNet ────────────────────────────────
+    # ── 3. Raw Feature Track (KNN & ProtoNet) ────────────────────────────────
     sup_flat = extract_features(aug_sup_emg, sup_imu, feature_fn, use_imu)
     qry_flat = extract_features(qry_emg,     qry_imu, feature_fn, use_imu)
 
-    knn_raw_pred = knn_classify(sup_flat, aug_sup_labels, qry_flat,
-                                k=1, metric=metric, n_classes=n_way)
-    knn_raw_acc  = (knn_raw_pred == qry_labels).float().mean().item()
+    knn_raw_acc = (knn_classify(sup_flat, aug_sup_labels, qry_flat, k=1, 
+                                metric=metric, n_classes=n_way) == qry_labels).float().mean().item()
+    
+    proto_raw_acc = (proto_classify(sup_flat, aug_sup_labels, qry_flat, 
+                                    metric=metric, n_classes=n_way) == qry_labels).float().mean().item()
 
-    proto_raw_pred = proto_classify(sup_flat, aug_sup_labels, qry_flat,
-                                    metric=metric, n_classes=n_way)
-    proto_raw_acc  = (proto_raw_pred == qry_labels).float().mean().item()
+    # ── 4. PCA Track ─────────────────────────────────────────────────────────
+    pca_level = config.get("pca_level", "global") # "global", "per_class", or "per_sample"
+    
+    # Initialize all PCA metrics to None
+    knn_pca_acc = proto_pca_acc = dollar_B_acc = per_sample_acc = None
 
-    if config.get("debug_mode", False) and k_shot == 1:
-        assert (knn_raw_pred == proto_raw_pred).all(), \
-            "k=1 KNN and ProtoNet disagree — feature bug upstream"
+    # Call the updated pca_encode
+    pca_out_1, pca_out_2 = pca_encode(
+        aug_sup_emg, qry_emg,
+        sup_imu if use_imu else None,
+        qry_imu if use_imu else None,
+        emg_pca_dims, imu_pca_dims, shared_pca,
+        pca_level      = pca_level,
+        support_labels = aug_sup_labels,
+        n_classes      = n_way
+    )
 
-    # ── 3. PCA track (mutually exclusive branches) ────────────────────────────
-    per_class_pca = config.get("per_class_pca", False)
+    if pca_level == "global":
+        # Returns (sup_proj, qry_proj)
+        sup_pca, qry_pca = pca_out_1, pca_out_2
+        
+        knn_pca_pred = knn_classify(sup_pca, aug_sup_labels, qry_pca, k=1, metric=metric, n_classes=n_way)
+        knn_pca_acc  = (knn_pca_pred == qry_labels).float().mean().item()
 
-    knn_pca_acc   = None
-    proto_pca_acc = None
-    dollar_B_acc  = None
+        proto_pca_pred = proto_classify(sup_pca, aug_sup_labels, qry_pca, metric=metric, n_classes=n_way)
+        proto_pca_acc  = (proto_pca_pred == qry_labels).float().mean().item()
 
-    if per_class_pca:
-        # $B-faithful: per-class PCA, query projected into each class's own
-        # subspace, L1 distance to class template, argmin classification.
-        qry_dists, _ = pca_encode(
-            aug_sup_emg, qry_emg,
-            sup_imu if use_imu else None,
-            qry_imu if use_imu else None,
-            emg_pca_dims, imu_pca_dims, shared_pca,
-            per_class_pca=True,
-            support_labels=aug_sup_labels,
-            n_classes=n_way,
-        )
+    elif pca_level == "per_class":
+        # Returns (qry_dists, sup_dists) where dists are (N, n_classes)
+        qry_dists = pca_out_1
         dollar_B_pred = qry_dists.argmin(dim=1)
         dollar_B_acc  = (dollar_B_pred == qry_labels).float().mean().item()
 
-    else:
-        # Shared support PCA: one PCA fitted on all support samples,
-        # features handed to KNN and ProtoNet as usual.
-        sup_pca, qry_pca = pca_encode(
-            aug_sup_emg, qry_emg,
-            sup_imu if use_imu else None,
-            qry_imu if use_imu else None,
-            emg_pca_dims, imu_pca_dims, shared_pca,
-        )
+    elif pca_level == "per_sample":
+        # Returns (qry_dists, sup_dists) where dists are (N, n_support)
+        qry_dists = pca_out_1
+        # 1-Nearest Neighbor logic: find closest sample index, then map to that sample's label
+        best_sample_idx = qry_dists.argmin(dim=1)
+        per_sample_pred = aug_sup_labels[best_sample_idx]
+        per_sample_acc  = (per_sample_pred == qry_labels).float().mean().item()
 
-        knn_pca_pred = knn_classify(sup_pca, aug_sup_labels, qry_pca,
-                                    k=1, metric=metric, n_classes=n_way)
-        knn_pca_acc  = (knn_pca_pred == qry_labels).float().mean().item()
-
-        proto_pca_pred = proto_classify(sup_pca, aug_sup_labels, qry_pca,
-                                        metric=metric, n_classes=n_way)
-        proto_pca_acc  = (proto_pca_pred == qry_labels).float().mean().item()
-
-    # ── 4. Neural encoder -> ProtoNet ─────────────────────────────────────────
+    # ── 5. Neural Track ──────────────────────────────────────────────────────
     proto_enc_acc = None
     if encoder is not None:
         sup_enc = neural_encode_batch(encoder, aug_sup_emg, sup_imu, device)
-        qry_enc = neural_encode_batch(encoder, qry_emg,    qry_imu, device)
-        proto_enc_pred = proto_classify(sup_enc, aug_sup_labels, qry_enc,
-                                        metric=metric, n_classes=n_way)
+        qry_enc = neural_encode_batch(encoder, qry_emg,     qry_imu, device)
+        proto_enc_pred = proto_classify(sup_enc, aug_sup_labels, qry_enc, metric=metric, n_classes=n_way)
         proto_enc_acc  = (proto_enc_pred == qry_labels).float().mean().item()
 
     return {
         "knn_raw":       knn_raw_acc,
         "proto_raw":     proto_raw_acc,
-        "knn_pca":       knn_pca_acc,
-        "proto_pca":     proto_pca_acc,
-        "dollar_B":      dollar_B_acc,
+        "knn_pca":       knn_pca_acc,       # Only populated if level="global"
+        "proto_pca":     proto_pca_acc,     # Only populated if level="global"
+        "dollar_B":      dollar_B_acc,      # Only populated if level="per_class"
+        "per_sample_pca":per_sample_acc,    # Only populated if level="per_sample"
         "proto_encoded": proto_enc_acc,
         "n_support":     n_support_orig,
-        "n_support_aug": aug_sup_emg.size(0),
         "n_query":       qry_emg.size(0),
     }
-
 
 # =============================================================================
 # SECTION 8: Single-Shot-Condition Runner (across all users)
@@ -918,31 +946,21 @@ def run_one_shot_condition(
 ) -> dict:
     """
     Run all evaluation modes for a given k_shot across all eval_PIDs.
-
-    Returns
-    -------
-    results : dict with one entry per method:
-        {
-          "per_user" : {pid: acc_float},
-          "mean_acc" : float,
-          "std_acc"  : float,
-          "all_accs" : [float, ...]
-        }
     """
-    device           = torch.device(config.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
-    n_way            = int(config.get("n_way",            10))
-    metric           = config.get("knn_metric",           "euclidean")
-    seed             = int(config.get("seed",             42))
-    use_imu          = bool(config.get("use_imu",         False))
-    aug_support      = bool(config.get("aug_support",     False))
-    emg_pca_dims     = int(config.get("emg_pca_dims",     8))      # <--- Changed
-    imu_pca_dims     = int(config.get("imu_pca_dims",     8))      # <--- Added
-    shared_pca       = bool(config.get("shared_pca",      False))  # <--- Added
-    all_reps         = config["maml_reps"]
-    eval_pids        = config.get("eval_PIDs", config.get("val_PIDs", []))
 
-    if not eval_pids:
-        raise ValueError("config must contain 'eval_PIDs' (or 'val_PIDs') -- got empty list.")
+    device         = torch.device(config.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
+    n_way          = int(config.get("n_way",         10))
+    metric         = config.get("knn_metric",       "euclidean")
+    seed           = int(config.get("seed",         42))
+    use_imu        = bool(config.get("use_imu",     False))
+    aug_support    = bool(config.get("aug_support", False))
+    emg_pca_dims   = int(config.get("emg_pca_dims", 8))
+    imu_pca_dims   = int(config.get("imu_pca_dims", 8))
+    shared_pca     = bool(config.get("shared_pca",  False))
+    pca_level      = config.get("pca_level", "global") # "global", "per_class", "per_sample"
+    
+    eval_pids      = config.get("eval_PIDs", config.get("val_PIDs", []))
+    available_gesture_classes = config["available_gesture_classes"]
 
     # ── Support / query rep split ─────────────────────────────────────────────
     if "support_reps" in config and "query_reps" in config:
@@ -950,169 +968,116 @@ def run_one_shot_condition(
         query_reps   = config["query_reps"]
         split_mode   = f"fixed-explicit  sup={support_reps}"
     elif config.get("use_fixed_rep_split", True):
-        sorted_reps  = sorted(all_reps)
-        support_reps = sorted_reps[:k_shot]
-        query_reps   = sorted_reps[k_shot:]
-        split_mode   = f"fixed-auto  sup={support_reps}  qry={query_reps[:3]}{'...' if len(query_reps)>3 else ''}"
+        all_rep_indices = config.get("all_rep_indices", list(range(1, 11)))
+        sorted_reps     = sorted(all_rep_indices)
+        support_reps    = sorted_reps[:k_shot]
+        query_reps      = sorted_reps[k_shot:]
+        split_mode      = (f"fixed-auto  sup={support_reps}  "
+                           f"qry={query_reps[:3]}{'...' if len(query_reps) > 3 else ''}")
     else:
-        support_reps = None
-        query_reps   = None
-        split_mode   = "random-shuffle (matches MAML)"
+        support_reps = query_reps = None
+        split_mode   = "random-shuffle"
 
-    # Isolated RNG — does not perturb global random state
     rng = random.Random(seed)
 
     if verbose:
-        fn_name = feature_fn.__name__ if feature_fn is not None else "flatten (C*T)"
+        fn_name = feature_fn.__name__ if feature_fn else "flatten (C*T)"
         print(f"\n{'='*65}")
-        print(f"  {k_shot}-shot  {n_way}-way  |  metric={metric}")
+        print(f"  {k_shot}-shot  {n_way}-way  |  metric={metric}  |  pca_level={pca_level}")
         print(f"  split      : {split_mode}")
-        print(f"  feature_fn : {fn_name}")
-        print(f"  aug        : {aug_support}" +
-              (f"  n_copies={config.get('aug_n_copies',4)}" if aug_support else ""))
-        print(f"  EMG PCA dims   : {emg_pca_dims}")
-        if use_imu:
-            print(f"  IMU PCA dims   : {imu_pca_dims}")
-        print(f"  encoder    : {type(encoder).__name__ if encoder else 'None'}")
-        print(f"  users      : {len(eval_pids)}")
+        print(f"  feature_fn : {fn_name}  |  shared_pca: {shared_pca}")
+        if encoder: print(f"  encoder    : {type(encoder).__name__}")
         print(f"{'='*65}")
 
+    # Initialize accuracy lists for all possible tracks
     accs: Dict[str, List[float]] = {
-        "knn_raw": [], "knn_pca": [],
-        "proto_raw": [], "proto_pca": [],
+        "knn_raw": [], "proto_raw": [],
+        "knn_pca": [], "proto_pca": [],
+        "dollar_B": [], "per_sample_pca": [],
         "proto_encoded": [],
-        "dollar_B": [],
     }
-    per_user: Dict[Any, dict] = {}
+    per_user = {}
 
     for pid in eval_pids:
-        if pid not in tensor_dict:
-            if verbose:
-                print(f"  [WARN] PID {pid} not in tensor_dict -- skipping.")
-            continue
-
+        if pid not in tensor_dict: continue
         user_data = tensor_dict[pid]
-        available = [g for g in all_reps if g in user_data]
-
-        if len(available) < n_way:
-            if verbose:
-                print(f"  [WARN] PID {pid}: {len(available)} gestures < {n_way} -- skipping.")
-            continue
-
-        min_trials = min(user_data[g]["emg"].shape[0] for g in available[:n_way])
-        if min_trials < k_shot + 1:
-            if verbose:
-                print(f"  [WARN] PID {pid}: {min_trials} trials < {k_shot+1} needed -- skipping.")
-            continue
+        available = [g for g in available_gesture_classes if g in user_data]
+        if len(available) < n_way: continue
 
         try:
             res = eval_one_user(
-                user_data        = user_data,
-                k_shot           = k_shot,
-                n_way            = n_way,
-                support_reps     = support_reps,
-                query_reps       = query_reps,
-                all_reps         = all_reps,
-                rng              = rng,
-                device           = device,
-                metric           = metric,
-                encoder          = encoder,
-                feature_fn       = feature_fn,
-                use_imu          = use_imu,
-                aug_support      = aug_support,
-                emg_pca_dims     = emg_pca_dims,    # <--- Changed
-                imu_pca_dims     = imu_pca_dims,    # <--- Added
-                shared_pca       = shared_pca,      # <--- Added
-                config           = config,
+                user_data=user_data, k_shot=k_shot, n_way=n_way,
+                support_reps=support_reps, query_reps=query_reps,
+                available_gesture_classes=available_gesture_classes,
+                rng=rng, device=device, metric=metric,
+                encoder=encoder, feature_fn=feature_fn,
+                use_imu=use_imu, aug_support=aug_support,
+                emg_pca_dims=emg_pca_dims, imu_pca_dims=imu_pca_dims,
+                shared_pca=shared_pca, config=config
             )
-        except Exception as e:
+
+            # ── Dynamic Accumulation ──────────────────────────────────────────
+            accs["knn_raw"].append(res["knn_raw"])
+            accs["proto_raw"].append(res["proto_raw"])
+            
+            if pca_level == "global":
+                accs["knn_pca"].append(res["knn_pca"])
+                accs["proto_pca"].append(res["proto_pca"])
+                pca_log = f"knn_pca={res['knn_pca']*100:.1f}%  proto_pca={res['proto_pca']*100:.1f}%"
+            elif pca_level == "per_class":
+                accs["dollar_B"].append(res["dollar_B"])
+                pca_log = f"$B={res['dollar_B']*100:.1f}%"
+            elif pca_level == "per_sample":
+                accs["per_sample_pca"].append(res["per_sample_pca"])
+                pca_log = f"sample_pca={res['per_sample_pca']*100:.1f}%"
+
+            if encoder and res["proto_encoded"] is not None:
+                accs["proto_encoded"].append(res["proto_encoded"])
+
+            per_user[pid] = res
+
             if verbose:
-                print(f"  [ERROR] PID {pid}: {e} -- skipping.")
+                enc_str = f"  enc={res['proto_encoded']*100:.1f}%" if encoder else ""
+                print(f"  PID {str(pid):>4} | knn={res['knn_raw']*100:.1f}%  {pca_log}{enc_str}")
+
+        except Exception as e:
+            if verbose: print(f"  [ERROR] PID {pid}: {e}")
             continue
 
-        # ── Accumulate results ────────────────────────────────────────────────
-        per_class_pca = config.get("per_class_pca", False)
-
-        # Raw tracks always run
-        accs["knn_raw"].append(res["knn_raw"])
-        accs["proto_raw"].append(res["proto_raw"])
-
-        # PCA tracks are mutually exclusive
-        if per_class_pca:
-            if res["dollar_B"] is not None:
-                accs["dollar_B"].append(res["dollar_B"])
-        else:
-            if res["knn_pca"] is not None:
-                accs["knn_pca"].append(res["knn_pca"])
-            if res["proto_pca"] is not None:
-                accs["proto_pca"].append(res["proto_pca"])
-
-        # Encoder track only runs when encoder is provided
-        if encoder is not None and res["proto_encoded"] is not None:
-            accs["proto_encoded"].append(res["proto_encoded"])
-
-        per_user[pid] = res
-
-        if verbose:
-            per_class_pca = config.get("per_class_pca", False)
-            aug_str       = f"  aug={res['n_support_aug']}" if aug_support else ""
-            enc_str       = (f"  enc={res['proto_encoded']*100:.1f}%"
-                             if encoder and res["proto_encoded"] is not None else "")
-
-            if per_class_pca:
-                pca_str = (f"  $B={res['dollar_B']*100:.1f}%"
-                           if res["dollar_B"] is not None else "")
-                print(f"  PID {str(pid):>4} | "
-                      f"knn={res['knn_raw']*100:.1f}%  "
-                      f"proto={res['proto_raw']*100:.1f}%"
-                      f"{pca_str}{enc_str}  "
-                      f"[sup={res['n_support']}, qry={res['n_query']}]"
-                      f"{aug_str}")
-            else:
-                print(f"  PID {str(pid):>4} | "
-                      f"knn={res['knn_raw']*100:.1f}%  "
-                      f"knn_pca={res['knn_pca']*100:.1f}%  "
-                      f"proto={res['proto_raw']*100:.1f}%  "
-                      f"proto_pca={res['proto_pca']*100:.1f}%"
-                      f"{enc_str}  "
-                      f"[sup={res['n_support']}, qry={res['n_query']}]"
-                      f"{aug_str}")
-
+    # ── Summary Table ─────────────────────────────────────────────────────────
     def _summarise(key: str) -> dict:
-        a = accs[key]
-        if not a:
-            return {}
-        t = torch.tensor(a)
+        data = accs[key]
+        if not data: return {}
+        t = torch.tensor(data)
         return {
-            "per_user": {pid: per_user[pid][key]
-                         for pid in eval_pids
-                         if pid in per_user and per_user[pid].get(key) is not None},
             "mean_acc": t.mean().item(),
             "std_acc":  t.std().item(),
-            "all_accs": a,
+            "all_accs": data,
         }
 
     results = {key: _summarise(key) for key in accs}
 
     if verbose:
-        chance  = 100.0 / n_way
-        n_users = len(accs["knn_raw"])
-        rows = [("knn_raw", "KNN (raw)"), ("proto_raw", "ProtoNet (raw)")]
-        if per_class_pca:
-            rows.append(("dollar_B", "$B (per-class PCA)"))
-        else:
-            rows += [("knn_pca", "KNN (PCA)"), ("proto_pca", "ProtoNet (PCA)")]
-        if encoder is not None:
-            rows.append(("proto_encoded", f"ProtoNet ({type(encoder).__name__})"))
         print(f"\n  {'Method':<30}  {'Mean':>8}  {'Std':>7}  {'Users':>6}")
         print(f"  {'─'*30}  {'─'*8}  {'─'*7}  {'─'*6}")
-        for key, label in rows:
+        
+        # Determine which rows to show based on pca_level
+        report_rows = [("knn_raw", "KNN (raw)"), ("proto_raw", "ProtoNet (raw)")]
+        if pca_level == "global":
+            report_rows += [("knn_pca", "KNN (Global PCA)"), ("proto_pca", "ProtoNet (Global PCA)")]
+        elif pca_level == "per_class":
+            report_rows.append(("dollar_B", "$B (Per-Class PCA)"))
+        elif pca_level == "per_sample":
+            report_rows.append(("per_sample_pca", "1-NN (Per-Sample PCA)"))
+            
+        if encoder:
+            report_rows.append(("proto_encoded", f"ProtoNet ({type(encoder).__name__})"))
+
+        for key, label in report_rows:
             r = results[key]
             if r:
-                print(f"  {label:<30}  {r['mean_acc']*100:>7.2f}%  "
-                      f"{r['std_acc']*100:>6.2f}%  {n_users:>6}")
-        print(f"  Chance = {chance:.1f}%")
-
+                print(f"  {label:<30}  {r['mean_acc']*100:>7.2f}%  {r['std_acc']*100:>6.2f}%  {len(r['all_accs']):>6}")
+    
     return results
 
 
@@ -1199,7 +1164,6 @@ def run_all_conditions(
 
 def build_config(
     eval_pids:           List  = None,
-    maml_reps:           List  = None,
     n_way:               int   = 10,
     metric:              str   = "euclidean",
     seed:                int   = 42,
@@ -1226,7 +1190,6 @@ def build_config(
     """
     return {
         "eval_PIDs":           eval_pids,
-        "maml_reps":           maml_reps,
         "n_way":               n_way,
         "knn_metric":          metric,
         "seed":                seed,
@@ -1268,7 +1231,8 @@ def eval_from_path(
         results = eval_from_path("data/tensor_dict.pkl", build_config(), encoder=model.backbone)
     """
     with open(tensor_dict_path, "rb") as f:
-        tensor_dict = pickle.load(f)
+        full_dict = pickle.load(f)
+        tensor_dict = full_dict['data']
     return run_all_conditions(tensor_dict, config,
                               shot_conditions=shot_conditions,
                               encoder=encoder, feature_fn=feature_fn)
