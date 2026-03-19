@@ -262,33 +262,17 @@ def pretrain_collate(batch):
 # DataLoader builder
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_pretrain_dataloaders(config: dict, tensor_dict_path: str):
+def get_pretrain_dataloaders(config: dict, tensor_dict: dict):
     """
     Build train and val DataLoaders for supervised pretraining.
+    Caller is responsible for loading tensor_dict from disk (load once, reuse).
 
     Returns:
         train_dl : DataLoader
         val_dl   : DataLoader
-        n_classes: int  (number of gesture classes found in the train split)
-
-    Config keys used (aligned with BASE_CONFIG):
-        train_PIDs                : list[str]
-        val_PIDs                  : list[str]
-        train_reps                : list[int]  — 1-indexed trial numbers for train
-        val_reps                  : list[int]  — 1-indexed trial numbers for val
-        available_gesture_classes : list[int]  — 0-indexed class labels (optional)
-        use_imu                   : bool
-        batch_size                : int
-        num_workers               : int
-        augment                   : bool       — train augmentation flag
-        aug_noise_std             : float
-        aug_max_shift             : int
-        aug_ch_drop               : float
+        n_classes: int
     """
-    with open(tensor_dict_path, 'rb') as f:
-        full_dict = pickle.load(f)
-    tensor_dict = full_dict['data']
-
+    # DELETE the pickle block that was here — caller owns loading now
     gesture_classes = config.get("available_gesture_classes", None)
 
     train_ds = PretrainGestureDataset(
@@ -302,43 +286,26 @@ def get_pretrain_dataloaders(config: dict, tensor_dict_path: str):
         aug_max_shift             = config.get("aug_max_shift", 4),
         aug_ch_drop               = config.get("aug_ch_drop", 0.10),
     )
-
     val_ds = PretrainGestureDataset(
         tensor_dict,
         target_pids               = config["val_PIDs"],
         target_rep_nums           = config["val_reps"],
         available_gesture_classes = gesture_classes,
         use_imu                   = config.get("use_imu", True),
-        augment                   = False,   # NEVER augment val/test
+        augment                   = False,
     )
 
     nw = int(config.get("num_workers", 4))
     bs = int(config.get("batch_size", 64))
 
-    train_dl = DataLoader(
-        train_ds,
-        batch_size  = bs,
-        shuffle     = True,
-        num_workers = nw,
-        collate_fn  = pretrain_collate,
-        pin_memory  = True,
-        drop_last   = True,   # avoids issues with tiny last batch
-    )
-
-    val_dl = DataLoader(
-        val_ds,
-        batch_size  = bs * 2,
-        shuffle     = False,
-        num_workers = nw,
-        collate_fn  = pretrain_collate,
-        pin_memory  = True,
-    )
+    train_dl = DataLoader(train_ds, batch_size=bs,   shuffle=True,  num_workers=nw,
+                          collate_fn=pretrain_collate, pin_memory=True, drop_last=True)
+    val_dl   = DataLoader(val_ds,   batch_size=bs*2, shuffle=False, num_workers=nw,
+                          collate_fn=pretrain_collate, pin_memory=True)
 
     print(f"[get_pretrain_dataloaders] "
-          f"train: {len(train_ds)} samples ({len(config['train_PIDs'])} PIDs, "
-          f"reps {config['train_reps']}) | "
-          f"val: {len(val_ds)} samples ({len(config['val_PIDs'])} PIDs, "
-          f"reps {config['val_reps']}) | "
+          f"train: {len(train_ds)} samples ({len(config['train_PIDs'])} PIDs, reps {config['train_reps']}) | "
+          f"val: {len(val_ds)} samples ({len(config['val_PIDs'])} PIDs, reps {config['val_reps']}) | "
           f"n_classes={train_ds.n_classes}")
 
     return train_dl, val_dl, train_ds.n_classes

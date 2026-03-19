@@ -19,8 +19,8 @@ PRETRAIN_CONFIG = {
     "train_PIDs": [
         "P102","P114","P119","P005","P107","P126","P132","P112",
     # Using a smaller train set so it goes faster. Ig this might make the task easier? Not sure tbh
-    #    "P103","P125","P127","P010","P128","P111","P118",
-    #    "P124","P110","P116","P108","P104","P122","P131","P106","P115"
+        "P103","P125","P127","P010","P128","P111","P118",
+        "P124","P110","P116","P108","P104","P122","P131","P106","P115"
     ],
     # TODO: Should val and test match train PIDs? Doing in-distribution vs cross-user out-of-distribution...
     #"val_PIDs": ["P102","P114","P119","P005","P107","P126","P132","P112"],

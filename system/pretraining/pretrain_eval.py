@@ -48,65 +48,75 @@ def ensure_channel_first(x: torch.Tensor) -> torch.Tensor:
 @torch.no_grad()
 def extract_features(model, tensor_dict, pids, target_reps, device, use_imu=False):
     """
-    Extract backbone features for all (pid, gesture, trial) combinations.
+    Extract backbone features for all (pid, gesture_class, trial) combinations,
+    filtering to only the repetition indices listed in target_reps.
+
+    Args:
+        target_reps: list of 1-based repetition indices to include (e.g. [1,2,3])
 
     Returns:
         feats_final:  np.ndarray (N, feat_dim) — final layer features
         feats_layers: list of np.ndarray (N, feat_dim) — one per LSTM/block layer
-        labels:       np.ndarray (N,) — gesture index
+        labels:       np.ndarray (N,) — gesture class index
         user_ids:     np.ndarray (N,) — pid index (int)
         pid_list:     list of unique pids (maps int index → pid)
     """
     model.eval()
     model.to(device)
 
-    all_gestures = set()
-    for pid in pids:
-        if pid in tensor_dict:
-            all_gestures.update(tensor_dict[pid].keys())
-    sorted_gestures = sorted(list(all_gestures))
-    label_map = {g: i for i, g in enumerate(sorted_gestures)}
+    # All PIDs share the same gesture classes — one lookup is sufficient.
+    first_valid_pid = next((p for p in pids if p in tensor_dict), None)
+    if first_valid_pid is None:
+        raise ValueError("No valid PIDs found in tensor_dict.")
+    sorted_gesture_classes = sorted(tensor_dict[first_valid_pid].keys())
+    label_map = {g: i for i, g in enumerate(sorted_gesture_classes)}
 
     all_final, all_layers, all_labels, all_users = [], [], [], []
-    pid_list = sorted(pids)
+    pid_list   = sorted(pids)
     pid_to_idx = {p: i for i, p in enumerate(pid_list)}
 
     for pid in pid_list:
         if pid not in tensor_dict:
             continue
-        for gest in sorted_gestures:
-            if gest not in tensor_dict[pid]:
+        for gesture_class in sorted_gesture_classes:
+            if gesture_class not in tensor_dict[pid]:
                 continue
-            slot     = tensor_dict[pid][gest]
+            slot    = tensor_dict[pid][gesture_class]
             emg_all = slot['emg']   # (n_trials, T, C) or (n_trials, C, T)
             imu_all = slot.get('imu', None)
 
             emg_data = ensure_channel_first(emg_all)
 
-            # Slice specific validation repetitions! 
+            # Convert 1-based rep numbers to 0-based indices, clamp to available trials.
             valid_idxs = [rep - 1 for rep in target_reps if 0 <= rep - 1 < emg_data.shape[0]]
-            if not valid_idxs: continue
+            if not valid_idxs:
+                continue
 
-            emg_data = emg_data[valid_idxs].float().to(device)  # Will shape to (n_valid_trials, ...)
+            emg_data = emg_data[valid_idxs].float().to(device)
             imu_input = None
             if use_imu and imu_all is not None:
-                imu_data = ensure_channel_first(imu_all)
+                imu_data  = ensure_channel_first(imu_all)
                 imu_input = imu_data[valid_idxs].float().to(device)
 
             feat_final, layer_feats = model.backbone(emg_data, imu_input)
 
             all_final.append(feat_final.cpu().numpy())
-            # layer_feats is a list of (N, dim) tensors
             if not all_layers:
                 all_layers = [[] for _ in layer_feats]
             for li, lf in enumerate(layer_feats):
                 all_layers[li].append(lf.cpu().numpy())
 
             n_trials = emg_data.shape[0]
-            all_labels.extend([label_map[gest]] * n_trials)
+            all_labels.extend([label_map[gesture_class]] * n_trials)
             all_users.extend([pid_to_idx[pid]] * n_trials)
 
-    feats_final  = np.concatenate(all_final, axis=0)
+    if not all_final:
+        raise ValueError(
+            f"extract_features: no data collected for pids={pids}, target_reps={target_reps}. "
+            "Check that rep indices are 1-based and exist in tensor_dict."
+        )
+
+    feats_final  = np.concatenate(all_final,  axis=0)
     feats_layers = [np.concatenate(l, axis=0) for l in all_layers]
     labels       = np.array(all_labels)
     user_ids     = np.array(all_users)
@@ -123,7 +133,7 @@ def linear_probe(
     tensor_dict: dict,
     probe_pids: list,
     all_pids_train: list,
-    gestures: list,
+    target_reps: list,          # renamed from 'gestures' — these are rep indices, not class names
     device,
     use_imu: bool = False,
     n_way: int = 10,
@@ -131,24 +141,24 @@ def linear_probe(
 ):
     """
     Fit a logistic regression on train users' features, evaluate on probe_pids.
-    For "in-distribution" probe: probe_pids ⊂ all_pids_train.
+    For "in-distribution" probe:  probe_pids ⊂ all_pids_train.
     For "out-of-distribution" probe: probe_pids ∩ all_pids_train = ∅.
+
+    Args:
+        target_reps: 1-based repetition indices to extract features from (e.g. [1,2,3,4,5])
 
     Returns dict with accuracy and per-class breakdown.
     """
-    # Extract train features
     print(f"[LinearProbe:{label}] Extracting train features ({len(all_pids_train)} users)...")
     feats_tr, _, labels_tr, _, _ = extract_features(
-        model, tensor_dict, all_pids_train, gestures, device, use_imu
+        model, tensor_dict, all_pids_train, target_reps, device, use_imu
     )
 
-    # Extract probe features
     print(f"[LinearProbe:{label}] Extracting probe features ({len(probe_pids)} users)...")
     feats_pr, _, labels_pr, _, _ = extract_features(
-        model, tensor_dict, probe_pids, gestures, device, use_imu
+        model, tensor_dict, probe_pids, target_reps, device, use_imu
     )
 
-    # Fit logistic regression (L2, liblinear solver — fast for small data)
     probe_clf = Pipeline([
         ('scaler', StandardScaler()),
         ('clf', LogisticRegression(
@@ -160,7 +170,7 @@ def linear_probe(
     ])
     probe_clf.fit(feats_tr, labels_tr)
 
-    acc = probe_clf.score(feats_pr, labels_pr)
+    acc    = probe_clf.score(feats_pr, labels_pr)
     chance = 1.0 / n_way
 
     print(f"[LinearProbe:{label}] Accuracy = {acc*100:.1f}% (chance = {chance*100:.1f}%)")
@@ -173,7 +183,6 @@ def linear_probe(
         'n_probe':  len(labels_pr),
         'clf':      probe_clf,
     }
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PCA / tSNE visualization (Fig. 4f-h style)
@@ -436,54 +445,63 @@ def run_full_eval(
     config keys:
       train_PIDs, val_PIDs, train_reps, val_reps,
       use_imu, n_way, model_type, device
+
+    Note on train_reps vs val_reps:
+      These are 1-based repetition indices, not gesture class names.
+      The gesture class set is inferred from tensor_dict keys inside extract_features.
+      train_reps: reps used to fit the probe classifier (e.g. [1,2,3,4,5])
+      val_reps:   reps used to evaluate / visualize (e.g. [6,7,8])
     """
     import os
     os.makedirs(save_dir, exist_ok=True)
 
-    device   = config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
-    gestures = config.get('train_reps')
-    use_imu  = config.get('use_imu', False)
-    n_way    = config.get('n_way', 10)
-    mname    = config.get('model_type', 'Model')
+    device     = config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
+    train_reps = config.get('train_reps')   # 1-based rep indices for training the probe
+    val_reps   = config.get('val_reps')     # 1-based rep indices for evaluating / visualizing
+    use_imu    = config.get('use_imu', False)
+    n_way      = config.get('n_way', 10)
+    mname      = config.get('model_type', 'Model')
+
+    train_pids = config['train_PIDs']
+    val_pids   = config['val_PIDs']
 
     results = {}
 
     # ── 1. In-distribution linear probe ─────────────────────────────────────
-    # Use a subset of train users as "probe" but fit on the REST of train users.
-    train_pids    = config['train_PIDs']
-    val_pids      = config['val_PIDs']
-    # Pick one train user as the in-distribution probe
+    # Hold out the first train user as probe; fit on the rest.
     probe_in_pid  = [train_pids[0]]
     train_without = [p for p in train_pids if p not in probe_in_pid]
 
     results['probe_in_dist'] = linear_probe(
         model, tensor_dict,
-        probe_pids       = probe_in_pid,
-        all_pids_train   = train_without,
-        gestures         = gestures,
-        device           = device,
-        use_imu          = use_imu,
-        n_way            = n_way,
-        label            = f"in-distribution (user {probe_in_pid[0]})",
+        probe_pids     = probe_in_pid,
+        all_pids_train = train_without,
+        target_reps    = train_reps,    # fit and probe both use train reps
+        device         = device,
+        use_imu        = use_imu,
+        n_way          = n_way,
+        label          = f"in-distribution (user {probe_in_pid[0]})",
     )
 
-    # TODO: I think the OOD isn't really OOD anymore, it is testing the intra-subject split gestures, not new users...
     # ── 2. Out-of-distribution linear probe ──────────────────────────────────
+    # TODO: confirm whether val_pids are truly new users (cross-subject OOD) or
+    # the same users evaluated on held-out reps (intra-subject split). The probe
+    # fit uses train_reps on train_pids; evaluation uses val_reps on val_pids.
     results['probe_out_dist'] = linear_probe(
         model, tensor_dict,
-        probe_pids       = val_pids,
-        all_pids_train   = train_pids,
-        gestures         = config.get('val_reps'),
-        device           = device,
-        use_imu          = use_imu,
-        n_way            = n_way,
-        label            = f"out-of-distribution ({len(val_pids)} val users)",
+        probe_pids     = val_pids,
+        all_pids_train = train_pids,
+        target_reps    = val_reps,      # val users evaluated on their val reps
+        device         = device,
+        use_imu        = use_imu,
+        n_way          = n_way,
+        label          = f"out-of-distribution ({len(val_pids)} val users)",
     )
 
     # ── 3. Representation visualization ──────────────────────────────────────
-    # Visualize test/val users (held-out) — exactly what Meta does
+    # Use val_reps for val_pids — consistent with OOD probe above.
     fig_repr = visualize_representations(
-        model, tensor_dict, val_pids, gestures, device,
+        model, tensor_dict, val_pids, val_reps, device,
         use_imu    = use_imu,
         method     = method,
         max_samples= 500,
@@ -502,9 +520,10 @@ def run_full_eval(
         results['filter_fig'] = fig_filt
 
     # ── 3c. Variance explained plot ───────────────────────────────────────────
+    # BUG FIX: was using train_reps for val_pids — now consistently uses val_reps.
     print(f"\n[VarExplained] Computing variance explained for {len(val_pids)} val users...")
     feats_final, feats_layers, labels, user_ids, _ = extract_features(
-        model, tensor_dict, val_pids, gestures, device, use_imu
+        model, tensor_dict, val_pids, val_reps, device, use_imu
     )
     g_var, u_var = compute_variance_explained(feats_layers, labels, user_ids)
     fig_var = plot_variance_explained(
