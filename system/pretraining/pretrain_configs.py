@@ -23,10 +23,10 @@ PRETRAIN_CONFIG = {
     #    "P124","P110","P116","P108","P104","P122","P131","P106","P115"
     ],
     # TODO: Should val and test match train PIDs? Doing in-distribution vs cross-user out-of-distribution...
-    "val_PIDs": ["P102","P114","P119","P005","P107","P126","P132","P112"],
-    #"val_PIDs":  ["P011","P006","P105","P109"],
-    "test_PIDs": ["P008","P004","P123","P121"],  # TODO: OOD probe should (for now) test linear probing on these participants
-    ## ^ Or actually I guessI could use the withheld val pids instead
+    #"val_PIDs": ["P102","P114","P119","P005","P107","P126","P132","P112"],
+    "val_PIDs":  ["P011","P006","P105","P109"],
+    "test_PIDs": ["P008","P004","P123","P121"],  
+    # TODO: OOD probe should (for now) test linear probing on the val participants
     #####################################################################################################################
 
     # ── Trial/repetition split (1-indexed, range 1…10) ───────────────────────
