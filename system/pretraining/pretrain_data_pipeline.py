@@ -3,72 +3,111 @@ pretrain_data_pipeline.py
 =========================
 Standard supervised pretraining dataloader for EMG gesture classification.
 
-Structure:
-  - Reads the same tensor_dict pickle used by the MAML pipeline
-  - Returns (emg, imu, labels) batches for standard cross-entropy training
-  - Strict train/val/test user split to prevent data leakage into MAML evaluation
+────────────────────────────────────────────────────────────────────────────────
+NEW tensor_dict layout (as of bug-fix):
+  tensor_dict[pid][gesture_class]  →  dict with fields:
+    'emg'          : Tensor (num_trials, seq_len, num_channels)  → (10, 64, 16)
+    'imu'          : Tensor (num_trials, seq_len, imu_channels)  → (10, 64, 72) or None
+    'demo'         : Tensor (demographic vector)
+    'enc_gest_ID'  : encoded gesture ID (internal, not used here)
+    'gest_ID'      : int — same as the outer key; 0-indexed gesture class label (0..9)
+    'enc_pid'      : encoded participant ID (internal, not used here)
+    'rep_indices'  : 1-indexed trial/repetition numbers present in this entry
 
-Expected tensor_dict layout (same as MetaGestureDataset):
-  tensor_dict[pid][gesture_id]['emg']   → Tensor (n_trials, T, C_emg) or (n_trials, C_emg, T)
-  tensor_dict[pid][gesture_id]['imu']   → Tensor or None
-  tensor_dict[pid][gesture_id]['demo']  → Tensor (demographic vector)
+  Key types:
+    pid          : str,  e.g. "P102"
+    gesture_class: int,  0-indexed gesture class label, i.e. 0 … (n_classes-1)
+                   *** NOT a repetition number, NOT an encoded ID ***
 
-All samples are flattened into a single flat dataset across users and gestures.
-Labels are GLOBAL gesture IDs (not episode-relative), which is correct for pretraining.
+────────────────────────────────────────────────────────────────────────────────
+Terminology used throughout this file — please keep these DISTINCT:
+  gesture_class / class_label : integer 0 … (n_classes-1)  ← what we predict
+  trial_num / rep_num         : integer 1 … 10  (1-indexed) ← one recording of a gesture
 
-Data augmentation (light, appropriate for small EMG datasets):
+  "train_reps" / "val_reps" in the config refer to TRIAL/REP NUMBERS (1-indexed),
+  NOT to class labels.  They control which of the 10 repetitions are used for
+  training vs. validation within each participant.
+
+────────────────────────────────────────────────────────────────────────────────
+Data augmentation (applied stochastically per __getitem__, not offline):
   - Gaussian noise injection
   - Random temporal shift (circular)
-  - Channel dropout (randomly zeros out 1-2 EMG channels)
-These are disabled at val/test time.
+  - Channel dropout (randomly zeros out individual EMG channels)
+  These are DISABLED at val/test time.  Augmentation does NOT increase the
+  dataset size — it randomly perturbs each sample every time it is drawn,
+  so the effective diversity grows across epochs.
+────────────────────────────────────────────────────────────────────────────────
+Config keys consumed here (aligned with BASE_CONFIG):
+  train_PIDs                : list[str]  — participant IDs for training
+  val_PIDs                  : list[str]  — participant IDs for validation
+  train_reps                : list[int]  — 1-indexed trial numbers used for train
+  val_reps                  : list[int]  — 1-indexed trial numbers used for val
+  available_gesture_classes : list[int]  — 0-indexed class labels to include
+  use_imu                   : bool
+  batch_size                : int
+  num_workers               : int
+  augment                   : bool       — applied to train set only
+  aug_noise_std             : float
+  aug_max_shift             : int
+  aug_ch_drop               : float
 """
 
 import pickle
 import random
 import torch
-import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
 
-def ensure_channel_first(x: torch.Tensor) -> torch.Tensor:
+# ─────────────────────────────────────────────────────────────────────────────
+# Tensor layout helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def to_channel_first_2d(x: torch.Tensor) -> torch.Tensor:
     """
-    Ensures the tensor is in (N, C, T) format by checking for 
-    known channel counts (EMG=16, IMU=72).
+    Convert a single sample from (seq_len, num_channels) → (num_channels, seq_len).
+
+    The new tensor_dict stores data as (num_trials, seq_len, num_channels).
+    After slicing out one trial we get (seq_len, num_channels), i.e. (T, C).
+    Models expect (C, T).  This function handles that final permute.
+
+    Args:
+        x: Tensor of shape (T, C)  — a single trial, channel-last
+
+    Returns:
+        Tensor of shape (C, T)  — channel-first, ready for Conv1d / LSTM
     """
-    if x.dim() != 3:
-        return x
-    
-    # If the LAST dimension matches 16 or 72, it is currently (N, T, C)
-    # and needs to be permuted to (N, C, T).
-    if x.shape[2] in [16, 72]:
-        # Only permute if the middle dimension isn't already a channel count.
-        # This prevents double-flipping if time and channel count are the same.
-        #if x.shape[1] not in [16, 72]:
-        return x.permute(0, 2, 1).contiguous()
-            
-    return x
+    assert x.dim() == 2, f"Expected 2D tensor (T, C), got shape {x.shape}"
+    return x.permute(1, 0).contiguous()  # (T, C) → (C, T)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Augmentation helpers
+# Augmentation helpers  (all operate on a single 2-D sample: (C, T))
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _gaussian_noise(x: torch.Tensor, std: float = 0.05) -> torch.Tensor:
-    """Add zero-mean Gaussian noise. std is relative to signal std."""
+    """Add zero-mean Gaussian noise scaled to the signal's own std."""
     noise = torch.randn_like(x) * (x.std() * std + 1e-8)
     return x + noise
 
+
 def _temporal_shift(x: torch.Tensor, max_shift: int = 4) -> torch.Tensor:
     """
-    Circular shift along the time dimension.
-    x: (C, T)
+    Circular shift along the time axis (dim=-1).
+    Shift amount is sampled uniformly from [-max_shift, +max_shift].
+
+    Args:
+        x: Tensor (C, T)
     """
     shift = random.randint(-max_shift, max_shift)
     return torch.roll(x, shifts=shift, dims=-1)
 
+
 def _channel_dropout(x: torch.Tensor, drop_prob: float = 0.1) -> torch.Tensor:
     """
-    Zero out entire channels independently with probability drop_prob.
-    x: (C, T)
+    Zero out entire EMG channels independently with probability drop_prob.
+
+    Args:
+        x: Tensor (C, T)
     """
     mask = (torch.rand(x.size(0), 1) > drop_prob).float().to(x.device)
     return x * mask
@@ -79,74 +118,130 @@ def _channel_dropout(x: torch.Tensor, drop_prob: float = 0.1) -> torch.Tensor:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PretrainGestureDataset(Dataset):
+    """
+    Flat dataset over participants × gesture classes × repetition trials.
+
+    Each item is ONE trial (one repetition of one gesture by one participant).
+    The label is the gesture class label (0-indexed integer, 0 … n_classes-1).
+
+    Indexing into tensor_dict:
+      tensor_dict[pid][gesture_class]['emg']  →  (num_trials, seq_len, num_channels)
+      We select the trial corresponding to a specific 1-indexed rep_num via:
+          trial_idx = rep_num - 1   (converts 1-indexed → 0-indexed array position)
+
+    Args:
+        tensor_dict              : loaded data dict (already extracted from full_dict['data'])
+        target_pids              : participant IDs to include
+        target_rep_nums          : 1-indexed trial/repetition numbers to include
+                                   e.g. [1,2,...,8] for train, [9,10] for val
+        available_gesture_classes: 0-indexed class labels to include (default: all present)
+        use_imu                  : whether to load IMU data
+        augment                  : whether to apply stochastic augmentation in __getitem__
+        aug_noise_std            : Gaussian noise scale (relative to signal std)
+        aug_max_shift            : max circular time shift in samples
+        aug_ch_drop              : per-channel zero-out probability
+    """
+
     def __init__(
         self,
         tensor_dict: dict,
         target_pids: list,
-        target_reps: list,  # Rename parameter
+        target_rep_nums: list,           # 1-indexed trial numbers, e.g. [1..8] or [9,10]
+        available_gesture_classes: list = None,  # 0-indexed class labels
         use_imu: bool = False,
         augment: bool = False,
-        noise_std: float = 0.05,
-        max_shift: int = 4,
-        ch_drop_prob: float = 0.10,
-        n_classes: int = 10
+        aug_noise_std: float = 0.05,
+        aug_max_shift: int = 4,
+        aug_ch_drop: float = 0.10,
     ):
-        self.use_imu = use_imu
-        self.augment = augment
-        self.noise_std = noise_std
-        self.max_shift = max_shift
-        self.ch_drop = ch_drop_prob
-        self.n_classes = n_classes
+        self.use_imu       = use_imu
+        self.augment       = augment
+        self.aug_noise_std = aug_noise_std
+        self.aug_max_shift = aug_max_shift
+        self.aug_ch_drop   = aug_ch_drop
 
-        # 1. Dynamically find all unique gestures to build the proper label mapping
-        all_gestures = set()
-        for pid in target_pids:
-            if pid in tensor_dict:
-                all_gestures.update(tensor_dict[pid].keys())
-        sorted_gestures = sorted(list(all_gestures))
-        
-        # Now label_map properly maps the actual classes 0 through 9
-        self.label_map = {g: i for i, g in enumerate(sorted_gestures)}
-        
+        # ── Determine which gesture class labels to include ──────────────────
+        # Keys in tensor_dict[pid] are 0-indexed integer class labels.
+        # We allow the caller to restrict to a subset; default = all present.
+        if available_gesture_classes is not None:
+            gesture_classes = sorted(available_gesture_classes)
+        else:
+            # Collect all class labels present across target PIDs
+            all_classes = set()
+            for pid in target_pids:
+                if pid in tensor_dict:
+                    all_classes.update(tensor_dict[pid].keys())
+            gesture_classes = sorted(all_classes)
+
+        self.n_classes = len(gesture_classes)
+
+        # ── Build flat sample list ───────────────────────────────────────────
+        # Each entry: (emg_trial, imu_trial_or_None, class_label)
+        #   emg_trial : Tensor (seq_len, num_channels)  — channel-last, 1 trial
+        #   imu_trial : Tensor (seq_len, imu_channels) or None
+        #   class_label: int  0 … (n_classes-1)
+        #
+        # We do NOT permute to (C, T) here; we do it in __getitem__ so that
+        # cached tensors stay in the original layout and cloning is cheap.
+
         self.samples = []
+        skipped_trials = 0
+
         for pid in target_pids:
-            if pid not in tensor_dict: continue
-            for gest, slot in tensor_dict[pid].items():
-                emg_data = ensure_channel_first(slot['emg'])
-                imu_data = ensure_channel_first(slot['imu']) if slot.get('imu') is not None else None
-                label = self.label_map[gest]
-                
-                # 2. Slice based on repetitions (Assumes config uses 1-indexed rep counts)
-                for rep in target_reps:
-                    idx = rep - 1  # Convert to 0-indexed array position
-                    if idx < 0 or idx >= emg_data.shape[0]:
-                        continue  # Skip if this trial doesn't exist for the user
-                    
-                    self.samples.append((emg_data[idx], imu_data[idx] if imu_data is not None else None, label))
+            if pid not in tensor_dict:
+                continue
+
+            for class_label in gesture_classes:
+                if class_label not in tensor_dict[pid]:
+                    continue
+
+                slot    = tensor_dict[pid][class_label]
+                emg_all = slot['emg']   # (num_trials, seq_len, num_channels)
+                imu_all = slot.get('imu', None)  # (num_trials, seq_len, imu_channels) or None
+
+                num_trials_available = emg_all.shape[0]  # should be 10
+
+                for rep_num in target_rep_nums:
+                    # rep_num is 1-indexed (1 … 10); convert to 0-indexed array position
+                    trial_idx = rep_num - 1
+
+                    if trial_idx < 0 or trial_idx >= num_trials_available:
+                        skipped_trials += 1
+                        continue  # This rep_num doesn't exist for this pid/gesture
+
+                    emg_trial = emg_all[trial_idx]   # (seq_len, num_channels) = (T, C)
+                    imu_trial = imu_all[trial_idx] if imu_all is not None else None
+
+                    self.samples.append((emg_trial, imu_trial, class_label))
+
+        if skipped_trials > 0:
+            print(f"[PretrainGestureDataset] Warning: skipped {skipped_trials} "
+                  f"(pid, gesture_class, rep_num) combos where trial_idx was out of range.")
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        emg, imu, label = self.samples[idx]
+        emg_tc, imu_tc, class_label = self.samples[idx]
 
-        # Clone to avoid in-place modification of cached tensors
-        emg = emg.clone().float()
+        # Clone before any in-place-style ops; convert (T, C) → (C, T)
+        emg = to_channel_first_2d(emg_tc.clone().float())   # (C_emg, T)
 
         if self.augment:
-            emg = _gaussian_noise(emg, self.noise_std)
-            emg = _temporal_shift(emg, self.max_shift)
-            emg = _channel_dropout(emg, self.ch_drop)
+            emg = _gaussian_noise(emg, self.aug_noise_std)
+            emg = _temporal_shift(emg, self.aug_max_shift)
+            emg = _channel_dropout(emg, self.aug_ch_drop)
 
-        if imu is not None:
-            imu = imu.clone().float()
+        imu = None
+        if self.use_imu and imu_tc is not None:
+            imu = to_channel_first_2d(imu_tc.clone().float())  # (C_imu, T)
             if self.augment:
-                imu = _gaussian_noise(imu, self.noise_std)
+                imu = _gaussian_noise(imu, self.aug_noise_std)
 
         return {
-            "emg":   emg,
-            "imu":   imu,
-            "label": torch.tensor(label, dtype=torch.long),
+            "emg":   emg,                                      # (C_emg, T)
+            "imu":   imu,                                      # (C_imu, T) or None
+            "label": torch.tensor(class_label, dtype=torch.long),
         }
 
 
@@ -155,11 +250,11 @@ class PretrainGestureDataset(Dataset):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def pretrain_collate(batch):
-    emgs   = torch.stack([b["emg"] for b in batch])
-    labels = torch.stack([b["label"] for b in batch])
+    emgs   = torch.stack([b["emg"]   for b in batch])   # (B, C_emg, T)
+    labels = torch.stack([b["label"] for b in batch])   # (B,)
     imus   = None
     if batch[0]["imu"] is not None:
-        imus = torch.stack([b["imu"] for b in batch])
+        imus = torch.stack([b["imu"] for b in batch])   # (B, C_imu, T)
     return {"emg": emgs, "imu": imus, "labels": labels}
 
 
@@ -169,36 +264,52 @@ def pretrain_collate(batch):
 
 def get_pretrain_dataloaders(config: dict, tensor_dict_path: str):
     """
-    Returns (train_dl, val_dl, n_classes).
+    Build train and val DataLoaders for supervised pretraining.
 
-    config keys used:
-      train_PIDs, val_PIDs
-      train_reps, val_reps
-      use_imu, batch_size, num_workers
-      augment (bool, default True for train)
-      noise_std, max_shift, ch_drop_prob
+    Returns:
+        train_dl : DataLoader
+        val_dl   : DataLoader
+        n_classes: int  (number of gesture classes found in the train split)
+
+    Config keys used (aligned with BASE_CONFIG):
+        train_PIDs                : list[str]
+        val_PIDs                  : list[str]
+        train_reps                : list[int]  — 1-indexed trial numbers for train
+        val_reps                  : list[int]  — 1-indexed trial numbers for val
+        available_gesture_classes : list[int]  — 0-indexed class labels (optional)
+        use_imu                   : bool
+        batch_size                : int
+        num_workers               : int
+        augment                   : bool       — train augmentation flag
+        aug_noise_std             : float
+        aug_max_shift             : int
+        aug_ch_drop               : float
     """
     with open(tensor_dict_path, 'rb') as f:
-        tensor_dict = pickle.load(f)
+        full_dict = pickle.load(f)
+    tensor_dict = full_dict['data']
 
-    # TODO: Is it applying all these data augs? Is this creating MORE samples or is it augmenting the data I passed in? Presumably in place?... Does it randomly choose one/some?
+    gesture_classes = config.get("available_gesture_classes", None)
+
     train_ds = PretrainGestureDataset(
         tensor_dict,
-        target_pids     = config["train_PIDs"],
-        target_reps     = config["train_reps"],
-        use_imu         = config.get("use_imu", False),
-        augment         = config.get("augment", True),
-        noise_std       = config.get("noise_std", 0.05),
-        max_shift       = config.get("max_shift", 4),
-        ch_drop_prob    = config.get("ch_drop_prob", 0.10),
+        target_pids               = config["train_PIDs"],
+        target_rep_nums           = config["train_reps"],
+        available_gesture_classes = gesture_classes,
+        use_imu                   = config.get("use_imu", True),
+        augment                   = config.get("augment", False),
+        aug_noise_std             = config.get("aug_noise_std", 0.05),
+        aug_max_shift             = config.get("aug_max_shift", 4),
+        aug_ch_drop               = config.get("aug_ch_drop", 0.10),
     )
 
     val_ds = PretrainGestureDataset(
         tensor_dict,
-        target_pids     = config["val_PIDs"],
-        target_reps     = config["val_reps"],
-        use_imu         = config.get("use_imu", False),
-        augment         = False,   # NEVER augment val
+        target_pids               = config["val_PIDs"],
+        target_rep_nums           = config["val_reps"],
+        available_gesture_classes = gesture_classes,
+        use_imu                   = config.get("use_imu", True),
+        augment                   = False,   # NEVER augment val/test
     )
 
     nw = int(config.get("num_workers", 4))
@@ -211,7 +322,7 @@ def get_pretrain_dataloaders(config: dict, tensor_dict_path: str):
         num_workers = nw,
         collate_fn  = pretrain_collate,
         pin_memory  = True,
-        drop_last   = True,   # avoids BN issues with tiny last batch
+        drop_last   = True,   # avoids issues with tiny last batch
     )
 
     val_dl = DataLoader(
@@ -222,5 +333,12 @@ def get_pretrain_dataloaders(config: dict, tensor_dict_path: str):
         collate_fn  = pretrain_collate,
         pin_memory  = True,
     )
+
+    print(f"[get_pretrain_dataloaders] "
+          f"train: {len(train_ds)} samples ({len(config['train_PIDs'])} PIDs, "
+          f"reps {config['train_reps']}) | "
+          f"val: {len(val_ds)} samples ({len(config['val_PIDs'])} PIDs, "
+          f"reps {config['val_reps']}) | "
+          f"n_classes={train_ds.n_classes}")
 
     return train_dl, val_dl, train_ds.n_classes

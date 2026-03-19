@@ -31,7 +31,15 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from collections import defaultdict
 
-from pretrain_data_pipeline import ensure_channel_first
+#from pretrain_data_pipeline import ensure_channel_first
+def ensure_channel_first(x: torch.Tensor) -> torch.Tensor:
+    """Helper from eval_knn_proto.py to ensure (N, C, T) shape."""
+    if x is None or x.dim() != 3:
+        return x
+    # If the last dimension matches known channel counts, swap it
+    if x.shape[-1] in [16, 72]:
+        return x.permute(0, 2, 1)
+    return x
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Feature extraction
