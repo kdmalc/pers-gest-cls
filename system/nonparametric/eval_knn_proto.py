@@ -440,7 +440,7 @@ def pca_encode(
     shared_pca:         bool = False,
     pca_level:          str  = "global",  # Options: "global", "per_class", "per_sample"
     support_labels:     Optional[torch.Tensor] = None, 
-    n_classes:          int  = 10,  # This should match n_way I think?
+    n_classes:          int  = 10,  
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Channel-wise spatial PCA encode.
@@ -448,13 +448,9 @@ def pca_encode(
     pca_level="global": 
         Returns (sup_proj, qry_proj) -> standard projected feature tensors.
         
-    pca_level="per_class": 
-        Returns (class_dists, class_dists_sup) -> (N, n_classes) L1-distance matrices.
-        Classify queries via argmin over the class dimension.
-        
-    pca_level="per_sample":
-        Returns (sample_dists, sample_dists_sup) -> (N, N_support) L1-distance matrices.
-        Classify queries via 1-NN (argmin over all support samples, then map to class).
+    pca_level="per_class" | "per_sample":
+        Returns (sup_dists, qry_dists) -> Distance matrices treated as feature vectors.
+        E.g., for per_class, each sample is represented by its L1 distance to all n_classes.
     """
     assert pca_level in ["global", "per_class", "per_sample"], f"Unknown pca_level: {pca_level}"
 
@@ -469,35 +465,39 @@ def pca_encode(
         labels = torch.arange(N_sup, device=support_emg.device)
         n_models = N_sup
 
-    # 2. Define a helper to process a single data stream (EMG, IMU, or Concatted)
-    def _process_branch(sup: torch.Tensor, qry: torch.Tensor, dims: int):
+    # 2. Helper to process a single data stream (EMG, IMU, or Concatted)
+    def _process_branch(sup: torch.Tensor, qry: torch.Tensor, requested_dims: int):
+        # Prevent "impossible dimension" crashes (cannot exceed channels - 1)
+        safe_dims = min(requested_dims, sup.shape[1] - 1)
+        safe_dims = max(1, safe_dims) # Ensure at least 1 dimension
+        
         if pca_level == "global":
-            components, mean = _fit_spatial_pca(sup, dims)
+            components, mean = _fit_spatial_pca(sup, safe_dims)
             return (_apply_spatial_pca(sup, components, mean),
                     _apply_spatial_pca(qry, components, mean))
         else:
             # Applies to both "per_class" and "per_sample"
-            models = _fit_per_class_pcas(sup, labels, dims, n_models)
+            models = _fit_per_class_pcas(sup, labels, safe_dims, n_models)
             return (_per_class_pca_distances(sup, models),
                     _per_class_pca_distances(qry, models))
 
     # 3. Apply routing logic based on `shared_pca`
     if shared_pca:
         assert support_imu is not None, "IMU required for shared_pca"
-        assert emg_pca_dims == imu_pca_dims, "Dims must match if projecting into a shared space"
-        
+        # Concatenate channels first
         sup_cat = torch.cat([support_emg, support_imu], dim=1)
         qry_cat = torch.cat([query_emg,  query_imu],  dim=1)
         
+        # In shared mode, we just use emg_pca_dims as the target dimension for the joint space
         sup_res, qry_res = _process_branch(sup_cat, qry_cat, emg_pca_dims)
-        return qry_res, sup_res  # Returning query first to match your original per_class return signature
+        return sup_res, qry_res
 
     else:
         # Separate PCA models for EMG and IMU
         sup_emg_res, qry_emg_res = _process_branch(support_emg, query_emg, emg_pca_dims)
         
         if support_imu is None:
-            return qry_emg_res, sup_emg_res
+            return sup_emg_res, qry_emg_res
 
         sup_imu_res, qry_imu_res = _process_branch(support_imu, query_imu, imu_pca_dims)
         
@@ -508,9 +508,9 @@ def pca_encode(
             qry_proj = torch.cat([qry_emg_res, qry_imu_res], dim=-1)
             return sup_proj, qry_proj
         else:
-            # Per-class/sample returns distance matrices, so we sum the distances
-            # (Because L1 distance is additive over partitions)
-            return (qry_emg_res + qry_imu_res), (sup_emg_res + sup_imu_res)
+            # Per-class/sample returns distance matrices. 
+            # Because L1 distance is additive over partitions, we sum them.
+            return (sup_emg_res + sup_imu_res), (qry_emg_res + qry_imu_res)
 
 
 @torch.no_grad()
@@ -830,11 +830,6 @@ def eval_one_user(
     shared_pca:                bool,
     config:                    dict,
 ) -> dict:
-    """
-    Run all evaluation modes for a single user under one shot condition.
-    support_reps/query_reps (1-indexed rep numbers) are passed directly and unchanged.
-    """
-
     # ── 1. Episode Building ──────────────────────────────────────────────────
     support, query = build_episode(
         user_data                 = user_data,
@@ -857,7 +852,6 @@ def eval_one_user(
 
     # ── 2. Support Augmentation ──────────────────────────────────────────────
     aug_sup_emg, aug_sup_labels = sup_emg, sup_labels
-    # Note: If using IMU, you'd need to augment IMU here as well if config allows
     if aug_support:
         aug_sup_emg, aug_sup_labels = expand_support_with_aug(sup_emg, sup_labels, config)
 
@@ -871,14 +865,10 @@ def eval_one_user(
     proto_raw_acc = (proto_classify(sup_flat, aug_sup_labels, qry_flat, 
                                     metric=metric, n_classes=n_way) == qry_labels).float().mean().item()
 
-    # ── 4. PCA Track ─────────────────────────────────────────────────────────
-    pca_level = config.get("pca_level", "global") # "global", "per_class", or "per_sample"
+    # ── 4. PCA Track (Unified!) ──────────────────────────────────────────────
+    pca_level = config.get("pca_level", "global") 
     
-    # Initialize all PCA metrics to None
-    knn_pca_acc = proto_pca_acc = dollar_B_acc = per_sample_acc = None
-
-    # Call the updated pca_encode
-    pca_out_1, pca_out_2 = pca_encode(
+    sup_pca_feats, qry_pca_feats = pca_encode(
         aug_sup_emg, qry_emg,
         sup_imu if use_imu else None,
         qry_imu if use_imu else None,
@@ -888,29 +878,15 @@ def eval_one_user(
         n_classes      = n_way
     )
 
-    if pca_level == "global":
-        # Returns (sup_proj, qry_proj)
-        sup_pca, qry_pca = pca_out_1, pca_out_2
-        
-        knn_pca_pred = knn_classify(sup_pca, aug_sup_labels, qry_pca, k=1, metric=metric, n_classes=n_way)
-        knn_pca_acc  = (knn_pca_pred == qry_labels).float().mean().item()
+    # We can pass the PCA outputs (whether they are global coords or distance profiles) 
+    # directly into standard KNN and ProtoNet!
+    knn_pca_pred = knn_classify(sup_pca_feats, aug_sup_labels, qry_pca_feats, 
+                                k=1, metric=metric, n_classes=n_way)
+    knn_pca_acc  = (knn_pca_pred == qry_labels).float().mean().item()
 
-        proto_pca_pred = proto_classify(sup_pca, aug_sup_labels, qry_pca, metric=metric, n_classes=n_way)
-        proto_pca_acc  = (proto_pca_pred == qry_labels).float().mean().item()
-
-    elif pca_level == "per_class":
-        # Returns (qry_dists, sup_dists) where dists are (N, n_classes)
-        qry_dists = pca_out_1
-        dollar_B_pred = qry_dists.argmin(dim=1)
-        dollar_B_acc  = (dollar_B_pred == qry_labels).float().mean().item()
-
-    elif pca_level == "per_sample":
-        # Returns (qry_dists, sup_dists) where dists are (N, n_support)
-        qry_dists = pca_out_1
-        # 1-Nearest Neighbor logic: find closest sample index, then map to that sample's label
-        best_sample_idx = qry_dists.argmin(dim=1)
-        per_sample_pred = aug_sup_labels[best_sample_idx]
-        per_sample_acc  = (per_sample_pred == qry_labels).float().mean().item()
+    proto_pca_pred = proto_classify(sup_pca_feats, aug_sup_labels, qry_pca_feats, 
+                                    metric=metric, n_classes=n_way)
+    proto_pca_acc  = (proto_pca_pred == qry_labels).float().mean().item()
 
     # ── 5. Neural Track ──────────────────────────────────────────────────────
     proto_enc_acc = None
@@ -923,10 +899,8 @@ def eval_one_user(
     return {
         "knn_raw":       knn_raw_acc,
         "proto_raw":     proto_raw_acc,
-        "knn_pca":       knn_pca_acc,       # Only populated if level="global"
-        "proto_pca":     proto_pca_acc,     # Only populated if level="global"
-        "dollar_B":      dollar_B_acc,      # Only populated if level="per_class"
-        "per_sample_pca":per_sample_acc,    # Only populated if level="per_sample"
+        "knn_pca":       knn_pca_acc,       
+        "proto_pca":     proto_pca_acc,     
         "proto_encoded": proto_enc_acc,
         "n_support":     n_support_orig,
         "n_query":       qry_emg.size(0),
@@ -936,6 +910,8 @@ def eval_one_user(
 # SECTION 8: Single-Shot-Condition Runner (across all users)
 # =============================================================================
 
+import traceback  # Make sure this is imported at the top of your file!
+
 def run_one_shot_condition(
     tensor_dict: dict,
     config:      dict,
@@ -944,10 +920,6 @@ def run_one_shot_condition(
     feature_fn:  Optional[Callable]   = None,
     verbose:     bool = True,
 ) -> dict:
-    """
-    Run all evaluation modes for a given k_shot across all eval_PIDs.
-    """
-
     device         = torch.device(config.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
     n_way          = int(config.get("n_way",         10))
     metric         = config.get("knn_metric",       "euclidean")
@@ -957,7 +929,7 @@ def run_one_shot_condition(
     emg_pca_dims   = int(config.get("emg_pca_dims", 8))
     imu_pca_dims   = int(config.get("imu_pca_dims", 8))
     shared_pca     = bool(config.get("shared_pca",  False))
-    pca_level      = config.get("pca_level", "global") # "global", "per_class", "per_sample"
+    pca_level      = config.get("pca_level", "global") 
     
     eval_pids      = config.get("eval_PIDs", config.get("val_PIDs", []))
     available_gesture_classes = config["available_gesture_classes"]
@@ -989,11 +961,9 @@ def run_one_shot_condition(
         if encoder: print(f"  encoder    : {type(encoder).__name__}")
         print(f"{'='*65}")
 
-    # Initialize accuracy lists for all possible tracks
     accs: Dict[str, List[float]] = {
         "knn_raw": [], "proto_raw": [],
         "knn_pca": [], "proto_pca": [],
-        "dollar_B": [], "per_sample_pca": [],
         "proto_encoded": [],
     }
     per_user = {}
@@ -1016,20 +986,10 @@ def run_one_shot_condition(
                 shared_pca=shared_pca, config=config
             )
 
-            # ── Dynamic Accumulation ──────────────────────────────────────────
             accs["knn_raw"].append(res["knn_raw"])
             accs["proto_raw"].append(res["proto_raw"])
-            
-            if pca_level == "global":
-                accs["knn_pca"].append(res["knn_pca"])
-                accs["proto_pca"].append(res["proto_pca"])
-                pca_log = f"knn_pca={res['knn_pca']*100:.1f}%  proto_pca={res['proto_pca']*100:.1f}%"
-            elif pca_level == "per_class":
-                accs["dollar_B"].append(res["dollar_B"])
-                pca_log = f"$B={res['dollar_B']*100:.1f}%"
-            elif pca_level == "per_sample":
-                accs["per_sample_pca"].append(res["per_sample_pca"])
-                pca_log = f"sample_pca={res['per_sample_pca']*100:.1f}%"
+            accs["knn_pca"].append(res["knn_pca"])
+            accs["proto_pca"].append(res["proto_pca"])
 
             if encoder and res["proto_encoded"] is not None:
                 accs["proto_encoded"].append(res["proto_encoded"])
@@ -1038,10 +998,13 @@ def run_one_shot_condition(
 
             if verbose:
                 enc_str = f"  enc={res['proto_encoded']*100:.1f}%" if encoder else ""
-                print(f"  PID {str(pid):>4} | knn={res['knn_raw']*100:.1f}%  {pca_log}{enc_str}")
+                print(f"  PID {str(pid):>4} | knn_raw={res['knn_raw']*100:.1f}%  knn_pca={res['knn_pca']*100:.1f}% {enc_str}")
 
         except Exception as e:
-            if verbose: print(f"  [ERROR] PID {pid}: {e}")
+            # STOP SILENT FAILURES: Actually print the trace so we can debug!
+            if verbose: 
+                print(f"  [ERROR] PID {pid} Failed! Exception: {e}")
+                traceback.print_exc() 
             continue
 
     # ── Summary Table ─────────────────────────────────────────────────────────
@@ -1061,14 +1024,12 @@ def run_one_shot_condition(
         print(f"\n  {'Method':<30}  {'Mean':>8}  {'Std':>7}  {'Users':>6}")
         print(f"  {'─'*30}  {'─'*8}  {'─'*7}  {'─'*6}")
         
-        # Determine which rows to show based on pca_level
-        report_rows = [("knn_raw", "KNN (raw)"), ("proto_raw", "ProtoNet (raw)")]
-        if pca_level == "global":
-            report_rows += [("knn_pca", "KNN (Global PCA)"), ("proto_pca", "ProtoNet (Global PCA)")]
-        elif pca_level == "per_class":
-            report_rows.append(("dollar_B", "$B (Per-Class PCA)"))
-        elif pca_level == "per_sample":
-            report_rows.append(("per_sample_pca", "1-NN (Per-Sample PCA)"))
+        report_rows = [
+            ("knn_raw",   "KNN (raw)"), 
+            ("proto_raw", "ProtoNet (raw)"),
+            ("knn_pca",   f"KNN (PCA-{pca_level})"), 
+            ("proto_pca", f"ProtoNet (PCA-{pca_level})")
+        ]
             
         if encoder:
             report_rows.append(("proto_encoded", f"ProtoNet ({type(encoder).__name__})"))
@@ -1079,7 +1040,6 @@ def run_one_shot_condition(
                 print(f"  {label:<30}  {r['mean_acc']*100:>7.2f}%  {r['std_acc']*100:>6.2f}%  {len(r['all_accs']):>6}")
     
     return results
-
 
 # =============================================================================
 # SECTION 9: Multi-Shot Runner + Comparison Table
@@ -1093,24 +1053,6 @@ def run_all_conditions(
     feature_fn:      Optional[Callable]  = None,
     verbose:         bool                = True,
 ) -> Dict[int, dict]:
-    """
-    Run run_one_shot_condition for every k in shot_conditions and print a
-    unified comparison table across all methods and shot levels.
-
-    Parameters
-    ----------
-    tensor_dict     : {pid: {gesture: {"emg": Tensor, "imu": Tensor|None, ...}}}
-    config          : see build_config() and module docstring
-    shot_conditions : list of k values to evaluate (default [1, 3, 5])
-    encoder         : optional pretrained nn.Module backbone
-    feature_fn      : optional callable (C,T) -> (D,) for raw/PCA tracks
-                      If None, trials are flattened to (C*T,).
-    verbose         : print per-user and summary tables
-
-    Returns
-    -------
-    all_results : {k_shot: result_dict}
-    """
     all_results = {}
     for k in shot_conditions:
         print(f"\n{'#'*65}")
@@ -1121,11 +1063,12 @@ def run_all_conditions(
             encoder=encoder, feature_fn=feature_fn, verbose=verbose,
         )
 
+    pca_level = config.get("pca_level", "global")
     method_rows = [
         ("knn_raw",   "KNN (raw)"),
-        ("knn_pca",   "KNN (PCA)"),
+        ("knn_pca",   f"KNN (PCA-{pca_level})"),
         ("proto_raw", "ProtoNet (raw)"),
-        ("proto_pca", "ProtoNet (PCA)"),
+        ("proto_pca", f"ProtoNet (PCA-{pca_level})"),
     ]
     if encoder is not None:
         method_rows.append(("proto_encoded", f"ProtoNet ({type(encoder).__name__})"))
@@ -1162,50 +1105,31 @@ def run_all_conditions(
 # SECTION 10: Config Builder + Convenience Wrappers
 # =============================================================================
 
-def build_config(
-    eval_pids:           List  = None,
-    n_way:               int   = 10,
-    metric:              str   = "euclidean",
-    seed:                int   = 42,
-    use_imu:             bool  = False,
-    aug_support:         bool  = False,
-    aug_n_copies:        int   = 4,
-    emg_pca_dims:        int   = 8,       # <--- Changed
-    imu_pca_dims:        int   = 8,       # <--- Added
-    shared_pca:          bool  = False,   # <--- Added
-    use_fixed_rep_split: bool  = True,
-    device:              str   = None,
-) -> dict:
-    """
-    Build a standard config dict with sensible defaults.
+# This is as close to $B as this code gets
+BASE_CONFIG = {
+    "knn_metric":          "l1",  # euc/euclidean, cosine, l1, l2
+    "emg_pca_dims":        50,  
+    "imu_pca_dims":        50,  
+    "shared_pca":          True,  # When this is true, emg_pca_dims and imu_pca_dims must match!!!  # TODO: this does not get used when per_class_pca is used AFAICT
+    "pca_level":           "per_sample",  # "global", "per_class", "per_sample"
+    
+    "debug_mode":          False,
+    "use_imu":             True,
+    "shots": [1, 3, 5],
+    "n_way": 10,
+    "seed": 42,
+    "device":              "cuda" if torch.cuda.is_available() else "cpu",
+    "eval_PIDs":           ["P011","P006","P105","P109"],
+    "use_fixed_rep_split": True,  # I dont think False is even implemented yet
+    "all_rep_indices":            list(range(1, 11)),   # 1-indexed rep pool
+    "available_gesture_classes":  list(range(0, 10)),   # 0-indexed class labels
 
-    Defaults: 24 pretrain users (PIDs 1-24), 10 reps (1-indexed),
-    10-way, euclidean distance, no augmentation, 8 PCA dims per modality.
-
-    After building, override any key directly:
-        config = build_config()
-        config["support_reps"] = [1]
-        config["query_reps"]   = list(range(2, 11))
-        config["pca_n_components"] = 16
-    """
-    return {
-        "eval_PIDs":           eval_pids,
-        "n_way":               n_way,
-        "knn_metric":          metric,
-        "seed":                seed,
-        "use_imu":             use_imu,
-        "aug_support":         aug_support,
-        "aug_n_copies":        aug_n_copies,
-        "aug_noise_std":       0.05,
-        "aug_max_shift":       4,
-        "aug_ch_drop":         0.10,
-        "emg_pca_dims":        emg_pca_dims,  # <--- Changed
-        "imu_pca_dims":        imu_pca_dims,  # <--- Added
-        "shared_pca":          shared_pca,    # <--- Added
-        "use_fixed_rep_split": use_fixed_rep_split,
-        "device":              device or ("cuda" if torch.cuda.is_available() else "cpu"),
-    }
-
+    "aug_support":         False,
+    "aug_n_copies":        0,
+    "aug_noise_std":       0.05,
+    "aug_max_shift":       4,
+    "aug_ch_drop":         0.10,
+}
 
 def eval_from_path(
     tensor_dict_path: str,
