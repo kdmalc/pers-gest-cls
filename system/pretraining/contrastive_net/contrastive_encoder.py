@@ -354,6 +354,10 @@ class ContrastiveGestureEncoder(nn.Module):
         z_q = self.forward(query_emg, query_imu, query_demo)  # (B, D)
 
         # TODO: What is the connection to k-shot here? Does this still run in 1-shot?
+        # $B k-shot... is a bit separate. $B did 1-NN no matter the shot...
+        # TODO: I dont love that this is inferring labels...
+        # Since this is only the prediction function we don't get/know the labels yet
+        ## It is just pulling the labels from the prototypes to assign our query samples...
         labels  = sorted(prototypes.keys())
         proto_mat = torch.stack([prototypes[l] for l in labels], dim=0)  # (K, D)
         proto_mat = proto_mat.to(z_q.device)

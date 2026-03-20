@@ -18,10 +18,13 @@ Validation DataLoader:
 
 Data format (from existing tensor_dict):
   tensor_dict[pid][gesture_id] = {
-      'emg'  : Tensor (N_trials, T, C_emg)   → we permute to (N, C, T)
-      'imu'  : Tensor (N_trials, T, C_imu) | None
+      'emg'  : Tensor (N_trials, T, C_emg) on disk → normalized to (N_trials, C_emg, T)
+      'imu'  : Tensor (N_trials, T, C_imu) on disk → normalized to (N_trials, C_imu, T) | None
       'demo' : Tensor (demo_dim,)
   }
+
+  normalize_tensor_dict() is called once in get_contrastive_dataloaders(), immediately
+  after pickle.load(). All downstream code can assume (N_trials, C, T) channel-first order.
 """
 
 import os
@@ -38,6 +41,50 @@ def worker_init_fn(worker_id):
     random.seed(seed)
 
 
+KNOWN_CHANNEL_COUNTS = {16, 72}
+
+
+def normalize_tensor_dict(tensor_dict: dict) -> None:
+    """
+    Normalizes all EMG/IMU tensors to (N_trials, C, T) in-place,
+    immediately after loading from disk.
+
+    This is the single, authoritative place where channel ordering is fixed.
+    No downstream code needs to think about axis ordering again.
+
+    Raw shapes expected from disk:
+        emg : (N_trials, T, C_emg)  →  (N_trials, C_emg, T)
+        imu : (N_trials, T, C_imu)  →  (N_trials, C_imu, T)  [if present]
+
+    Raises ValueError immediately if a shape is unrecognizable, so data
+    issues surface at load time rather than as cryptic collate errors.
+    """
+    def _to_channel_first(tensor: torch.Tensor, key: str, pid, gid) -> torch.Tensor:
+        if tensor.dim() != 3:
+            raise ValueError(
+                f"tensor_dict[{pid}][{gid}]['{key}']: expected 3-D (N, T, C) or "
+                f"(N, C, T), got shape {tuple(tensor.shape)}."
+            )
+        N, d1, d2 = tensor.shape
+        if d2 in KNOWN_CHANNEL_COUNTS:
+            return tensor.transpose(1, 2).contiguous()   # (N, T, C) → (N, C, T)
+        elif d1 in KNOWN_CHANNEL_COUNTS:
+            return tensor.contiguous()                    # already (N, C, T)
+        else:
+            raise ValueError(
+                f"tensor_dict[{pid}][{gid}]['{key}'] shape {tuple(tensor.shape)}: "
+                f"neither dim[1]={d1} nor dim[2]={d2} is in "
+                f"KNOWN_CHANNEL_COUNTS={KNOWN_CHANNEL_COUNTS}. "
+                "Update KNOWN_CHANNEL_COUNTS or check your data pipeline."
+            )
+
+    for pid, gestures in tensor_dict.items():
+        for gid, entry in gestures.items():
+            entry['emg'] = _to_channel_first(entry['emg'], 'emg', pid, gid)
+            if entry.get('imu') is not None:
+                entry['imu'] = _to_channel_first(entry['imu'], 'imu', pid, gid)
+
+
 # ============================================================
 # 1. FLAT TRAINING DATASET
 # ============================================================
@@ -46,12 +93,10 @@ class FlatGestureDataset(Dataset):
     """
     Returns individual gesture windows as flat samples.
     Each item: {'emg', 'imu', 'demo', 'label', 'user_id'}
-
-    This is intentionally dead simple — all the magic is in the Sampler.
     """
 
     def __init__(self, tensor_dict: dict, target_pids: list,
-                 target_gestures: list, use_imu: bool = False):
+                 target_gestures: list, target_reps: list = None, use_imu: bool = False):
         self.use_imu = use_imu
         self.samples = []  # List of (pid, gesture_id, trial_idx)
         self.data    = {}
@@ -63,15 +108,21 @@ class FlatGestureDataset(Dataset):
             for gid in target_gestures:
                 if gid not in tensor_dict[pid]:
                     continue
+                
                 entry = tensor_dict[pid][gid]
                 n_trials = entry['emg'].shape[0]
                 self.data[pid][gid] = entry
-                for i in range(n_trials):
+                
+                # Filter by 1-indexed target reps
+                if target_reps is not None:
+                    valid_trials = [r - 1 for r in target_reps if (r - 1) < n_trials]
+                else:
+                    valid_trials = list(range(n_trials))
+
+                for i in valid_trials:
                     self.samples.append((pid, gid, i))
 
         # Build class index: label → list of sample indices (into self.samples)
-        # We use (pid, gesture_id) as the "full class" identity,
-        # but gesture_id alone is the label for contrastive grouping.
         self.gesture_to_indices = {}
         for idx, (pid, gid, _) in enumerate(self.samples):
             self.gesture_to_indices.setdefault(gid, []).append(idx)
@@ -86,21 +137,19 @@ class FlatGestureDataset(Dataset):
         pid, gid, trial_i = self.samples[idx]
         entry = self.data[pid][gid]
 
-        # EMG: (T, C_emg) → (C_emg, T)
-        emg = entry['emg'][trial_i].permute(1, 0) if entry['emg'][trial_i].dim() == 2 \
-              else entry['emg'][trial_i].T
+        # EMG already (C, T) — normalized to channel-first at load time
+        emg = entry['emg'][trial_i]
 
         imu = None
         if self.use_imu and entry.get('imu') is not None:
-            raw_imu = entry['imu'][trial_i]
-            imu = raw_imu.permute(1, 0) if raw_imu.dim() == 2 else raw_imu.T
+            imu = entry['imu'][trial_i]
 
         demo  = entry['demo'].float()
         label = gid  # gesture class (int)
 
         return {
             'emg':     emg.float(),
-            'imu':     imu,
+            'imu':     imu.float() if imu is not None else None,
             'demo':    demo,
             'label':   label,
             'user_id': pid,
@@ -113,16 +162,7 @@ class FlatGestureDataset(Dataset):
 
 class BalancedGestureSampler(Sampler):
     """
-    Yields batch indices such that each batch contains exactly:
-        samples_per_class × classes_per_batch  samples
-
-    Within each batch, every included gesture class has exactly
-    `samples_per_class` samples, drawn uniformly at random from all
-    users. This guarantees at least (samples_per_class - 1) positives
-    per anchor, enabling rich SupCon gradients.
-
-    If a class has fewer than `samples_per_class` available trials,
-    we sample with replacement for that class.
+    Yields batch indices ensuring guaranteed positives per batch.
     """
 
     def __init__(self, dataset: FlatGestureDataset,
@@ -139,7 +179,6 @@ class BalancedGestureSampler(Sampler):
 
     def __iter__(self):
         for _ in range(self.steps_per_epoch):
-            # Pick which gesture classes appear in this batch
             chosen_gestures = random.sample(
                 self.dataset.unique_gestures,
                 self.classes_per_batch
@@ -154,7 +193,6 @@ class BalancedGestureSampler(Sampler):
                     chosen = random.choices(pool, k=self.samples_per_class)
                 batch_indices.extend(chosen)
 
-            # Shuffle within batch so model doesn't see sorted labels
             random.shuffle(batch_indices)
             yield batch_indices
 
@@ -164,15 +202,9 @@ class BalancedGestureSampler(Sampler):
 # ============================================================
 
 def flat_collate(batch):
-    """
-    Collates a flat list of sample dicts into tensors.
-    Handles None IMU by returning None for the whole batch.
-    """
     emg    = torch.stack([s['emg'] for s in batch], dim=0)
     labels = torch.tensor([s['label'] for s in batch], dtype=torch.long)
     demo   = torch.stack([s['demo'] for s in batch], dim=0)
-    # My user_ids are strings like "P100" so we cannot directly convert to torch.long (integers)
-    #user_ids = torch.tensor([s['user_id'] for s in batch], dtype=torch.long)
     user_ids = [s['user_id'] for s in batch]
 
     imu = None
@@ -195,15 +227,10 @@ def flat_collate(batch):
 class EpisodicValDataset(Dataset):
     """
     Pre-generates N episodes per validation user.
-    Each episode:
-      - support: k_shot samples per class (used to build prototypes)
-      - query:   remaining samples per class
-
-    This exactly mirrors test-time inference so val accuracy is meaningful.
     """
 
     def __init__(self, tensor_dict: dict, target_pids: list,
-                 target_gestures: list, n_way: int = 10,
+                 target_gestures: list, target_reps: list = None, n_way: int = 10,
                  k_shot: int = 1, q_query: int = 9,
                  num_episodes_per_user: int = 20,
                  seed: int = 42, use_imu: bool = False):
@@ -231,22 +258,26 @@ class EpisodicValDataset(Dataset):
                     local_label = label_map[gid]
                     entry  = data[pid][gid]
                     n_tri  = entry['emg'].shape[0]
-                    idxs   = list(range(n_tri))
+                    
+                    if target_reps is not None:
+                        idxs = [r - 1 for r in target_reps if (r - 1) < n_tri]
+                    else:
+                        idxs = list(range(n_tri))
+                        
                     rng.shuffle(idxs)
 
                     sup_idx = idxs[:k_shot]
                     qry_idx = idxs[k_shot: k_shot + q_query]
 
                     def make_sample(i):
+                        # EMG/IMU already (C, T) — normalized at load time
                         emg = entry['emg'][i]
-                        emg = emg.permute(1, 0) if emg.dim() == 2 else emg.T
                         imu = None
                         if use_imu and entry.get('imu') is not None:
-                            raw = entry['imu'][i]
-                            imu = raw.permute(1, 0) if raw.dim() == 2 else raw.T
+                            imu = entry['imu'][i]
                         return {
                             'emg':   emg.float(),
-                            'imu':   imu,
+                            'imu':   imu.float() if imu is not None else None,
                             'demo':  entry['demo'].float(),
                             'label': local_label,
                         }
@@ -272,7 +303,6 @@ class EpisodicValDataset(Dataset):
 
 
 def episodic_collate(batch):
-    """Collates a list of episode dicts (batch_size=1)."""
     ep = batch[0]
 
     def stack(samples):
@@ -300,26 +330,32 @@ def episodic_collate(batch):
 def get_contrastive_dataloaders(config: dict, tensor_dict_path: str):
     """
     Returns (train_dl, val_dl) for contrastive training.
-
-    train_dl: Flat balanced batches — no episodic structure.
-    val_dl  : Pre-generated 1-shot prototyping episodes per user.
     """
     with open(tensor_dict_path, 'rb') as f:
-        tensor_dict = pickle.load(f)
+        full_dict = pickle.load(f)
+        tensor_dict = full_dict['data']
+
+    # Normalize ALL tensors to (N_trials, C, T) once, right here.
+    # Every Dataset and collate_fn below can assume clean channel-first data.
+    normalize_tensor_dict(tensor_dict)
 
     use_imu          = config.get('use_imu', False)
     num_workers      = config.get('num_workers', 4)
     batch_mode       = config.get('batch_construction', 'balanced')
     spc              = config.get('samples_per_class', 6)
     cpb              = config.get('classes_per_batch', 10)
-    gestures         = config.get('gesture_labels', list(range(1, 11)))
+    gestures         = config.get('gesture_labels', list(range(10)))
     steps_per_epoch  = config.get('steps_per_epoch_train', 500)
+    
+    train_reps       = config.get('train_reps', None)
+    val_reps         = config.get('val_reps', None)
 
     # ---- Train ----
     train_ds = FlatGestureDataset(
         tensor_dict,
         target_pids=config['train_PIDs'],
         target_gestures=gestures,
+        target_reps=train_reps,
         use_imu=use_imu,
     )
 
@@ -349,6 +385,7 @@ def get_contrastive_dataloaders(config: dict, tensor_dict_path: str):
         tensor_dict,
         target_pids=config['val_PIDs'],
         target_gestures=gestures,
+        target_reps=val_reps,
         n_way=config.get('num_classes', 10),
         k_shot=config.get('val_support_shots', 1),
         q_query=config.get('val_query_per_class', 9),

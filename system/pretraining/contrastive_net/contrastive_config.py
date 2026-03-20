@@ -7,7 +7,7 @@ All hyperparameters live here — no magic numbers scattered across files.
 Data facts (from MAML HPO):
   - 32 total users, 24 train / 4 val / 4 test (4-fold CV)
   - 16 EMG channels, 72 IMU channels, seq_len=64
-  - 10 gesture classes (labels 1-10)
+  - 10 gesture classes (labels 0-9)
   - 12-dim demographics vector
 
 Training philosophy:
@@ -43,22 +43,18 @@ CONTRASTIVE_CONFIG = {
     "code_dir":             str(CODE_DIR),
     "data_dir":             str(DATA_DIR),
     "run_dir":              str(RUN_DIR),
-    "tensor_dict_path":     str(CODE_DIR / "dataset" / "meta-learning-sup-que-ds" / "maml_tensor_dict.pkl"),
+    "tensor_dict_path":     str(CODE_DIR / "dataset" / "segfilt_rts_tensor_dict.pkl"),
     "user_split_json_filepath": str(CODE_DIR / "system" / "fixed_user_splits" / "4kfcv_splits_shared_test.json"),
     "checkpoint_dir":       str(RUN_DIR / "contrastive_checkpoints"),
 
     # ----------------------------------------------------------
     # ARCHITECTURE TOGGLE
     # ----------------------------------------------------------
-    # 'cnn_lstm'  → CNN + BiLSTM (matches your MAML backbone, more expressive)
-    # 'cnn_attn'  → CNN + learned attention pooling (faster, parallelizes better)
     "arch_mode":            "cnn_attn",   # RECOMMENDED start
 
     # ----------------------------------------------------------
     # LOSS TOGGLE
     # ----------------------------------------------------------
-    # 'supcon'   → Supervised Contrastive Loss (Khosla et al. 2020)
-    # 'siamese'  → Pairwise cosine margin loss (classic Siamese)
     "loss_mode":            "supcon",     # RECOMMENDED start
 
     # ----------------------------------------------------------
@@ -73,15 +69,33 @@ CONTRASTIVE_CONFIG = {
     "demo_in_dim":          12,
     "sequence_length":      64,
     "num_classes":          10,           # 10-way gesture set
-    "gesture_labels":       [1,2,3,4,5,6,7,8,9,10],
+    "gesture_labels":       [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], # 0-indexed to match new tensor_dict
 
     # ----------------------------------------------------------
-    # USER SPLITS  (filled at runtime from JSON)
+    # USER & TRIAL SPLITS
     # ----------------------------------------------------------
     "num_total_users":      32,
-    "train_PIDs":           [],           # Populated by apply_fold_to_config()
-    "val_PIDs":             [],
-    "test_PIDs":            [],
+
+    # Should val and test match train PIDs? Doing in-distribution vs cross-user out-of-distribution...
+    # For now I think we should set them to train...
+    ## It actually does very very well if its just an intra-subject split, it gets 100% train and 80% val lol
+    "train_PIDs":         [
+        "P102","P114","P119","P005","P107","P126","P132","P112",
+        "P103","P125","P127","P010","P128","P111","P118",
+        "P124","P110","P116","P108","P104","P122","P131","P106","P115"
+        ],
+    #"val_PIDs":           ["P102","P114","P119","P005","P107","P126","P132","P112"],
+    "val_PIDs":           ["P011","P006","P105","P109"],
+    "test_PIDs":          ["P008","P004","P123","P121"],  
+
+    #"train_PIDs":           [],           # Populated by apply_fold_to_config()
+    #"val_PIDs":             [],
+    #"test_PIDs":            [],
+
+    # 1-indexed trial numbers to withhold/train on.
+    "train_reps":           [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],  # INTRA: [1, 2, 3, 4, 5, 6, 7, 8],
+    # Cross-user episodic eval usually requires all 10 reps to do 1-shot 9-query:
+    "val_reps":             [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],  # INTRA: [9, 10],
 
     # ----------------------------------------------------------
     # CNN ENCODER
@@ -102,6 +116,7 @@ CONTRASTIVE_CONFIG = {
     "use_lstm":             True,
     "lstm_hidden":          128,
     "lstm_layers":          2,
+    # TODO: Is GAP used AFTER CNN BEFORE LSTM, or just AFTER LSTM? If its after it doesnt matter
     "use_GlobalAvgPooling": True,         # True=GAP over LSTM outputs; False=concat last hidden
 
     # ----------------------------------------------------------
@@ -117,53 +132,34 @@ CONTRASTIVE_CONFIG = {
     # ----------------------------------------------------------
     # PROJECTION HEAD  (maps backbone features → contrastive embedding)
     # ----------------------------------------------------------
-    # embedding_dim: final L2-normed space dimensionality
-    # proj_hidden_dim: MLP hidden layer inside projection head
-    # Use None to use a linear projection (no hidden layer)
     "embedding_dim":        128,
     "proj_hidden_dim":      256,          # None → single linear layer
 
     # ----------------------------------------------------------
     # SUPCON LOSS  (loss_mode == 'supcon')
     # ----------------------------------------------------------
-    # Temperature τ: lower = sharper, harder negatives. 0.07 is SupCon default.
-    # hard_negative_mining: weight harder negatives more strongly --> TODO: This is not fully implemented yet!!
-    # label_hierarchy: enables 4-level weighting (see SupConLoss docstring) --> TODO: Ought to test different hierarchies levels/orderings...
     "supcon_temperature":   0.07,
     "hard_negative_mining": False,        # Start False; ablate on
     "label_hierarchy":      False,        # 4-level: (user,gest) > (user,diff) > (diff,gest) > (diff,diff)
-                                          # Start False for clean SupCon; revisit if val accuracy plateaus
 
     # ----------------------------------------------------------
     # SIAMESE LOSS  (loss_mode == 'siamese')
     # ----------------------------------------------------------
-    # cosine_margin: push negatives below this cosine similarity
-    # pos_weight: weight of positive pairs relative to negative pairs
     "cosine_margin":        0.4,
     "pos_weight":           1.0,
 
     # ----------------------------------------------------------
     # DATALOADER / BATCH CONSTRUCTION
     # ----------------------------------------------------------
-    # Flat batching (no episodic structure for training).
-    # For SupCon to work well you want M samples per class per batch.
-    # samples_per_class_per_batch × num_classes_in_batch = effective batch size.
-    # Recommended: 4-8 samples/class, as many classes as memory allows.
     "batch_construction":   "balanced",   # 'balanced' (recommended) or 'random'
-    # TODO: This is pretraining... so... k-shot doesnt matter here?
-    ## Wait... is this even k-shot? Since we are pulling from multiple users (batches are not user-specific at this stage), 
-    ## increasing samples_per_class really just increases the likelihood that we have multiple samples from the same user, which 
-    ## CURRENTLY IS NOT EVEN GUARANTEED! (Will that break the label_hierarchy off runs? 
-    ## Since we could have zero positive samples? Unless we count same gesture diff user as pos...)
     "samples_per_class":    6,            # M samples per gesture per batch  
     "classes_per_batch":    10,           # How many gesture classes to include per batch
-                                          # effective_batch_size = samples_per_class × classes_per_batch = 60
     "num_workers":          8,
 
     # Validation: 1-shot prototyping accuracy (mimics test-time protocol exactly)
     "val_support_shots":    1,            # k-shot for prototype construction
     "val_query_per_class":  9,            # How many query samples to evaluate per class
-    "num_val_episodes":     20,           # Episodes per val user --> TODO: Are eps still unlimited... or is there only one val ep if we do 1-9 (10+90=100)... or can eps be sampled over and over independently?...
+    "num_val_episodes":     20,           
 
     # ----------------------------------------------------------
     # OPTIMIZATION
@@ -187,7 +183,7 @@ CONTRASTIVE_CONFIG = {
     "seed":                 42,
     "verbose":              True,
     "grad_clip":            5.0,          # Max gradient norm; None to disable
-    "log_interval":         100,           # Steps between training log prints
+    "log_interval":         100,          # Steps between training log prints
 }
 
 

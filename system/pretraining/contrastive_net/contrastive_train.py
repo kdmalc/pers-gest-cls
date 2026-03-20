@@ -102,29 +102,42 @@ def warmup_lr(optimizer, epoch: int, warmup_epochs: int, base_lr: float):
 
 def train_one_epoch(model, loader, loss_fn, optimizer, config, epoch):
     model.train()
-    device      = torch.device(config['device'])
-    grad_clip   = config.get('grad_clip', 1.0)
-    log_interval = config.get('log_interval', 50)
-    use_hierarchy = config.get('label_hierarchy', False)
-
-    total_loss  = 0.0
-    n_steps     = 0
+    device = torch.device(config['device'])
+    grad_clip = config.get('grad_clip', 1.0)
+    log_interval = config.get('log_interval', 100) # Increased interval to reduce clutter
+    
+    total_loss = 0.0
+    total_correct = 0
+    total_samples = 0
+    n_steps = 0
 
     for step, batch in enumerate(loader):
-        emg      = batch['emg'].to(device)              # (B, C, T)
-        labels   = batch['labels'].to(device)            # (B,)
-        demo     = batch['demo'].to(device) if batch['demo'] is not None else None
-        imu      = batch['imu'].to(device) if batch['imu'] is not None else None
-        # user_ids should just be strings used for tracking and thus not need to go to the GPU? Let's see if that messes things up...
-        user_ids = batch['user_ids']#.to(device)
+        emg = batch['emg'].to(device)
+        labels = batch['labels'].to(device)
+        demo = batch['demo'].to(device) if batch['demo'] is not None else None
+        imu = batch['imu'].to(device) if batch['imu'] is not None else None
+        user_ids = batch['user_ids']
 
         # Forward
-        z = model(emg, imu=imu, demo=demo)              # (B, D) L2-normed
+        z = model(emg, imu=imu, demo=demo) # (B, D)
 
-        # Loss
-        loss = loss_fn(z, labels, user_ids=user_ids if use_hierarchy else None)
+        # Calculate Training "Proxy" Accuracy (Nearest Neighbor in Batch)
+        # This helps you see if the embeddings are actually clustering
+        with torch.no_grad():
+            # Compute cosine similarity between all embeddings in the batch
+            sim_matrix = torch.matmul(z, z.T) 
+            # Mask out self-similarity (the diagonal)
+            sim_matrix.fill_diagonal_(-1)
+            # Find the index of the most similar neighbor
+            nn_idx = sim_matrix.argmax(dim=1)
+            # Check if the nearest neighbor has the same label
+            correct = (labels[nn_idx] == labels).sum().item()
+            total_correct += correct
+            total_samples += labels.size(0)
 
-        # Backward
+        # Loss and Backward
+        loss = loss_fn(z, labels, user_ids=user_ids if config.get('label_hierarchy') else None)
+        
         optimizer.zero_grad()
         loss.backward()
         if grad_clip is not None:
@@ -132,12 +145,16 @@ def train_one_epoch(model, loader, loss_fn, optimizer, config, epoch):
         optimizer.step()
 
         total_loss += loss.item()
-        n_steps    += 1
+        n_steps += 1
 
-        if config.get('verbose', False) and (step + 1) % log_interval == 0:
-            print(f"  [Epoch {epoch+1} | Step {step+1}] loss={loss.item():.4f}", flush=True)
+        # Only print occasionally to keep the console clean
+        #if (step + 1) % log_interval == 0:
+        #    current_acc = (total_correct / total_samples) * 100
+        #    print(f"  [Epoch {epoch+1} | Step {step+1}] Loss: {loss.item():.4f} | Batch NN-Acc: {current_acc:.2f}%")
 
-    return total_loss / max(n_steps, 1)
+    avg_loss = total_loss / max(n_steps, 1)
+    avg_acc = (total_correct / total_samples) * 100
+    return avg_loss, avg_acc
 
 
 # ============================================================
@@ -158,7 +175,7 @@ def evaluate_prototyping(model, val_loader, config):
     device  = torch.device(config['device'])
     all_acc = []
 
-    for batch in val_loader:
+    for i, batch in enumerate(val_loader):
         support = batch['support']
         query   = batch['query']
 
@@ -171,6 +188,21 @@ def evaluate_prototyping(model, val_loader, config):
         q_labels = query['labels'].to(device)
         q_demo   = query['demo'].to(device) if query['demo'] is not None else None
         q_imu    = query['imu'].to(device) if query['imu'] is not None else None
+
+        ################################################################################
+        ## DEBUGGING 0% VAL ACC: --> It is working now
+        ## Check if query labels even exist in support labels
+        #s_set = set(s_labels.cpu().numpy())
+        #q_set = set(q_labels.cpu().numpy())
+        #intersection = s_set.intersection(q_set)
+        #if i == 0: # Just print for the first batch of the epoch
+        #    print(f"DEBUG VAL: Support Classes: {s_set}")
+        #    print(f"DEBUG VAL: Query Classes: {q_set}")
+        #    print(f"DEBUG VAL: Intersection: {intersection}")
+        #if not intersection:
+        #    # If this prints, your data loader is broken!
+        #    print("CRITICAL: Query classes are not present in Support classes.")
+        ################################################################################
 
         # Build prototypes
         prototypes = model.get_prototypes(s_emg, s_labels, s_imu, s_demo)
@@ -236,10 +268,10 @@ def train(config: dict, fold_idx: int):
         warmup_lr(optimizer, epoch, warmup_epochs, base_lr)
 
         # Train
-        train_loss = train_one_epoch(model, train_dl, loss_fn, optimizer, config, epoch)
+        train_loss, train_acc = train_one_epoch(model, train_dl, loss_fn, optimizer, config, epoch)
         train_loss_log.append(train_loss)
 
-        # Val
+        # Val (Make sure evaluate_prototyping returns 0.0-1.0)
         val_acc = evaluate_prototyping(model, val_dl, config)
         val_acc_log.append(val_acc)
 
@@ -253,9 +285,9 @@ def train(config: dict, fold_idx: int):
         current_lr = optimizer.param_groups[0]['lr']
         ep_time    = time.time() - ep_start
 
-        print(f"[Fold {fold_idx} | Epoch {epoch+1:3d}/{num_epochs}] "
-              f"loss={train_loss:.4f} | val_acc={val_acc*100:.2f}% | "
-              f"lr={current_lr:.2e} | {ep_time:.1f}s", flush=True)
+        print(f"[Fold {fold_idx} | Epoch {epoch+1:3d}] "
+            f"Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | "
+            f"Val Acc: {val_acc*100:.2f}% | lr: {current_lr:.2e}")
 
         # Best checkpoint
         if val_acc > best_val_acc + es_min_delta:
@@ -309,7 +341,9 @@ def main():
     with open(config['user_split_json_filepath'], 'r') as f:
         all_splits = json.load(f)
 
-    apply_fold_to_config(config, all_splits, args.fold)
+    if len(config["train_PIDs"])==0:
+        print("Loading in train/val/test split from json!")
+        apply_fold_to_config(config, all_splits, args.fold)
 
     best_val_acc, best_state, train_loss_log, val_acc_log = train(config, args.fold)
 
