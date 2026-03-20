@@ -204,7 +204,8 @@ class MetaGestureDataset(Dataset):
 # ==========================================
 def get_maml_dataloaders(config, tensor_dict_path):
     with open(tensor_dict_path, 'rb') as f:
-        tensor_dict = pickle.load(f)
+        full_dict = pickle.load(f)
+        tensor_dict = full_dict['data']
         
     num_workers = int(config.get('num_workers', 4))
     use_label_shuf = config.get('use_label_shuf_meta_aug', True) 

@@ -220,7 +220,7 @@ def objective(trial):
         #)
         # ---- New Optimized Data Loading ----
         # Define the path to the .pkl file we just created/verified
-        tensor_dict_path = os.path.join(config["dfs_load_path"], f"maml_tensor_dict.pkl")
+        tensor_dict_path = os.path.join(config["dfs_load_path"], f"segfilt_rts_tensor_dict.pkl")
         # This returns two standard PyTorch DataLoaders
         # It uses config['train_PIDs'] and config['val_PIDs'] internally to split the data
         episodic_train_loader, episodic_val_loader = get_maml_dataloaders(
