@@ -194,6 +194,7 @@ def build_model_from_trial(trial, base_config=None):
 
     # Pretraining optim
     config["optimizer"]          = trial.suggest_categorical("optimizer", ["adamw", "adam", "sgd"])
+    config["use_earlystopping"] = True
     config["lr_scheduler_factor"]= 0.1  #trial.suggest_categorical("pre_sched_factor", [0.1, 0.2])
     config["lr_scheduler_patience"]= 6  #trial.suggest_int("pre_sched_pat", 4, 10)
     config["earlystopping_patience"]= 8 #trial.suggest_int("pre_es_pat", 6, 14)
