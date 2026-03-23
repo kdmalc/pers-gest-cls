@@ -50,7 +50,7 @@ from system.MAML_MOE.MOE_CNN_LSTM import *
 # Import new models here
 ## TODO: is there overlap / overwriting between these .py's? Hopefully not...
 from system.pretraining.pretrain_models import build_model
-from system.pretraining.contrastive_net.contrastive_encoder import ContrastiveEncoder
+from system.pretraining.contrastive_net.contrastive_encoder import ContrastiveGestureEncoder
 
 current_directory = os.getcwd()
 print(f"The current working directory is: {current_directory}")
@@ -267,7 +267,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
     elif model_type == "MOE":
         model = MultimodalCNNLSTMMOE(config)
     else: 
-        model = ContrastiveEncoder(config)
+        model = ContrastiveGestureEncoder(config)
     
     # Placeholder for now so the code doesn't break
     model = MultimodalCNNLSTMMOE(config)
@@ -452,9 +452,11 @@ def run_study(study_name, storage_path, model_type, n_trials=1):
 if __name__ == "__main__":
     # --- Parse Command Line Args ---
     parser = argparse.ArgumentParser(description="Run MAML++ HPO for a specific model architecture.")
-    parser.add_argument("--model_type", type=str, default="DeepCNNLSTM", 
+    parser.add_argument("--model_type", type=str, default="TST", 
                         choices=["MetaCNNLSTM", "DeepCNNLSTM", "TST", "ContrastiveNet", "MOE"],
                         help="Which model architecture to optimize hyperparameters for.")
+    parser.add_argument("--data_dir", type=str)
+    parser.add_argument("--out_dir", type=str)
     args = parser.parse_args()
 
     db_dir = "/scratch/my13/kai/meta-pers-gest/optuna_dbs"

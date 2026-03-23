@@ -49,16 +49,10 @@ export MOE_DIR="$CODE_DIR/system/MAML_MOE"
 # Put CODE_DIR (for April_25.* imports) and MOE_DIR (for MOE_model_classes, etc.) on PYTHONPATH
 export PYTHONPATH="$CODE_DIR:$MOE_DIR:$PYTHONPATH"
 
-#echo "===== Sanity ====="
-#echo "Host: $(hostname)"
-#echo "which python: $(which python)"
-#python -V
-#python -c "import sys; print('sys.prefix:', sys.prefix)"
-#python -c "import numpy as np; print('numpy:', np.__version__)"
-#nvidia-smi || true
-#echo "=================="
+MODEL_NAME=${MODEL_NAME:-TST}
 
 echo "CWD:"; pwd
 python -u "$CODE_DIR/system/NOTS/mamlpp/mamlpp_pretrained_hpo.py" \
+    --model_type "$MODEL_NAME" \ 
     --data_dir "$DATA_DIR" \
     --out_dir  "$DEBUG_RUN_DIR"
