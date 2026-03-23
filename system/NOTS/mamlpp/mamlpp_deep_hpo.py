@@ -151,7 +151,8 @@ def build_model_from_trial(trial, base_config=None):
     config["use_earlystopping"] = True
     config["verbose"] = False
     config["num_total_users"] = 32
-    config["maml_reps"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # MAML users ALL 10 gesture repetitions for all users, train and val
+    config["target_trial_indices "] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # MAML users ALL 10 gesture repetitions for all users, train and val --> You can actually leave this as None and it will be default use all available gesture
+    config["maml_gesture_classes"] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     config["padding"] = 0 
     config["timestamp"] = timestamp
 

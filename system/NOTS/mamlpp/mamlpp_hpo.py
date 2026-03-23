@@ -57,7 +57,7 @@ def apply_fold_to_config(config, all_splits, fold_idx):
 ###########################
 
 from system.MAML_MOE.mamlpp import *
-from maml_data_pipeline import get_maml_dataloaders
+from system.MAML_MOE.maml_data_pipeline import get_maml_dataloaders
 from system.MAML_MOE.shared_maml import *
 from system.MAML_MOE.MOE_CNN_LSTM import *
 
@@ -71,190 +71,79 @@ timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 # ===================== OPTUNA TUNING SCRIPT =====================
 # ====== (3) --- Objective: build model, pretrain, finetune, return metric ======
 def build_model_from_trial(trial, base_config=None):
-    if base_config is not None:
-        config = copy.deepcopy(base_config) 
-    else:
-        config = dict()
+    config = copy.deepcopy(base_config) if base_config else {}
 
-    config["n_way"] = 3  #TODO: Lowered from 10 to 3 just to see what happens...
-    config["k_shot"] = 1
-    config["q_query"] = 9  # TODO: Does this need to be 9? If it set it lower does that just make it faster? Does that impact the model? Slightly noiser eval??
-    # ^^ Set it to None if we want to use ALL remaining data in the val loaders
+    # === Task Setup ===
+    config["n_way"] = 3  
+    config["k_shot"] = 5  # Stick with 5-shot as your baseline
+    config["q_query"] = 5
     config["num_classes"] = 10
+    config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32]) 
 
-    # NEW
-    config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
-    config['num_eval_episodes'] = 10
-    config['debug_one_user_only'] = False
-    config['debug_one_episode'] = False
-    config['debug_five_episodes'] = False
-    if config['debug_one_episode']:
-        config["meta_batchsize"] = 1
-    elif config['debug_five_episodes']:
-        config["meta_batchsize"] = 5
-    else:
-        config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32, 64])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
+    # === MAML Core Hyperparameters ===
+    config["maml_inner_steps"] = trial.suggest_int("maml_inner_steps", 3, 5)
+    config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [10, 15, 20])
+    config["maml_opt_order"] = "first" # First-order is significantly faster for HPO
+    config["maml_use_lslr"] = False    # Keeping False per your 'deep' script notes on negative LRs
+    
+    # Inner (Alpha) and Outer (Beta) Learning Rates
+    config["maml_alpha_init"] = trial.suggest_float("maml_alpha_init", 1e-4, 1e-1, log=True)
+    config["maml_alpha_init_eval"] = trial.suggest_float("maml_alpha_init_eval", 1e-4, 1e-2, log=True)
+    config["learning_rate"] = trial.suggest_float("outer_lr", 1e-5, 1e-2, log=True)
+    config["weight_decay"] = trial.suggest_float("wd", 1e-6, 1e-4, log=True)
 
-    # Consider fixing to 3 or 5 since the issue appears to be the inner loop not learning in 10-way full task? Learns fine on fixed 1 and 5 tasks...
-    config["maml_inner_steps"] = trial.suggest_categorical("maml_inner_steps", [1, 1, 1, 2, 2, 3])
-
-    #######################################################################
-
-    config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
-    config["feature_engr"] = "None"
-    config["time_steps"] = 1  # This is not called by the new model...
-    config["sequence_length"] = 64  # This is not called by the new model...
-    #config["num_train_gesture_trials"] = 9
-    #config["num_ft_gesture_trials"] = 1
-    config["padding"] = 0 
-    config["use_batch_norm"] = False  # NEVER USE! Our batches are small! Introduces other problems too...
-    config["timestamp"] = timestamp
-    config["dropout"] = trial.suggest_categorical("dropout", [0.0, 0.1, 0.25])
-    config["use_earlystopping"] = True
-    config["verbose"] = False
-    config["num_total_users"] = 32
-    config["train_gesture_range"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    config["valtest_gesture_range"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    config["track_gradient_alignment"] = True
-
-    config["NOTS"] = True
-    if config["NOTS"]==False:
-        #config["emg_imu_pkl_full_path"] = 'C:\\Users\\kdmen\\Box\\Yamagami Lab\\Data\\Meta_Gesture_Project\\filtered_datasets\\metadata_IMU_EMG_allgestures_allusers.pkl'
-        config["pwmd_xlsx_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\Biosignal gesture questionnaire for participants with disabilities.xlsx"
-        config["pwoutmd_xlsx_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\Biosignal gesture questionnaire for participants without disabilities.xlsx"
-        config["dfs_save_path"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\"
-        config["dfs_load_path"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\"
-        config["user_split_json_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\fixed_user_splits\\4kfcv_splits_shared_test.json"
-        config["results_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\results\\local_{timestamp}"
-        config["models_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\models\\local_{timestamp}"
-    elif config["NOTS"]==True:
-        ## SAVING
-        config["user_split_json_filepath"] = user_split_json_filepath
-        config["results_save_dir"] = results_save_dir
-        config["models_save_dir"] = models_save_dir
-        ## Mutlimodal LOADING
-        config["emg_imu_pkl_full_path"] = f"{CODE_DIR}//dataset//filtered_datasets//metadata_IMU_EMG_allgestures_allusers.pkl" 
-        
-        config["pwmd_xlsx_filepath"] = f"{CODE_DIR}//dataset//Biosignal gesture questionnaire for participants with disabilities.xlsx"
-        config["pwoutmd_xlsx_filepath"] = f"{CODE_DIR}//dataset//Biosignal gesture questionnaire for participants without disabilities.xlsx"
-        
-        config["dfs_save_path"] = f"{CODE_DIR}/dataset//"
-        config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds//"
-
-    # ----- Model layout hyperparams -----
-    config["num_experts"]   = trial.suggest_int("num_experts", 3, 5)
-    config["use_shared_expert"]   = trial.suggest_categorical("use_shared_expert", [True, False])
-    config["expert_architecture"]   = trial.suggest_categorical("expert_architecture", ["MLP", "linear", "cosine"])
-    # Should I add init_tau back in? Or is it not worth HPOing over... note that this is not synced right now
-    #if config["expert_architecture"] == "cosine":
-    #    config["init_tau"] = 5.0  #trial.suggest_float("init_tau", 5.0, 30.0)
-    config["top_k"]         = trial.suggest_categorical("top_k", [1, 2, 3])  # None means all/equal voting --> TODO: Does None still mean that... I removed it to force MOE to specialize
-    config["gate_type"]     = trial.suggest_categorical("gate_type", ["context_only", "feature_only", "demographic_only", "context_feature", "context_feature_demo"])
-    #config["gate_dense_before_topk"] = True 
-    #config["pool_mode"] = trial.suggest_categorical("pool_mode", ['avg', 'max', 'avgmax'])  # --> I dont remember what this was or where it was...
-    config["mixture_mode"] = 'logits'  # 'logits' | 'probs' | 'logprobs' --> I didnt even add the other options
-    config["return_aux"] = True  # Have the MOE layer return which expert got which sample. I am not 100% sure this is working correctly lol
-
-    # NEW MULTIMODAL
-    # NOTE: The latent dimensionality must be divisible by num_groups or it will break!!
+    # === Architecture Capacity ===
+    config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    config["sequence_length"] = 64
+    config["use_batch_norm"] = False
     config["groupnorm_num_groups"] = trial.suggest_categorical("groupnorm_num_groups", [4, 8])
-    config["emg_base_cnn_filters"]       = trial.suggest_categorical("emg_emb_dim", [16, 32, 32, 64, 64, 96, 128])
-    config["imu_base_cnn_filters"]       = trial.suggest_categorical("imu_emb_dim", [16, 32, 32, 64, 64, 96, 128])
-    # Idk if my model will still work if I increase the stride... nmight need to get the shapes to match....
-    ## Hmm I wonder if the strides need to be the same actually so the feature maps have the same seq lens... not sure...
-    config['emg_stride'] = 1  
-    config['imu_stride'] = 1  
-    config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel_size", [3, 5, 7])
-    config["imu_cnn_layers"] = trial.suggest_categorical("imu_cnn_layers", [1, 1, 1, 2, 2, 3])
-    config["emg_cnn_layers"] = trial.suggest_categorical("emg_cnn_layers", [1, 1, 1, 2, 2, 3])
-    config["use_film_x_demo"] = trial.suggest_categorical("use_film_x_demo", [True, False])
-    config["use_imu"] = True 
-    config["use_demographics"] = True  # Is it worth testing turning this off?
-    config["context_emb_dim"] = trial.suggest_categorical("context_emb_dim", [4, 8, 12, 16])
-    config["context_pool_type"] = trial.suggest_categorical("context_pool_type", ['mean', 'attn'])  
-    config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [4, 8, 16])
+    config["dropout"] = 0.1 
 
-    config["multimodal"] = True
+    # CNN Width & Depth
+    config["emg_base_cnn_filters"] = trial.suggest_categorical("emg_width", [32, 64, 128, 256])
+    config["imu_base_cnn_filters"] = trial.suggest_categorical("imu_width", [32, 64, 128, 256])
+    config["emg_cnn_layers"] = trial.suggest_int("emg_depth", 2, 4)
+    config["imu_cnn_layers"] = trial.suggest_int("imu_depth", 2, 4)
+    config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel", [3, 5])
+    config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
+
+    # LSTM
+    config["use_lstm"] = True 
+    config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [64, 128, 256])
+    config["lstm_layers"] = trial.suggest_int("lstm_layers", 1, 3)
+
+    # === Multimodal & Conditioning ===
+    config["use_imu"] = True 
+    config["use_demographics"] = True
+    config["use_film_x_demo"] = trial.suggest_categorical("use_film_x_demo", [True, False])
+    config["FILM_on_context_or_demo"] = 'context' 
+    config["context_emb_dim"] = trial.suggest_categorical("context_emb_dim", [8, 16, 32, 64])
+    config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [8, 16, 32, 64])
+    config["context_pool_type"] = trial.suggest_categorical("context_pool_type", ['mean', 'attn'])  
+
+    # === MoE (Mixture of Experts) ===
+    # Set use_MOE to trial.suggest_categorical if you want Optuna to decide
+    config["use_MOE"] = False 
+    if config["use_MOE"]:
+        config["num_experts"] = trial.suggest_int("num_experts", 3, 6)
+        config["top_k"] = trial.suggest_int("top_k", 1, 2, 3)
+        config["gate_type"] = "context_feature_demo"
+        config["expert_architecture"] = "MLP"
+    
+    # === Meta-Augmentation & Training Flow ===
+    config["use_label_shuf_meta_aug"] = False 
+    config["num_epochs"] = 50 
+    config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500])
+    config["earlystopping_patience"] = 8 
+    
+    # Static inputs for dimensions
     config['emg_in_ch'] = 16
     config['imu_in_ch'] = 72
-    config['demo_in_dim'] = 12  # TODO: It does one hot encoding to get 12
-    config['num_epochs'] = 40  
+    config['demo_in_dim'] = 12
+    config["label_smooth"] = 0.0
 
-    config["use_lstm"] = trial.suggest_categorical("use_lstm", [True, False])
-    if config["use_lstm"]:
-        config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [16, 32, 32, 64, 128])
-        config["lstm_layers"] = trial.suggest_categorical("lstm_layers", [1, 1, 1, 2, 2, 3])
-        #config["lstm_bidirectional"] = True  # Not implemented, hardcoded as True by default
-        config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
-
-    # MOE Hyperparams
-    config["label_smooth"]       = 0.0  #trial.suggest_float("label_smooth", 0.0, 0.15)
-    # TODO: These are not used at all atm
-    #config["expert_dropout"]     = 0.25  #trial.suggest_float("expert_dropout", 0.0, 0.40)
-    #config["gate_balance_coef"]  = 0.1  #trial.suggest_float("gate_balance_coef", 0.0, 0.15)
-
-    # Pretraining optim
-    config["weight_decay"]       = trial.suggest_float("pre_wd", 1e-6, 1e-3, log=True)  # TODO: Is weight_decay used right now lol
-    config["optimizer"]          = trial.suggest_categorical("optimizer", ["adamw", "adam", "sgd"])
-    config["lr_scheduler_factor"]= 0.1  #trial.suggest_categorical("pre_sched_factor", [0.1, 0.2])
-    config["lr_scheduler_patience"]= 6  #trial.suggest_int("pre_sched_pat", 4, 10)
-    config["earlystopping_patience"]= 8 #trial.suggest_int("pre_es_pat", 6, 14)
-    config["earlystopping_min_delta"]= 0.005 #trial.suggest_float("pre_es_delta", 0.001, 0.01)
-
-    # ADDING MAML SPECIFIC
-    config["meta_learning"] = True
-    config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500, 1000])  # TODO: I have no idea what this should be... this is the max on the number of tasks per EPOCH. So this limits training, if the iterable is way too  (obvi true)
-    config["num_workers"] = 8  # This is the dataloader, something about how many processes the CPU can use (more is faster generally)
-    
-    # First epochs are first order, then switches to second, if using hybrid
-    # TODO: Hardcoded for the local adaptation HPO check
-    config["maml_opt_order"] = "first"  #trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
-    if config["maml_opt_order"] == "hybrid":
-        config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 1, 40)      # DOA threshold (epochs <= this are first-order)
-    # Theoretically this should be even be used, but just in case...
-    elif config["maml_opt_order"] == "first":
-        config["maml_first_order_to_second_order_epoch"] = 1000000  # Arbitrarily large to never trigger and switch to second
-    elif config["maml_opt_order"] == "second":
-        config["maml_first_order_to_second_order_epoch"] = 0  # Do second the whole time
-    
-    # use MSL during first N epochs; after that, final-step loss only
-    ## First epochs are MSL, then turns it off
-    config["use_maml_msl"] = trial.suggest_categorical("use_maml_msl", [True, False, "hybrid"])                              # MSL (multi-step loss) on
-    if config["use_maml_msl"] == "hybrid":
-        config["maml_msl_num_epochs"] = trial.suggest_int("maml_msl_num_epochs", 1, 40)  # Also note that currently the max num_epochs is 40 (plus we use ES so may not even hit this)
-    # Theoretically this should be even be used, but just in case...
-    elif config["use_maml_msl"] == True:
-        config["maml_msl_num_epochs"] = 1000000  # Arbitrarily large to never trigger and turn MSL off
-    elif config["use_maml_msl"] == False:
-        config["maml_msl_num_epochs"] = 0
-    
-    # If LSLR is used, then alpha is only used as a fallback/init (and then we learn the learning rate). I am not sure if beta gets used at all. I think it does?
-    config["maml_use_lslr"] = True  #trial.suggest_categorical("maml_use_lslr", [True, False])                             # learn per-parameter, per-step inner LRs
-    # AKA Beta. This is the outer loop learning rate (the one that actually gets used directly in the optimizer)
-    config["learning_rate"]      = trial.suggest_float("pre_lr", 0.00001, 0.001)
-    # Alpha is the inner loop learning rate
-    ## I remember that in PerFedAvg they said beta was around 0.5 or something (IIRC)
-    if config["maml_use_lslr"] == True:
-        # These are only getting used as inits so it doesn't really matter I dont think...
-        config["maml_alpha_init"] = 0.01                            # fallback α (also eval α if LSLR not used at eval)
-        config["maml_alpha_init_eval"] = 0.01
-    elif config["maml_use_lslr"] == False:
-        config["maml_alpha_init"] = trial.suggest_float("maml_alpha_init", 0.0001, 0.1)
-        config["maml_alpha_init_eval"] = trial.suggest_float("maml_alpha_init_eval", 0.0001, 0.01)
-    config["enable_inner_loop_optimizable_bn_params"] = False  # by default, do NOT adapt BN in inner loop --> I should not be using BN at all AFAIK
-    # Eval
-    # At eval this is just the inner loop with no outer, so no MSL and no Hessian. This should be much quicker. 5-10 is common here
-    config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [3, 5, 10, 15, 20, 30])
-    config["use_cosine_outer_lr"] = False                       # This is cosine-based lr annealing... is this in addition to my lr scheduler....
-    config["use_lslr_at_eval"] = False                         # set True if you want to use learned per-parameter step sizes at eval
-
-    # ----- Build model -----
     model = MultimodalCNNLSTMMOE(config)
-    device = config["device"]
-
-    print(f"CONFIG:\n{config}\n")
-
-    model.to(device)
+    model.to(config["device"])
     return model, config
 
 
