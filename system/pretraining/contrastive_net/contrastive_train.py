@@ -400,9 +400,9 @@ def train(config: dict, fold_idx: int):
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 
-    # ---- Save dir: pretrained_outputs/ContrastiveNet/ (sibling of runs/) ----
+    # ---- Save dir: pretrain_outputs/ContrastiveNet_checkpoints/ ----
     run_dir        = Path(config['run_dir'])
-    pretrained_dir = run_dir.parent / "pretrained_outputs" / "ContrastiveNet"
+    pretrained_dir = run_dir.parent / "pretrain_outputs" / "ContrastiveNet_checkpoints"
     os.makedirs(pretrained_dir, exist_ok=True)
 
     # Name stem: {timestamp}_ContrastiveNet_{attn/lstm}_fold{N}
