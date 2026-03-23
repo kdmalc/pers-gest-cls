@@ -256,7 +256,16 @@ def pretrain(model, train_dl, val_dl, config: dict, save_path: str = None):
             best_state    = copy.deepcopy(model.state_dict())
             best_epoch    = epoch
             if save_path:
-                torch.save(best_state, save_path)
+                torch.save(
+                    {
+                        "model_state_dict": best_state,
+                        "config":           config,
+                        "epoch":            epoch,
+                        "val_loss":         best_val_loss,
+                        "checkpoint_type":  "best",
+                    },
+                    save_path,
+                )
                 print(f"  ✓ Saved best model → {save_path}")
 
         if es is not None and es(va_loss):

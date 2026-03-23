@@ -49,8 +49,8 @@ from system.MAML_MOE.MOE_CNN_LSTM import *
 
 # Import new models here
 ## TODO: is there overlap / overwriting between these .py's? Hopefully not...
-from system.pretraining.pretrain_models import *
-from system.pretraining.contrastive_net.contrastive_encoder import *
+from system.pretraining.pretrain_models import build_model
+from system.pretraining.contrastive_net.contrastive_encoder import ContrastiveEncoder
 
 current_directory = os.getcwd()
 print(f"The current working directory is: {current_directory}")
@@ -262,11 +262,12 @@ def build_model_from_trial(trial, model_type, base_config=None):
     # =========================================================================
     # MODEL INITIALIZATION
     # =========================================================================
-    # TODO: Swap this to your actual model factories from pretrain_models.py
-    # if model_type in ["MetaCNNLSTM", "DeepCNNLSTM", "TST"]:
-    #     model = build_model(config)
-    # else: 
-    #     model = ContrastiveEncoder(config)
+    if model_type in ["MetaCNNLSTM", "DeepCNNLSTM", "TST"]:
+        model = build_model(config)
+    elif model_type == "MOE":
+        model = MultimodalCNNLSTMMOE(config)
+    else: 
+        model = ContrastiveEncoder(config)
     
     # Placeholder for now so the code doesn't break
     model = MultimodalCNNLSTMMOE(config)
@@ -348,7 +349,7 @@ def objective(trial, model_type):
         apply_fold_to_config(config, ALL_SPLITS, fold_idx)
 
         # ---- Data Loading ----
-        tensor_dict_path = os.path.join(config.get("dfs_load_path", "./"), f"segfilt_rts_tensor_dict.pkl")
+        tensor_dict_path = os.path.join(config["dfs_load_path"], f"segfilt_rts_tensor_dict.pkl")
         episodic_train_loader, episodic_val_loader = get_maml_dataloaders(
             config,
             tensor_dict_path=tensor_dict_path,
@@ -412,7 +413,7 @@ def objective(trial, model_type):
         # Multiply by 100 only ONCE here for display
         print(f"[Trial {trial.number} | Fold {fold_idx}] Mean acc: {mean_acc_ratio*100:.2f}% ± {std_acc_ratio*100:.2f}%")
         print(f"[Trial {trial.number} | Fold {fold_idx}] Finished in {fold_duration:.2f} seconds.")
-        
+
         fold_mean_accs.append(mean_acc_ratio)
         all_fold_user_accs.append(all_user_means)
 
@@ -466,7 +467,7 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(FIXED_SEED)
     
     # Create a unique database and study name per model architecture!
-    study_name = f"mamlpp_{args.model_type}_2fcv_hpo"
+    study_name = f"mamlpp_pretr_{args.model_type}_2fcv_hpo"
     journal_path = os.path.join(db_dir, f"{study_name}.log")
 
     print(f"Starting HPO Study: {study_name}")

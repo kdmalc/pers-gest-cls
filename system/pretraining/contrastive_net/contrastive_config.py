@@ -50,16 +50,17 @@ CONTRASTIVE_CONFIG = {
     # ----------------------------------------------------------
     # ARCHITECTURE TOGGLE
     # ----------------------------------------------------------
-    "arch_mode":            "cnn_attn",   # RECOMMENDED start
+    "arch_mode":            "cnn_attn",   # RECOMMENDED start --> Other option is... cnn_lstm?
 
     # ----------------------------------------------------------
     # LOSS TOGGLE
     # ----------------------------------------------------------
-    "loss_mode":            "supcon",     # RECOMMENDED start
+    "loss_mode":            "supcon",     # RECOMMENDED start --> Try NT-Xent loss... less human bias (no labels)
 
     # ----------------------------------------------------------
     # DATA / MODALITY
     # ----------------------------------------------------------
+    # TODO: Is IMU support even?
     "use_imu":              False,        # Start EMG-only; ablate IMU later
     "use_demographics":     True,         # FiLM conditioning on demo vector
     "use_film_x_demo":      True,
@@ -102,7 +103,7 @@ CONTRASTIVE_CONFIG = {
     # ----------------------------------------------------------
     "emg_base_cnn_filters": 64,           # First layer width; doubles each layer
     "emg_cnn_layers":       3,
-    "imu_base_cnn_filters": 32,
+    "imu_base_cnn_filters": 32,           # Why is this different than EMG...
     "imu_cnn_layers":       2,
     "cnn_kernel_size":      5,
     "emg_stride":           1,
@@ -175,6 +176,17 @@ CONTRASTIVE_CONFIG = {
     "use_earlystopping":    True,
     "earlystopping_patience": 12,
     "earlystopping_min_delta": 0.002,
+
+    # ----------------------------------------------------------
+    # LINEAR PROBE EVALUATION
+    # ----------------------------------------------------------
+    # Linear probe: freeze backbone, fit nn.Linear(backbone_dim -> num_classes)
+    # with CE loss on training embeddings, eval on val embeddings.
+    # Run every epochs_between_linprob epochs and always on the final epoch.
+    # None is logged for skipped epochs so log lists stay epoch-index aligned.
+    "epochs_between_linprob": 5,          # How often to run the linear probe
+    "linprob_epochs":         50,         # How many CE epochs to fit the linear layer
+    "linprob_lr":             1e-2,       # LR for the linear probe Adam optimizer
 
     # ----------------------------------------------------------
     # MISC

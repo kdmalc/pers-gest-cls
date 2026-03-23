@@ -19,14 +19,37 @@ import json
 import argparse
 import torch
 import pickle
+from datetime import datetime
  
 from pretrain_models import build_model
 from pretrain_data_pipeline import get_pretrain_dataloaders
 from pretrain_trainer import pretrain
 from pretrain_eval import run_full_eval, viz_from_checkpoint
 from pretrain_configs import PRETRAIN_CONFIG, MODEL_CONFIGS
- 
- 
+
+
+def get_run_timestamp() -> str:
+    """Return a timestamp string for use in checkpoint filenames: MMDDYYYY_HHMMSS."""
+    return datetime.now().strftime("%m%d%Y_%H%M%S")
+
+
+def make_checkpoint_paths(save_dir: str, model_type: str, timestamp: str) -> dict:
+    """
+    Build the standardised checkpoint paths for a single run.
+
+    Naming convention: {ModelName}_{MMDDYYYY_HHMMSS}_{type}.pt
+
+    Returns a dict with keys:
+        'best' : path for the best-val-loss checkpoint (saved during training)
+        'last' : path for the final-epoch checkpoint   (saved after training)
+    """
+    base = f"{model_type}_{timestamp}"
+    return {
+        "best": os.path.join(save_dir, f"{base}_best.pt"),
+        "last": os.path.join(save_dir, f"{base}_last.pt"),
+    }
+
+
 def load_tensor_dict(tensor_dict_path: str) -> dict:
     """Single place in the entire codebase that touches the pkl file."""
     with open(tensor_dict_path, 'rb') as f:
@@ -44,31 +67,54 @@ def train_one_model(
 ):
     """
     Train a single pretrain model. Caller builds config and loads tensor_dict.
- 
+
+    Saves two checkpoints to save_dir:
+        {model_type}_{timestamp}_best.pt  — best validation loss (saved by trainer)
+        {model_type}_{timestamp}_last.pt  — weights at the final epoch
+
     Returns:
-        model  : trained model
-        history: training history dict
+        model       : trained model (final-epoch state)
+        history     : training history dict
+        ckpt_paths  : dict with keys 'best' and 'last'
     """
     os.makedirs(save_dir, exist_ok=True)
- 
+
+    timestamp = get_run_timestamp()
+    ckpt_paths = make_checkpoint_paths(save_dir, model_type, timestamp)
+
     train_dl, val_dl, n_classes = get_pretrain_dataloaders(config, tensor_dict)
     print(f"[train_one_model] {model_type} | n_classes={n_classes}")
  
     model = build_model(config)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"[train_one_model] {model_type} | {n_params:,} trainable parameters")
- 
-    save_path = os.path.join(save_dir, f"{model_type}_best.pt")
-    model, history = pretrain(model, train_dl, val_dl, config, save_path=save_path)
- 
-    hist_path = os.path.join(save_dir, f"{model_type}_history.json")
+    print(f"[train_one_model] Checkpoints → best: {ckpt_paths['best']}")
+    print(f"[train_one_model]               last: {ckpt_paths['last']}")
+
+    # pretrain() saves the best checkpoint internally via save_path.
+    # After it returns, we separately save the last (final-epoch) model.
+    model, history = pretrain(model, train_dl, val_dl, config, save_path=ckpt_paths["best"])
+
+    # ── Save last-epoch checkpoint ────────────────────────────────────────────
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "config":           config,
+            "epoch":            config.get("num_epochs", "unknown"),
+            "checkpoint_type":  "last",
+        },
+        ckpt_paths["last"],
+    )
+    print(f"[train_one_model] Last checkpoint saved → {ckpt_paths['last']}")
+
+    hist_path = os.path.join(save_dir, f"{model_type}_{timestamp}_history.json")
     json.dump(
         {k: [float(v) for v in vals] if isinstance(vals, list) else float(vals)
          for k, vals in history.items() if k != 'clf'},
         open(hist_path, 'w'), indent=2
     )
     print(f"[train_one_model] History saved → {hist_path}")
-    return model, history
+    return model, history, ckpt_paths
  
  
 if __name__ == "__main__":
@@ -128,7 +174,6 @@ if __name__ == "__main__":
     for mtype in models_to_run:
         print(f"\n{'#'*70}\n# Training: {mtype}\n{'#'*70}\n")
  
-        # Build config here so it's visible at the top level
         config = {
             **PRETRAIN_CONFIG,
             **MODEL_CONFIGS[mtype],
@@ -137,7 +182,7 @@ if __name__ == "__main__":
             **config_overrides,
         }
  
-        model, history = train_one_model(
+        model, history, ckpt_paths = train_one_model(
             mtype, tensor_dict, config,
             save_dir = os.path.join(args.save_dir, "checkpoints"),
         )
