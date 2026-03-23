@@ -53,6 +53,6 @@ MODEL_NAME=${MODEL_NAME:-TST}
 
 echo "CWD:"; pwd
 python -u "$CODE_DIR/system/NOTS/mamlpp/mamlpp_pretrained_hpo.py" \
-    --model_type "$MODEL_NAME" \ 
+    --model_type "$MODEL_NAME" \
     --data_dir "$DATA_DIR" \
     --out_dir  "$DEBUG_RUN_DIR"
