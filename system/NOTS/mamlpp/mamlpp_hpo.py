@@ -192,6 +192,17 @@ def build_model_from_trial(trial, base_config=None):
     config["maml_gesture_classes"] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # NOTE: THIS IS GESTURE CLASS
     config["target_trial_indices"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # NOTE: THIS IS GESTURE TRIAL/REPETITION NUM
 
+    # Pretraining optim
+    config["optimizer"]          = trial.suggest_categorical("optimizer", ["adamw", "adam", "sgd"])
+    config["lr_scheduler_factor"]= 0.1  #trial.suggest_categorical("pre_sched_factor", [0.1, 0.2])
+    config["lr_scheduler_patience"]= 6  #trial.suggest_int("pre_sched_pat", 4, 10)
+    config["earlystopping_patience"]= 8 #trial.suggest_int("pre_es_pat", 6, 14)
+    config["earlystopping_min_delta"]= 0.005 #trial.suggest_float("pre_es_delta", 0.001, 0.01)
+
+    # ADDING MAML SPECIFIC
+    config["meta_learning"] = True
+    config["num_workers"] = 8  # This is the dataloader, something about how many processes the CPU can use (more is faster generally)
+
     model = MultimodalCNNLSTMMOE(config)
     model.to(config["device"])
     return model, config
