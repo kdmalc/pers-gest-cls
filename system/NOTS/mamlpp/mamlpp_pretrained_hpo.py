@@ -10,6 +10,8 @@ from collections import defaultdict
 import numpy as np
 import torch
 import torch.nn as nn
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 import optuna
 from optuna.storages.journal import JournalStorage, JournalFileBackend
 import random
@@ -98,6 +100,7 @@ def inject_model_config(config: dict, model_type: str):
     return config
 
 # ===================== OPTUNA TUNING SCRIPT =====================
+# NOTE: This now takes model_type as a required input...
 def build_model_from_trial(trial, model_type, base_config=None):
     config = copy.deepcopy(base_config) if base_config else {}
 
@@ -109,13 +112,51 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config["k_shot"] = 5  
     config["q_query"] = 5
     config["num_classes"] = 10
-    config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32]) 
+
+    config["feature_engr"] = "None"
+
+    config["NOTS"] = True
+    if config["NOTS"]==False:
+        #config["emg_imu_pkl_full_path"] = 'C:\\Users\\kdmen\\Box\\Yamagami Lab\\Data\\Meta_Gesture_Project\\filtered_datasets\\metadata_IMU_EMG_allgestures_allusers.pkl'
+        config["pwmd_xlsx_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\Biosignal gesture questionnaire for participants with disabilities.xlsx"
+        config["pwoutmd_xlsx_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\Biosignal gesture questionnaire for participants without disabilities.xlsx"
+        config["dfs_save_path"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\"
+        config["dfs_load_path"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\"
+        config["user_split_json_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\fixed_user_splits\\4kfcv_splits_shared_test.json"
+        config["results_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\results\\local_{timestamp}"
+        config["models_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\models\\local_{timestamp}"
+    elif config["NOTS"]==True:
+        ## SAVING
+        config["user_split_json_filepath"] = user_split_json_filepath
+        config["results_save_dir"] = results_save_dir
+        config["models_save_dir"] = models_save_dir
+        ## Mutlimodal LOADING
+        config["emg_imu_pkl_full_path"] = f"{CODE_DIR}//dataset//filtered_datasets//metadata_IMU_EMG_allgestures_allusers.pkl" 
+        
+        config["pwmd_xlsx_filepath"] = f"{CODE_DIR}//dataset//Biosignal gesture questionnaire for participants with disabilities.xlsx"
+        config["pwoutmd_xlsx_filepath"] = f"{CODE_DIR}//dataset//Biosignal gesture questionnaire for participants without disabilities.xlsx"
+        
+        config["dfs_save_path"] = f"{CODE_DIR}/dataset//"
+        config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds//"
+
+    # DEBUG
+    config["track_gradient_alignment"] = True
+    config["verbose"] = False
+    config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
+    config['num_eval_episodes'] = 10
+    config['debug_one_user_only'] = False
+    config['debug_one_episode'] = False
+    config['debug_five_episodes'] = False
+    if config['debug_one_episode']:
+        config["meta_batchsize"] = 1
+    elif config['debug_five_episodes']:
+        config["meta_batchsize"] = 5
+    else:
+        config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32, 64])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
 
     # === MAML Core Hyperparameters ===
     config["maml_inner_steps"] = trial.suggest_categorical("maml_inner_steps", [2, 3, 5, 7])
     config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [10, 15, 20, 30])
-    config["maml_opt_order"] = "first"  # TODO: Re-toggle this?
-    config["maml_use_lslr"] = False  # TODO: this was giving us negative learning rates earlier... try turning it on again?
     
     config["maml_alpha_init"] = trial.suggest_float("maml_alpha_init", 1e-4, 1e-1, log=True)
     config["maml_alpha_init_eval"] = trial.suggest_float("maml_alpha_init_eval", 1e-4, 1e-2, log=True)
@@ -123,13 +164,35 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config["weight_decay"] = trial.suggest_float("wd", 1e-6, 1e-4, log=True)
 
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    config["dropout"] = trial.suggest_float("dropout", 0.0, 0.3)  # TODO: Not totally sure where this appears across ALL the different models...
+    config["use_batch_norm"] = False
+    config["groupnorm_num_groups"] = trial.suggest_categorical("groupnorm_num_groups", [4, 8])
+    config["dropout"] = 0.1 
+
+    # CNN Width & Depth
+    config["emg_base_cnn_filters"] = trial.suggest_categorical("emg_width", [32, 64, 128, 256])
+    config["imu_base_cnn_filters"] = trial.suggest_categorical("imu_width", [32, 64, 128, 256])
+    config["emg_cnn_layers"] = trial.suggest_int("emg_depth", 2, 4)
+    config["imu_cnn_layers"] = trial.suggest_int("imu_depth", 2, 4)
+    config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel", [3, 5])
+    config['emg_stride'] = 1  
+    config['imu_stride'] = 1  
+    config["padding"] = 0 
+
+    # LSTM
+    config["use_lstm"] = True 
+    config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [64, 128, 256])
+    config["lstm_layers"] = trial.suggest_int("lstm_layers", 1, 3)
+
+    # TODO: Is this GAP after the CNN or after the LSTM...
+    config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
 
     # === Finetuning / Transfer Learning Strategy ===
     config["finetuning_approach"] = trial.suggest_categorical("finetuning_approach", ["full"])  #, "anil", "frozen_backbone"])
     config["use_pretrained"] = True # Hardcoded to true based on your goal
 
     # === Multimodal & Conditioning (Keeping these if you still use FiLM/Demo heads) ===
+    config["multimodal"] = True  # TODO: I dont know if this gets used at all anymore...
+    config["use_imu"] = True 
     config["use_demographics"] = True
     config["use_film_x_demo"] = trial.suggest_categorical("use_film_x_demo", [True, False])
     config["FILM_on_context_or_demo"] = 'context' 
@@ -137,12 +200,64 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [8, 16, 32, 64])
     config["context_pool_type"] = trial.suggest_categorical("context_pool_type", ['mean', 'attn'])  
 
+    # === MoE (Mixture of Experts) ===
+    # Set use_MOE to trial.suggest_categorical if you want Optuna to decide
     config["use_MOE"] = False 
+    if config["use_MOE"]:
+        config["num_experts"] = trial.suggest_int("num_experts", 3, 6)
+        config["top_k"] = trial.suggest_int("top_k", 1, 2, 3)
+        config["gate_type"] = "context_feature_demo"
+        config["expert_architecture"] = "MLP"
+
     config["use_label_shuf_meta_aug"] = False  # TODO: This probably should be turned back on?
     config["num_epochs"] = 50 
     config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500])
     config["earlystopping_patience"] = 8 
     config["label_smooth"] = 0.0
+
+    config["num_total_users"] = 32  # TODO: Not sure if this is still used
+
+    config["maml_gesture_classes"] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # NOTE: THIS IS GESTURE CLASS
+    config["target_trial_indices"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # NOTE: THIS IS GESTURE TRIAL/REPETITION NUM
+
+    # Pretraining optim
+    config["optimizer"]          = trial.suggest_categorical("optimizer", ["adamw", "adam", "sgd"])
+    config["use_earlystopping"] = True
+    config["lr_scheduler_factor"]= 0.1  #trial.suggest_categorical("pre_sched_factor", [0.1, 0.2])
+    config["lr_scheduler_patience"]= 6  #trial.suggest_int("pre_sched_pat", 4, 10)
+    config["earlystopping_patience"]= 8 #trial.suggest_int("pre_es_pat", 6, 14)
+    config["earlystopping_min_delta"]= 0.005 #trial.suggest_float("pre_es_delta", 0.001, 0.01)
+
+    # ADDING MAML SPECIFIC
+    config["meta_learning"] = True
+    config["num_workers"] = 8  # This is the dataloader, something about how many processes the CPU can use (more is faster generally)
+
+    # MAML++
+    # MULTI STEP LOSS
+    config["use_maml_msl"] = trial.suggest_categorical("use_maml_msl", [True, False, "hybrid"])                              # MSL (multi-step loss) on
+    if config["use_maml_msl"] == "hybrid":
+        config["maml_msl_num_epochs"] = trial.suggest_int("maml_msl_num_epochs", 1, 40)  # Also note that currently the max num_epochs is 40 (plus we use ES so may not even hit this)
+    # Theoretically this should be even be used, but just in case...
+    elif config["use_maml_msl"] == True:
+        config["maml_msl_num_epochs"] = 1000000  # Arbitrarily large to never trigger and turn MSL off
+    elif config["use_maml_msl"] == False:
+        config["maml_msl_num_epochs"] = 0
+    # OPTIMIZATION ORDER
+    # NOTE: Hardcoded for the local adaptation HPO check
+    config["maml_opt_order"] = trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
+    if config["maml_opt_order"] == "hybrid":
+        config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 1, 40)      # DOA threshold (epochs <= this are first-order)
+    # Theoretically this should be even be used, but just in case...
+    elif config["maml_opt_order"] == "first":
+        config["maml_first_order_to_second_order_epoch"] = 1000000  # Arbitrarily large to never trigger and switch to second
+    elif config["maml_opt_order"] == "second":
+        config["maml_first_order_to_second_order_epoch"] = 0  # Do second the whole time
+    # LSLR
+    config["maml_use_lslr"] = True
+    # MISC  
+    config["enable_inner_loop_optimizable_bn_params"] = False  # by default, do NOT adapt BN in inner loop --> I should not be using BN at all AFAIK
+    config["use_cosine_outer_lr"] = False                       # This is cosine-based lr annealing... is this in addition to my lr scheduler....
+    config["use_lslr_at_eval"] = False                         # set True if you want to use learned per-parameter step sizes at eval
 
     # =========================================================================
     # MODEL INITIALIZATION
@@ -261,6 +376,10 @@ def objective(trial, model_type):
             'model_state_dict': best_state,
             'config': config,
             'best_val_acc': best_val_acc, 
+            'train_loss_log': pretrain_res_dict["train_loss_log"], 
+            'train_acc_log': pretrain_res_dict["train_acc_log"],
+            'val_loss_log': pretrain_res_dict["val_loss_log"],
+            'val_acc_log': pretrain_res_dict["val_acc_log"]
         }, save_path)
         print(f"Model permanently saved to {save_path}")
 
@@ -279,8 +398,21 @@ def objective(trial, model_type):
         for user_id, accs in user_metrics.items():
             m_acc = np.mean(accs)
             all_user_means.append(float(m_acc))
-            
+
+            print(f"User {user_id} | Acc: {m_acc*100:.2f}% ± {m_acc*100:.2f}% (over {len(accs)} episodes)")
+        # Calculate summary across users
+        # These are still ratios (e.g., 0.10)
         mean_acc_ratio = np.mean(all_user_means)
+        std_acc_ratio = np.std(all_user_means)
+        # Create a clean list of percentages for the summary print
+        user_acc_percentages = [round(a * 100, 2) for a in all_user_means]
+        # --- END TIMER & PRINT ---
+        fold_duration = time.time() - fold_start_time
+        print(f"[Trial {trial.number} | Fold {fold_idx}] User accs (%): {user_acc_percentages}")
+        # Multiply by 100 only ONCE here for display
+        print(f"[Trial {trial.number} | Fold {fold_idx}] Mean acc: {mean_acc_ratio*100:.2f}% ± {std_acc_ratio*100:.2f}%")
+        print(f"[Trial {trial.number} | Fold {fold_idx}] Finished in {fold_duration:.2f} seconds.")
+        
         fold_mean_accs.append(mean_acc_ratio)
         all_fold_user_accs.append(all_user_means)
 

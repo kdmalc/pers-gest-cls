@@ -76,8 +76,8 @@ def maml_mm_collate(batch):
     batch is always a list of exactly 1 episode (DataLoader batch_size=1).
 
     Each sample stored in episode['support'] / episode['query'] has:
-      'emg'  : Tensor (seq_len, num_channels)  i.e. (T, C) — channel-last
-      'imu'  : Tensor (seq_len, imu_channels)  or None
+      'emg'  : Tensor (num_channels, seq_len)  i.e. (C, T)
+      'imu'  : Tensor (imu_channels, seq_len)  or None
       'demo' : Tensor (demo_dim,)
       'label': int (local, 0-indexed within episode)
 
@@ -89,12 +89,12 @@ def maml_mm_collate(batch):
         if not sample_list:
             return None
 
-        # emg: list of (T, C)  →  stack → (B, T, C)  →  permute → (B, C, T)
-        emg = torch.stack([s["emg"] for s in sample_list], dim=0).permute(0, 2, 1)
+        # emg: list of (C, T)  →  stack → (B, C, T)
+        emg = torch.stack([s["emg"] for s in sample_list], dim=0)
 
         imu = None
         if sample_list[0]["imu"] is not None:
-            imu = torch.stack([s["imu"] for s in sample_list], dim=0).permute(0, 2, 1)
+            imu = torch.stack([s["imu"] for s in sample_list], dim=0)
 
         demo   = torch.stack([s["demo"]  for s in sample_list], dim=0).float()
         labels = torch.as_tensor([s["label"] for s in sample_list], dtype=torch.long)
@@ -411,6 +411,21 @@ def get_maml_dataloaders(config, tensor_dict_path):
         full_dict   = pickle.load(f)
     # New dict layout: top level has 'data' key plus metadata.
     tensor_dict = full_dict["data"]
+
+    # ── Re-orient Data to Contiguous (B, C, T) once ──────────────────────────
+    # Needs to be contiguous for the CNN
+    print("[maml_data_pipeline] Re-orienting data tensors to (trials, channels, seq_len)...")
+    for pid in tensor_dict:
+        for gest_class in tensor_dict[pid]:
+            # EMG: (trials, seq, chan) -> (trials, chan, seq)
+            emg = tensor_dict[pid][gest_class]['emg']
+            if emg.shape[1] > emg.shape[2]: # Double check it's "sideways"
+                tensor_dict[pid][gest_class]['emg'] = emg.permute(0, 2, 1).contiguous()
+            
+            # IMU: (trials, seq, chan) -> (trials, chan, seq)
+            imu = tensor_dict[pid][gest_class].get('imu')
+            if imu is not None and imu.shape[1] > imu.shape[2]:
+                 tensor_dict[pid][gest_class]['imu'] = imu.permute(0, 2, 1).contiguous()
 
     num_workers    = int(config.get("num_workers", 4))
     use_label_shuf = config.get("use_label_shuf_meta_aug", True)
