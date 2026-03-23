@@ -121,7 +121,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--tensor_dict", type=str,
                         default="C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\segfilt_rts_tensor_dict.pkl")
-    parser.add_argument("--model",       type=str, default="TST",
+    parser.add_argument("--model",       type=str, default="MetaCNNLSTM",
                         choices=["MetaCNNLSTM", "DeepCNNLSTM", "TST"])
     parser.add_argument("--all",         action="store_true")
     parser.add_argument("--config",      type=str, default=None)
