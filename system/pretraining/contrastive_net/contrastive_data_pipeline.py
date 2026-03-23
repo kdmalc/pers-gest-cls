@@ -327,9 +327,20 @@ def episodic_collate(batch):
 # 5. DATALOADER BUILDER
 # ============================================================
 
-def get_contrastive_dataloaders(config: dict, tensor_dict_path: str):
+def get_contrastive_dataloaders(config: dict, tensor_dict_path: str,
+                                return_val_flat: bool = False):
     """
-    Returns (train_dl, val_dl) for contrastive training.
+    Returns dataloaders for contrastive training.
+
+    Args:
+        config              : experiment config dict
+        tensor_dict_path    : path to the pickled tensor dict
+        return_val_flat     : if False (default), returns (train_dl, val_episodic_dl)
+                              if True, returns  (train_dl, val_episodic_dl, val_flat_dl)
+                              val_flat_dl is a flat balanced loader over val_PIDs using
+                              the same batch construction as train_dl. It is used to
+                              compute val SupCon loss (same objective as training,
+                              no backprop) which is the direct overfitting signal.
     """
     with open(tensor_dict_path, 'rb') as f:
         full_dict = pickle.load(f)
@@ -346,11 +357,11 @@ def get_contrastive_dataloaders(config: dict, tensor_dict_path: str):
     cpb              = config.get('classes_per_batch', 10)
     gestures         = config.get('gesture_labels', list(range(10)))
     steps_per_epoch  = config.get('steps_per_epoch_train', 500)
-    
+
     train_reps       = config.get('train_reps', None)
     val_reps         = config.get('val_reps', None)
 
-    # ---- Train ----
+    # ---- Train flat loader ----
     train_ds = FlatGestureDataset(
         tensor_dict,
         target_pids=config['train_PIDs'],
@@ -360,8 +371,8 @@ def get_contrastive_dataloaders(config: dict, tensor_dict_path: str):
     )
 
     if batch_mode == 'balanced':
-        sampler   = BalancedGestureSampler(train_ds, spc, cpb, steps_per_epoch)
-        train_dl  = DataLoader(
+        sampler  = BalancedGestureSampler(train_ds, spc, cpb, steps_per_epoch)
+        train_dl = DataLoader(
             train_ds,
             batch_sampler=sampler,
             num_workers=num_workers,
@@ -369,7 +380,7 @@ def get_contrastive_dataloaders(config: dict, tensor_dict_path: str):
             worker_init_fn=worker_init_fn,
         )
     else:
-        eff_bs = spc * cpb
+        eff_bs   = spc * cpb
         train_dl = DataLoader(
             train_ds,
             batch_size=eff_bs,
@@ -380,7 +391,7 @@ def get_contrastive_dataloaders(config: dict, tensor_dict_path: str):
             drop_last=True,
         )
 
-    # ---- Val ----
+    # ---- Val episodic loader (1-NN prototyping accuracy) ----
     val_ds = EpisodicValDataset(
         tensor_dict,
         target_pids=config['val_PIDs'],
@@ -394,7 +405,7 @@ def get_contrastive_dataloaders(config: dict, tensor_dict_path: str):
         use_imu=use_imu,
     )
 
-    val_dl = DataLoader(
+    val_episodic_dl = DataLoader(
         val_ds,
         batch_size=1,
         shuffle=False,
@@ -402,4 +413,44 @@ def get_contrastive_dataloaders(config: dict, tensor_dict_path: str):
         collate_fn=episodic_collate,
     )
 
-    return train_dl, val_dl
+    if not return_val_flat:
+        return train_dl, val_episodic_dl
+
+    # ---- Val flat loader (val SupCon loss — same format as train_dl) ----
+    # Built from val_PIDs + val_reps with the same balanced batch construction
+    # as the training loader. steps_per_epoch is scaled down proportionally
+    # to val set size to avoid spending too long on val loss computation.
+    val_flat_ds = FlatGestureDataset(
+        tensor_dict,
+        target_pids=config['val_PIDs'],
+        target_gestures=gestures,
+        target_reps=val_reps,
+        use_imu=use_imu,
+    )
+
+    n_train_users = max(len(config['train_PIDs']), 1)
+    n_val_users   = max(len(config['val_PIDs']), 1)
+    val_steps     = max(1, round(steps_per_epoch * n_val_users / n_train_users))
+
+    if batch_mode == 'balanced':
+        val_flat_sampler = BalancedGestureSampler(val_flat_ds, spc, cpb, val_steps)
+        val_flat_dl = DataLoader(
+            val_flat_ds,
+            batch_sampler=val_flat_sampler,
+            num_workers=num_workers,
+            collate_fn=flat_collate,
+            worker_init_fn=worker_init_fn,
+        )
+    else:
+        eff_bs      = spc * cpb
+        val_flat_dl = DataLoader(
+            val_flat_ds,
+            batch_size=eff_bs,
+            shuffle=True,
+            num_workers=num_workers,
+            collate_fn=flat_collate,
+            worker_init_fn=worker_init_fn,
+            drop_last=True,
+        )
+
+    return train_dl, val_episodic_dl, val_flat_dl

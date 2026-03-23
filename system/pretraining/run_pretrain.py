@@ -134,8 +134,8 @@ if __name__ == "__main__":
              "the latent-space visualisation for the specified split.",
     )
     parser.add_argument(
-        "--viz_split", type=str, default="train", choices=["train", "val", "both"],
-        help="Which users to visualise when --viz_checkpoint is set (default: train).",
+        "--viz_split", type=str, default="both", choices=["train", "val", "both"],
+        help="Which users to visualise when --viz_checkpoint is set (default: both).",
     )
     args = parser.parse_args()
  
