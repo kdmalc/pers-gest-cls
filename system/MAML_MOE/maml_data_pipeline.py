@@ -401,8 +401,6 @@ def get_maml_dataloaders(config, tensor_dict_path):
 
     Config keys:
       maml_gesture_classes  : list[int]  0-indexed gesture class labels to sample.
-                              LEGACY alias: 'maml_reps' (honoured if the above absent).
-                              NOTE: despite the old name 'maml_reps', these are CLASS
                               LABELS (0-indexed), not repetition numbers.
       target_trial_indices  : list[int] | None  0-indexed trial positions to use.
                               None (default) → all available trials used.
