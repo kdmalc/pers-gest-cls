@@ -189,6 +189,9 @@ def build_model_from_trial(trial, base_config=None):
     config["label_smooth"] = 0.0
     config["num_total_users"] = 32  # TODO: Not sure if this is still used
 
+    config["maml_gesture_classes"] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # NOTE: THIS IS GESTURE CLASS
+    config["target_trial_indices"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # NOTE: THIS IS GESTURE TRIAL/REPETITION NUM
+
     model = MultimodalCNNLSTMMOE(config)
     model.to(config["device"])
     return model, config
