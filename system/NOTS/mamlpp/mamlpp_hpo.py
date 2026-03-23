@@ -123,8 +123,6 @@ def build_model_from_trial(trial, base_config=None):
     # === MAML Core Hyperparameters ===
     config["maml_inner_steps"] = trial.suggest_int("maml_inner_steps", 3, 5)
     config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [10, 15, 20])
-    config["maml_opt_order"] = "first" # First-order is significantly faster for HPO
-    config["maml_use_lslr"] = False    # Keeping False per your 'deep' script notes on negative LRs
     
     # Inner (Alpha) and Outer (Beta) Learning Rates
     config["maml_alpha_init"] = trial.suggest_float("maml_alpha_init", 1e-4, 1e-1, log=True)
@@ -203,6 +201,26 @@ def build_model_from_trial(trial, base_config=None):
     # ADDING MAML SPECIFIC
     config["meta_learning"] = True
     config["num_workers"] = 8  # This is the dataloader, something about how many processes the CPU can use (more is faster generally)
+
+    # MAML++
+    config["use_maml_msl"] = trial.suggest_categorical("use_maml_msl", [True, False, "hybrid"])                              # MSL (multi-step loss) on
+    if config["use_maml_msl"] == "hybrid":
+        config["maml_msl_num_epochs"] = trial.suggest_int("maml_msl_num_epochs", 1, 40)  # Also note that currently the max num_epochs is 40 (plus we use ES so may not even hit this)
+    # Theoretically this should be even be used, but just in case...
+    elif config["use_maml_msl"] == True:
+        config["maml_msl_num_epochs"] = 1000000  # Arbitrarily large to never trigger and turn MSL off
+    elif config["use_maml_msl"] == False:
+        config["maml_msl_num_epochs"] = 0
+    # First epochs are first order, then switches to second, if using hybrid
+    # TODO: Hardcoded for the local adaptation HPO check
+    config["maml_opt_order"] = "first"  #trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
+    if config["maml_opt_order"] == "hybrid":
+        config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 1, 40)      # DOA threshold (epochs <= this are first-order)
+    # Theoretically this should be even be used, but just in case...
+    elif config["maml_opt_order"] == "first":
+        config["maml_first_order_to_second_order_epoch"] = 1000000  # Arbitrarily large to never trigger and switch to second
+    elif config["maml_opt_order"] == "second":
+        config["maml_first_order_to_second_order_epoch"] = 0  # Do second the whole time
 
     model = MultimodalCNNLSTMMOE(config)
     model.to(config["device"])
