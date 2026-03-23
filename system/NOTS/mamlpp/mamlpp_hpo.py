@@ -203,6 +203,7 @@ def build_model_from_trial(trial, base_config=None):
     config["num_workers"] = 8  # This is the dataloader, something about how many processes the CPU can use (more is faster generally)
 
     # MAML++
+    # MULTI STEP LOSS
     config["use_maml_msl"] = trial.suggest_categorical("use_maml_msl", [True, False, "hybrid"])                              # MSL (multi-step loss) on
     if config["use_maml_msl"] == "hybrid":
         config["maml_msl_num_epochs"] = trial.suggest_int("maml_msl_num_epochs", 1, 40)  # Also note that currently the max num_epochs is 40 (plus we use ES so may not even hit this)
@@ -211,9 +212,9 @@ def build_model_from_trial(trial, base_config=None):
         config["maml_msl_num_epochs"] = 1000000  # Arbitrarily large to never trigger and turn MSL off
     elif config["use_maml_msl"] == False:
         config["maml_msl_num_epochs"] = 0
-    # First epochs are first order, then switches to second, if using hybrid
-    # TODO: Hardcoded for the local adaptation HPO check
-    config["maml_opt_order"] = "first"  #trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
+    # OPTIMIZATION ORDER
+    # NOTE: Hardcoded for the local adaptation HPO check
+    config["maml_opt_order"] = trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
     if config["maml_opt_order"] == "hybrid":
         config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 1, 40)      # DOA threshold (epochs <= this are first-order)
     # Theoretically this should be even be used, but just in case...
@@ -221,6 +222,12 @@ def build_model_from_trial(trial, base_config=None):
         config["maml_first_order_to_second_order_epoch"] = 1000000  # Arbitrarily large to never trigger and switch to second
     elif config["maml_opt_order"] == "second":
         config["maml_first_order_to_second_order_epoch"] = 0  # Do second the whole time
+    # LSLR
+    config["maml_use_lslr"] = True
+    # MISC  
+    config["enable_inner_loop_optimizable_bn_params"] = False  # by default, do NOT adapt BN in inner loop --> I should not be using BN at all AFAIK
+    config["use_cosine_outer_lr"] = False                       # This is cosine-based lr annealing... is this in addition to my lr scheduler....
+    config["use_lslr_at_eval"] = False                         # set True if you want to use learned per-parameter step sizes at eval
 
     model = MultimodalCNNLSTMMOE(config)
     model.to(config["device"])
