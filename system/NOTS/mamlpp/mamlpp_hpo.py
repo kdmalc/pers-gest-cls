@@ -78,7 +78,47 @@ def build_model_from_trial(trial, base_config=None):
     config["k_shot"] = 5  # Stick with 5-shot as your baseline
     config["q_query"] = 5
     config["num_classes"] = 10
-    config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32]) 
+
+    config["feature_engr"] = "None"
+
+    config["NOTS"] = True
+    if config["NOTS"]==False:
+        #config["emg_imu_pkl_full_path"] = 'C:\\Users\\kdmen\\Box\\Yamagami Lab\\Data\\Meta_Gesture_Project\\filtered_datasets\\metadata_IMU_EMG_allgestures_allusers.pkl'
+        config["pwmd_xlsx_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\Biosignal gesture questionnaire for participants with disabilities.xlsx"
+        config["pwoutmd_xlsx_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\Biosignal gesture questionnaire for participants without disabilities.xlsx"
+        config["dfs_save_path"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\"
+        config["dfs_load_path"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\"
+        config["user_split_json_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\fixed_user_splits\\4kfcv_splits_shared_test.json"
+        config["results_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\results\\local_{timestamp}"
+        config["models_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\models\\local_{timestamp}"
+    elif config["NOTS"]==True:
+        ## SAVING
+        config["user_split_json_filepath"] = user_split_json_filepath
+        config["results_save_dir"] = results_save_dir
+        config["models_save_dir"] = models_save_dir
+        ## Mutlimodal LOADING
+        config["emg_imu_pkl_full_path"] = f"{CODE_DIR}//dataset//filtered_datasets//metadata_IMU_EMG_allgestures_allusers.pkl" 
+        
+        config["pwmd_xlsx_filepath"] = f"{CODE_DIR}//dataset//Biosignal gesture questionnaire for participants with disabilities.xlsx"
+        config["pwoutmd_xlsx_filepath"] = f"{CODE_DIR}//dataset//Biosignal gesture questionnaire for participants without disabilities.xlsx"
+        
+        config["dfs_save_path"] = f"{CODE_DIR}/dataset//"
+        config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds//"
+
+    # DEBUG
+    config["track_gradient_alignment"] = True
+    config["verbose"] = False
+    config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
+    config['num_eval_episodes'] = 10
+    config['debug_one_user_only'] = False
+    config['debug_one_episode'] = False
+    config['debug_five_episodes'] = False
+    if config['debug_one_episode']:
+        config["meta_batchsize"] = 1
+    elif config['debug_five_episodes']:
+        config["meta_batchsize"] = 5
+    else:
+        config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32, 64])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
 
     # === MAML Core Hyperparameters ===
     config["maml_inner_steps"] = trial.suggest_int("maml_inner_steps", 3, 5)
@@ -107,6 +147,7 @@ def build_model_from_trial(trial, base_config=None):
     config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel", [3, 5])
     config['emg_stride'] = 1  
     config['imu_stride'] = 1  
+    config["padding"] = 0 
 
     # LSTM
     config["use_lstm"] = True 
@@ -146,6 +187,7 @@ def build_model_from_trial(trial, base_config=None):
     config['imu_in_ch'] = 72
     config['demo_in_dim'] = 12
     config["label_smooth"] = 0.0
+    config["num_total_users"] = 32  # TODO: Not sure if this is still used
 
     model = MultimodalCNNLSTMMOE(config)
     model.to(config["device"])
