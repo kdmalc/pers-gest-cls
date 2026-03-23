@@ -360,4 +360,3 @@ if __name__ == "__main__":
         storage_path=journal_path,
         n_trials=N_TRIALS, # Each Slurm worker does one trial (N_TRIALS=1)
     )
-
