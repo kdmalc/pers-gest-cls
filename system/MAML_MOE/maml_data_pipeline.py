@@ -417,14 +417,14 @@ def get_maml_dataloaders(config, tensor_dict_path):
     print("[maml_data_pipeline] Re-orienting data tensors to (trials, channels, seq_len)...")
     for pid in tensor_dict:
         for gest_class in tensor_dict[pid]:
-            # EMG: (trials, seq, chan) -> (trials, chan, seq)
+            # EMG: (trials, seq, chan) -> (trials, chan, seq) ----> (trials, 64, 16) -> (trials, 16, 64)
             emg = tensor_dict[pid][gest_class]['emg']
-            if emg.shape[1] > emg.shape[2]: # Double check it's "sideways"
+            if emg.shape[1] != config['emg_in_ch']: # Double check it's "sideways"
                 tensor_dict[pid][gest_class]['emg'] = emg.permute(0, 2, 1).contiguous()
             
-            # IMU: (trials, seq, chan) -> (trials, chan, seq)
+            # IMU: (trials, seq, chan) -> (trials, chan, seq) ----> (trials, 64, 72) -> (trials, 72, 64)
             imu = tensor_dict[pid][gest_class].get('imu')
-            if imu is not None and imu.shape[1] > imu.shape[2]:
+            if imu is not None and imu.shape[1] != config['imu_in_ch']:
                  tensor_dict[pid][gest_class]['imu'] = imu.permute(0, 2, 1).contiguous()
 
     num_workers    = int(config.get("num_workers", 4))
