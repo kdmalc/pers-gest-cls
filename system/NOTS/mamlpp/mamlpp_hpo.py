@@ -105,14 +105,19 @@ def build_model_from_trial(trial, base_config=None):
     config["emg_cnn_layers"] = trial.suggest_int("emg_depth", 2, 4)
     config["imu_cnn_layers"] = trial.suggest_int("imu_depth", 2, 4)
     config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel", [3, 5])
-    config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
+    config['emg_stride'] = 1  
+    config['imu_stride'] = 1  
 
     # LSTM
     config["use_lstm"] = True 
     config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [64, 128, 256])
     config["lstm_layers"] = trial.suggest_int("lstm_layers", 1, 3)
 
+    # TODO: Is this GAP after the CNN or after the LSTM...
+    config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
+
     # === Multimodal & Conditioning ===
+    config["multimodal"] = True  # TODO: I dont know if this gets used at all anymore...
     config["use_imu"] = True 
     config["use_demographics"] = True
     config["use_film_x_demo"] = trial.suggest_categorical("use_film_x_demo", [True, False])
