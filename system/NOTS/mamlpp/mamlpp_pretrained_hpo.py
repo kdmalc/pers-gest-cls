@@ -101,8 +101,58 @@ def inject_model_config(config: dict, model_type: str):
     elif model_type == "ContrastiveNet":
         config.update({
             "arch_mode": "cnn_attn",
-            "proj_hidden": 128, "proj_out": 64,
+            #"proj_hidden": 128, "proj_out": 64,  # --> Not sure what proj_out is...
+        
+            "train_reps":           [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],  # INTRA: [1, 2, 3, 4, 5, 6, 7, 8],
+            "val_reps":             [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],  # INTRA: [9, 10],
+            # CNN ENCODER
+            "emg_base_cnn_filters": 64,           # First layer width; doubles each layer
+            "emg_cnn_layers":       3,
+            "imu_base_cnn_filters": 32,           # Why is this different than EMG...
+            "imu_cnn_layers":       2,
+            "cnn_kernel_size":      5,
+            "emg_stride":           1,
+            "imu_stride":           1,
+            "groupnorm_num_groups": 8,            # GroupNorm groups (must divide filter count)
+            # TEMPORAL PROCESSING  (only used if arch_mode == 'cnn_lstm')
+            "use_lstm":             config['arch_mode'] == 'cnn_lstm',  # TODO: So what happens when this is true but arch_mode is set to attn...
+            "lstm_hidden":          128,
+            "lstm_layers":          2,
+            # TODO: Is GAP used AFTER CNN BEFORE LSTM, or just AFTER LSTM? If its after it doesnt matter
+            "use_GlobalAvgPooling": True,         # True=GAP over LSTM outputs; False=concat last hidden
+            # ATTENTION POOLING  (only used if arch_mode == 'cnn_attn')
+            "attn_pool_heads":      4,
+            # PROJECTION HEAD  (maps backbone features → contrastive embedding)
+            "embedding_dim":        128,
+            "proj_hidden_dim":      256,          # None → single linear layer
+            # SUPCON LOSS  (loss_mode == 'supcon')
+            "supcon_temperature":   0.07,
+            "hard_negative_mining": False,        # Start False; ablate on
+            "label_hierarchy":      False,        # 4-level: (user,gest) > (user,diff) > (diff,gest) > (diff,diff)
+            # SIAMESE LOSS  (loss_mode == 'siamese')
+            "cosine_margin":        0.4,
+            "pos_weight":           1.0,
+            # DATALOADER / BATCH CONSTRUCTION
+            "batch_construction":   "balanced",   # 'balanced' (recommended) or 'random'
+            "samples_per_class":    6,            # M samples per gesture per batch  
+            "classes_per_batch":    10,           # How many gesture classes to include per batch
+            # Validation: 1-shot prototyping accuracy (mimics test-time protocol exactly)
+            "val_support_shots":    1,            # k-shot for prototype construction
+            "val_query_per_class":  9,            # How many query samples to evaluate per class
+            "num_val_episodes":     20,           
+            # OPTIMIZATION
+            "lr_scheduler":         "cosine",     # 'cosine', 'reduce_on_plateau', or None
+            "lr_warmup_epochs":     5,
+            "lr_min":               1e-6,         # Cosine annealing minimum
+            # LINEAR PROBE EVALUATION
+            "epochs_between_linprob": 5,          # How often to run the linear probe
+            "linprob_epochs":         50,         # How many CE epochs to fit the linear layer
+            "linprob_lr":             1e-2,       # LR for the linear probe Adam optimizer
+            # MISC
+            "grad_clip":            5.0,          # Max gradient norm; None to disable
+            "log_interval":         100,          # Steps between training log prints
         })
+
     else:
         print("Falling back to old MOE dynamic config (this may not be supported...)")
     
@@ -177,20 +227,20 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config["groupnorm_num_groups"] = trial.suggest_categorical("groupnorm_num_groups", [4, 8])
     config["dropout"] = 0.1 
 
+    # TODO: What? These have to match the pretrained networks... I think the pretrained networks call them slightly different things so these might not even get used
     # CNN Width & Depth
-    config["emg_base_cnn_filters"] = trial.suggest_categorical("emg_width", [32, 64, 128, 256])
-    config["imu_base_cnn_filters"] = trial.suggest_categorical("imu_width", [32, 64, 128, 256])
-    config["emg_cnn_layers"] = trial.suggest_int("emg_depth", 2, 4)
-    config["imu_cnn_layers"] = trial.suggest_int("imu_depth", 2, 4)
-    config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel", [3, 5])
+    #config["emg_base_cnn_filters"] = trial.suggest_categorical("emg_width", [32, 64, 128, 256])
+    #config["imu_base_cnn_filters"] = trial.suggest_categorical("imu_width", [32, 64, 128, 256])
+    #config["emg_cnn_layers"] = trial.suggest_int("emg_depth", 2, 4)
+    #config["imu_cnn_layers"] = trial.suggest_int("imu_depth", 2, 4)
+    #config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel", [3, 5])
     config['emg_stride'] = 1  
     config['imu_stride'] = 1  
     config["padding"] = 0 
-
     # LSTM
-    config["use_lstm"] = True 
-    config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [64, 128, 256])
-    config["lstm_layers"] = trial.suggest_int("lstm_layers", 1, 3)
+    #config["use_lstm"] = True 
+    #config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [64, 128, 256])
+    #config["lstm_layers"] = trial.suggest_int("lstm_layers", 1, 3)
 
     # TODO: Is this GAP after the CNN or after the LSTM...
     config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
@@ -221,7 +271,6 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config["use_label_shuf_meta_aug"] = False  # TODO: This probably should be turned back on?
     config["num_epochs"] = 50 
     config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500])
-    config["earlystopping_patience"] = 8 
     config["label_smooth"] = 0.0
 
     config["num_total_users"] = 32  # TODO: Not sure if this is still used
