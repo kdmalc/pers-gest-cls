@@ -191,7 +191,7 @@ if __name__ == "__main__":
 
     # 3. Select which model to train
     # Options: "neural_subspace", "cov_embedding", "cross_attention"
-    MODEL_TYPE = "cov_embedding" 
+    MODEL_TYPE = "cross_attention" 
     
     if MODEL_TYPE == "neural_subspace":
         model = NeuralSubspaceClassifier(in_channels=in_channels).to(config["device"])
