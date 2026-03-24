@@ -1,4 +1,3 @@
-import os
 import copy
 import time
 import json
@@ -9,7 +8,12 @@ import numpy as np
 from collections import defaultdict
 from pathlib import Path
 
-from system.MAML_MOE.maml_data_pipeline import get_maml_dataloaders
+import sys
+import os
+# Adds the 'system' directory to the python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from MAML_MOE.maml_data_pipeline import get_maml_dataloaders
 from metric_models import NeuralSubspaceClassifier, CovarianceEmbeddingNet, CrossAttentionRelationNet
 
 def prepare_episode_tensors(batch, device):

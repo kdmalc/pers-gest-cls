@@ -72,18 +72,27 @@ def inject_model_config(config: dict, model_type: str):
     config["use_imu"] = True 
 
     if model_type == "MetaCNNLSTM":
+        # emg_base_cnn_filters, imu_base_cnn_filters
+        # cnn_kernel_size, groupnorm_num_groups
+        # NOTE: These HPs need to match what was run in the pretrained configs...
+        ## Names... uh oh
+        ## Names need to match what was run in pretrained surely. 
+        ## Do they also need to match whatever appears in this file? Or are they only used in that file...
         config.update({
-            "emg_base_cnn_filters": 32, "emg_cnn_layers": 1,
-            "imu_base_cnn_filters": 32, "imu_cnn_layers": 1,
-            "cnn_kernel_size": 5, "groupnorm_num_groups": 8,
+            "cnn_filters": 32, "emg_cnn_layers": 1, "imu_cnn_layers": 1,
+            "cnn_kernel": 5, "gn_groups": 8,
             "lstm_hidden": 32, "lstm_layers": 1, "bidirectional": True,
+            "head_type": 'linear',
         })
     elif model_type == "DeepCNNLSTM":
         config.update({
-            "emg_base_cnn_filters": 32, "emg_cnn_layers": 3,
-            "imu_base_cnn_filters": 32, "imu_cnn_layers": 3,
-            "cnn_kernel_size": 5, "groupnorm_num_groups": 8,
+            #"emg_base_cnn_filters": 32, "emg_cnn_layers": 3,
+            #"imu_base_cnn_filters": 32, "imu_cnn_layers": 3,\
+            "cnn_base_filters": 32, "cnn_layers": 3,
+            #"cnn_kernel_size": 5, "groupnorm_num_groups": 8,
+            "cnn_kernel": 5, "gn_groups": 8,
             "lstm_hidden": 64, "lstm_layers": 3, "bidirectional": True,
+            'head_type': 'mlp',
         })
     elif model_type == "TST":
         config.update({
