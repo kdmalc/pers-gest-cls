@@ -99,8 +99,8 @@ def inject_model_config(config: dict, model_type: str):
             "patch_len": 8, "d_model": 64, "n_heads": 4, "n_blocks": 3,
         })
     elif model_type == "ContrastiveNet":
+        config.update({"arch_mode": "cnn_attn",})
         config.update({
-            "arch_mode": "cnn_attn",
             #"proj_hidden": 128, "proj_out": 64,  # --> Not sure what proj_out is...
         
             "train_reps":           [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],  # INTRA: [1, 2, 3, 4, 5, 6, 7, 8],
