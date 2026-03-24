@@ -17,6 +17,10 @@ from optuna.storages.journal import JournalStorage, JournalFileBackend
 import random
 from pathlib import Path
 
+print(f"CUDA Available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"GPU Name: {torch.cuda.get_device_name(0)}")
+
 # env -> Path objects
 CODE_DIR = Path(os.environ.get("CODE_DIR", "./")).resolve()
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")).resolve()
@@ -39,16 +43,14 @@ def apply_fold_to_config(config, all_splits, fold_idx):
     config["train_PIDs"] = split["train"]
     config["val_PIDs"]   = split["val"]
     config["test_PIDs"]  = split["test"]
-    config["num_pretrain_users"] = len(config["train_PIDs"])
-    config["num_testft_users"] = len(config["val_PIDs"])
+    #config["num_pretrain_users"] = len(config["train_PIDs"])
+    #config["num_testft_users"] = len(config["val_PIDs"])
 
 from system.MAML_MOE.mamlpp import *
 from system.MAML_MOE.maml_data_pipeline import get_maml_dataloaders
 from system.MAML_MOE.shared_maml import *
 from system.MAML_MOE.MOE_CNN_LSTM import *
 
-# Import new models here
-## TODO: is there overlap / overwriting between these .py's? Hopefully not...
 from system.pretraining.pretrain_models import build_model
 from system.pretraining.contrastive_net.contrastive_encoder import ContrastiveGestureEncoder
 
@@ -211,7 +213,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
     elif config['debug_five_episodes']:
         config["meta_batchsize"] = 5
     else:
-        config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [16, 32, 64])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
+        config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [4, 8, 16, 24, 32])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
 
     # === MAML Core Hyperparameters ===
     config["maml_inner_steps"] = trial.suggest_categorical("maml_inner_steps", [2, 3, 5, 7])
@@ -324,31 +326,30 @@ def build_model_from_trial(trial, model_type, base_config=None):
         model = build_model(config)
     elif model_type == "MOE":
         model = MultimodalCNNLSTMMOE(config)
-    else: 
+    elif model_type == "ContrastiveNet": 
         model = ContrastiveGestureEncoder(config)
+    else:
+        raise ValueError(f"model_type {model_type} unknown!")
     
-    # Placeholder for now so the code doesn't break
-    model = MultimodalCNNLSTMMOE(config)
+    ## Placeholder for now so the code doesn't break
+    #model = MultimodalCNNLSTMMOE(config)
     
     # =========================================================================
-    # ####################################################################### #
     # ################### PRETRAINED WEIGHT LOADING ######################### #
-    # ####################################################################### #
     # =========================================================================
     if config["use_pretrained"]:
         print(f"--> Loading pretrained weights for {model_type}...")
 
-        local_pretrain_path = r"C:\Users\kdmen\Repos\pers-gest-cls\pretrain_outputs\checkpoints"
-        cluster_pretrain_path = r"\projects\my13\kai\meta-pers-gest\pers-gest-cls\pretrain_outputs\checkpoints"
+        if config["NOTS"]:
+            pretrain_path = r"/projects/my13/kai/meta-pers-gest/pers-gest-cls/pretrain_outputs/checkpoints"
+        else:
+            pretrain_path = r"C:\Users\kdmen\Repos\pers-gest-cls\pretrain_outputs\checkpoints"
         
-        # #######################################################
-        # REPLACE THESE DUMMY PATHS WITH YOUR ACTUAL FILE PATHS
-        # #######################################################
         weight_paths = {
-            "MetaCNNLSTM": f"{cluster_pretrain_path}\MetaCNNLSTM_best.pt",
-            "DeepCNNLSTM": f"{cluster_pretrain_path}\DeepCNNLSTM_best.pt",
-            "TST": f"{cluster_pretrain_path}\TST_best.pt",
-            "ContrastiveNet": f"{cluster_pretrain_path}\ContrastiveNet_best_best.pt",
+            "MetaCNNLSTM": f"{pretrain_path}\MetaCNNLSTM_best.pt",
+            "DeepCNNLSTM": f"{pretrain_path}\DeepCNNLSTM_best.pt",
+            "TST": f"{pretrain_path}\TST_best.pt",
+            "ContrastiveNet": f"{pretrain_path}\ContrastiveNet_best_best.pt",
             "MOE": None # THERE IS NO PRETRAINED WEIGHTS FOR THIS ONE!
         }
         
@@ -365,10 +366,10 @@ def build_model_from_trial(trial, model_type, base_config=None):
             print(f"--> Successfully loaded backbone weights from: {load_path}")
             
         except FileNotFoundError:
-            print(f"#################################################################")
+            print(f"\n#################################################################")
             print(f"WARNING: Pretrained weight file not found at {load_path}. ")
             print(f"Using random initialization instead!")
-            print(f"#################################################################")
+            print(f"#################################################################\n")
     # =========================================================================
     # ####################################################################### #
     # =========================================================================
