@@ -387,6 +387,8 @@ def build_model_from_trial(trial, model_type, base_config=None):
             # Extract just the weights
             if "model_state" in checkpoint:
                 state_dict = checkpoint["model_state"]
+            elif "model_state_dict" in checkpoint:
+                state_dict = checkpoint["model_state_dict"]
             else:
                 # Fallback in case some files are just the weights
                 state_dict = checkpoint
