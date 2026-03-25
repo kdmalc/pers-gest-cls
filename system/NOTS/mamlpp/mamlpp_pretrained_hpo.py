@@ -17,6 +17,9 @@ from optuna.storages.journal import JournalStorage, JournalFileBackend
 import random
 from pathlib import Path
 
+# Allow numpy scalars to be loaded in weights_only mode
+torch.serialization.add_safe_globals([np.core.multiarray.scalar])
+
 print(f"CUDA Available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
     print(f"GPU Name: {torch.cuda.get_device_name(0)}")
