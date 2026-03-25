@@ -381,7 +381,15 @@ def build_model_from_trial(trial, model_type, base_config=None):
         load_path = weight_paths.get(model_type, "")
         
         try:
-            state_dict = torch.load(load_path, map_location=config["device"], weights_only=False)
+            # Load the full checkpoint
+            checkpoint = torch.load(load_path, map_location=config["device"], weights_only=False)
+            # Extract just the weights
+            if "model_state" in checkpoint:
+                state_dict = checkpoint["model_state"]
+            else:
+                # Fallback in case some files are just the weights
+                state_dict = checkpoint
+
             # Filter out the classification/projection head so we only load the backbone
             filtered_dict = {k: v for k, v in state_dict.items() if "head" not in k and "projector" not in k}
             
