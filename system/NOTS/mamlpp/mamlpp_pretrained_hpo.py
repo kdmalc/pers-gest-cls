@@ -101,7 +101,7 @@ def inject_model_config(config: dict, model_type: str):
             # cnn_kernel_size, groupnorm_num_groups
             "cnn_filters": 32, "emg_cnn_layers": 1, "imu_cnn_layers": 1,
             "cnn_kernel": 5, "gn_groups": 8,
-            "lstm_hidden": 32, "lstm_layers": 1, "bidirectional": True,
+            "lstm_hidden": 32, "lstm_layers": 1, "bidirectional": False,
             "head_type": 'linear',
         })
     elif model_type == "DeepCNNLSTM":
@@ -271,7 +271,9 @@ def build_model_from_trial(trial, model_type, base_config=None):
 
     # === Finetuning / Transfer Learning Strategy ===
     config["finetuning_approach"] = trial.suggest_categorical("finetuning_approach", ["full"])  #, "anil", "frozen_backbone"])
-    config["use_pretrained"] = True # Hardcoded to true based on your goal
+
+    config["use_pretrained"] = True 
+    config["best_or_last_pretr"] = trial.suggest_categorical("best_or_last_pretr", ["best", "last"])
 
     # === Multimodal & Conditioning (Keeping these if you still use FiLM/Demo heads) ===
     # NOTE: Turning demographics off (wasnt used in pretraining)
@@ -354,27 +356,22 @@ def build_model_from_trial(trial, model_type, base_config=None):
     else:
         raise ValueError(f"model_type {model_type} unknown!")
     
-    ## Placeholder for now so the code doesn't break
-    #model = MultimodalCNNLSTMMOE(config)
-    
     # =========================================================================
     # ################### PRETRAINED WEIGHT LOADING ######################### #
     # =========================================================================
     if config["use_pretrained"]:
         print(f"--> Loading pretrained weights for {model_type}...")
 
-        if config["NOTS"]:
-            # Linux uses forward slashes
+        if config["NOTS"]: # Linux uses forward slashes
             pretrain_path = r"/projects/my13/kai/meta-pers-gest/pers-gest-cls/pretrain_outputs/checkpoints/"
-        else:
-            # Windows uses back slashes
+        else: # Windows uses back slashes
             pretrain_path = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\pretrain_outputs\\checkpoints\\"
         
         weight_paths = {
-            "MetaCNNLSTM": f"{pretrain_path}MetaCNNLSTM_best.pt",
-            "DeepCNNLSTM": f"{pretrain_path}DeepCNNLSTM_best.pt",
-            "TST": f"{pretrain_path}TST_best.pt",
-            "ContrastiveNet": f"{pretrain_path}ContrastiveNet_best.pt",
+            "MetaCNNLSTM": f"{pretrain_path}MetaCNNLSTM_03232026_170503_{config['best_or_last_pretr']}.pt",
+            "DeepCNNLSTM": f"{pretrain_path}DeepCNNLSTM_03232026_165043_{config['best_or_last_pretr']}.pt",
+            "TST": f"{pretrain_path}TST_03232026_163527_{config['best_or_last_pretr']}.pt",
+            "ContrastiveNet": f"{pretrain_path}ContrastiveNet_{config['arch_mode'][-4:]}_20260325_1558_{config['best_or_last_pretr']}.pt",
             "MOE": None # THERE IS NO PRETRAINED WEIGHTS FOR THIS ONE!
         }
         

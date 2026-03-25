@@ -62,8 +62,8 @@ CONTRASTIVE_CONFIG = {
     # ----------------------------------------------------------
     # TODO: Is IMU support even?
     "use_imu":              False,        # Start EMG-only; ablate IMU later
-    "use_demographics":     True,         # FiLM conditioning on demo vector
-    "use_film_x_demo":      True,
+    "use_demographics":     False,         # FiLM conditioning on demo vector
+    "use_film_x_demo":      False,
 
     "emg_in_ch":            16,
     "imu_in_ch":            72,
