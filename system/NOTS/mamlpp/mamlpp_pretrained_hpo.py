@@ -18,8 +18,22 @@ import random
 from pathlib import Path
 
 # Allow numpy scalars to be loaded in weights_only mode
-torch.serialization.add_safe_globals([np.core.multiarray.scalar])
-torch.serialization.add_safe_globals([np.scalar])
+#torch.serialization.add_safe_globals([np.core.multiarray.scalar])
+#torch.serialization.add_safe_globals([np.scalar])
+# Didnt work. Just suppress the warning instead:
+import warnings
+# Suppress the specific warning about weights_only=False
+warnings.filterwarnings(
+    "ignore", 
+    message=".*weights_only=False.*", 
+    category=UserWarning
+)
+# Sometimes it is cast as a FutureWarning depending on the torch version
+warnings.filterwarnings(
+    "ignore", 
+    message=".*weights_only=False.*", 
+    category=FutureWarning
+)
 
 print(f"CUDA Available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
@@ -367,7 +381,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
         load_path = weight_paths.get(model_type, "")
         
         try:
-            state_dict = torch.load(load_path, map_location=config["device"], weights_only=True)
+            state_dict = torch.load(load_path, map_location=config["device"], weights_only=False)
             # Filter out the classification/projection head so we only load the backbone
             filtered_dict = {k: v for k, v in state_dict.items() if "head" not in k and "projector" not in k}
             
