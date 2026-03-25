@@ -156,13 +156,14 @@ def build_model_from_trial(trial, base_config=None):
     config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
 
     # === Multimodal & Conditioning ===
+    # NOTE: Switching demographics off I dont think it does anything...
     config["multimodal"] = True  # TODO: I dont know if this gets used at all anymore...
     config["use_imu"] = True 
-    config["use_demographics"] = True
-    config["use_film_x_demo"] = trial.suggest_categorical("use_film_x_demo", [True, False])
+    config["use_demographics"] = False
+    config["use_film_x_demo"] = False  #trial.suggest_categorical("use_film_x_demo", [True, False])
     config["FILM_on_context_or_demo"] = 'context' 
     config["context_emb_dim"] = trial.suggest_categorical("context_emb_dim", [8, 16, 32, 64])
-    config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [8, 16, 32, 64])
+    #config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [8, 16, 32, 64])
     config["context_pool_type"] = trial.suggest_categorical("context_pool_type", ['mean', 'attn'])  
 
     # === MoE (Mixture of Experts) ===

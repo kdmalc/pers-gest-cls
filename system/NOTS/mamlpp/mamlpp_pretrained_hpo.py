@@ -256,13 +256,14 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config["use_pretrained"] = True # Hardcoded to true based on your goal
 
     # === Multimodal & Conditioning (Keeping these if you still use FiLM/Demo heads) ===
+    # NOTE: Turning demographics off (wasnt used in pretraining)
     config["multimodal"] = True  # TODO: I dont know if this gets used at all anymore...
     config["use_imu"] = True 
-    config["use_demographics"] = True
-    config["use_film_x_demo"] = trial.suggest_categorical("use_film_x_demo", [True, False])
+    config["use_demographics"] = False
+    config["use_film_x_demo"] = False  #trial.suggest_categorical("use_film_x_demo", [True, False])
     config["FILM_on_context_or_demo"] = 'context' 
     config["context_emb_dim"] = trial.suggest_categorical("context_emb_dim", [8, 16, 32, 64])
-    config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [8, 16, 32, 64])
+    #config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [8, 16, 32, 64])
     config["context_pool_type"] = trial.suggest_categorical("context_pool_type", ['mean', 'attn'])  
 
     # === MoE (Mixture of Experts) ===
