@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=mamlpp-hpo-jb
+#SBATCH --job-name=mpp-pr-hpo-jb
 #SBATCH --partition=commons
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

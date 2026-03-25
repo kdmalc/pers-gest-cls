@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=mpp-deep-d
+#SBATCH --job-name=mpp-pr-d
 #SBATCH --partition=debug
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
