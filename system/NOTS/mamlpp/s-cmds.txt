@@ -1,0 +1,59 @@
+sbatch --export=ALL,MODEL_NAME=TST mpp-pretr-hpo-d.slurm
+sbatch --export=ALL,MODEL_NAME=MetaCNNLSTM mpp-pretr-hpo-d.slurm
+sbatch --export=ALL,MODEL_NAME=DeepCNNLSTM mpp-pretr-hpo-d.slurm
+sbatch --export=ALL,MODEL_NAME=ContrastiveNet mpp-pretr-hpo-d.slurm
+
+cp /projects/my13/kai/meta-pers-gest/pers-gest-cls/system/NOTS/mamlpp/mpp-pretr-hpo-d.slurm /scratch/my13/kai/runs/mamlpp/mpp-pretr-hpo-d.slurm
+
+cp /projects/my13/kai/meta-pers-gest/pers-gest-cls/system/NOTS/mamlpp/mpp-pretr-hpo-jbarr.slurm /scratch/my13/kai/runs/mamlpp/mpp-pretr-hpo-jbarr.slurm
+
+/scratch/my13/kai/runs/mamlpp
+
+/projects/my13/kai/meta-pers-gest/pers-gest-cls/pretrain_outputs/checkpoints
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+EFX
+META
+INTU
+
+
+
+
+
