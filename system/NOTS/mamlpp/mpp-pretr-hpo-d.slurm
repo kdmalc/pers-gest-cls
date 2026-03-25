@@ -49,6 +49,15 @@ export MOE_DIR="$CODE_DIR/system/MAML_MOE"
 # Put CODE_DIR (for April_25.* imports) and MOE_DIR (for MOE_model_classes, etc.) on PYTHONPATH
 export PYTHONPATH="$CODE_DIR:$MOE_DIR:$PYTHONPATH"
 
+echo "===== Environment Diagonstics ====="
+echo "Host: $(hostname)"
+which python
+python -c "import torch; print(f'PyTorch Version: {torch.__version__}'); print(f'CUDA Version: {torch.version.cuda}'); print(f'GPU Available: {torch.cuda.is_available()}')"
+python -c "import sys; print('sys.prefix:', sys.prefix)"
+python -c "import numpy as np; print('numpy:', np.__version__)"
+nvidia-smi || true
+echo "=================="
+
 MODEL_NAME=${MODEL_NAME:-TST}
 
 echo "CWD:"; pwd
