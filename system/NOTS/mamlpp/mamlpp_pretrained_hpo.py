@@ -346,22 +346,24 @@ def build_model_from_trial(trial, model_type, base_config=None):
         print(f"--> Loading pretrained weights for {model_type}...")
 
         if config["NOTS"]:
-            pretrain_path = r"/projects/my13/kai/meta-pers-gest/pers-gest-cls/pretrain_outputs/checkpoints"
+            # Linux uses forward slashes
+            pretrain_path = r"/projects/my13/kai/meta-pers-gest/pers-gest-cls/pretrain_outputs/checkpoints/"
         else:
-            pretrain_path = r"C:\Users\kdmen\Repos\pers-gest-cls\pretrain_outputs\checkpoints"
+            # Windows uses back slashes
+            pretrain_path = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\pretrain_outputs\\checkpoints\\"
         
         weight_paths = {
-            "MetaCNNLSTM": f"{pretrain_path}\MetaCNNLSTM_best.pt",
-            "DeepCNNLSTM": f"{pretrain_path}\DeepCNNLSTM_best.pt",
-            "TST": f"{pretrain_path}\TST_best.pt",
-            "ContrastiveNet": f"{pretrain_path}\ContrastiveNet_best_best.pt",
+            "MetaCNNLSTM": f"{pretrain_path}MetaCNNLSTM_best.pt",
+            "DeepCNNLSTM": f"{pretrain_path}DeepCNNLSTM_best.pt",
+            "TST": f"{pretrain_path}TST_best.pt",
+            "ContrastiveNet": f"{pretrain_path}ContrastiveNet_best_best.pt",
             "MOE": None # THERE IS NO PRETRAINED WEIGHTS FOR THIS ONE!
         }
         
         load_path = weight_paths.get(model_type, "")
         
         try:
-            state_dict = torch.load(load_path, map_location=config["device"])
+            state_dict = torch.load(load_path, map_location=config["device"], weights_only=True)
             # Filter out the classification/projection head so we only load the backbone
             filtered_dict = {k: v for k, v in state_dict.items() if "head" not in k and "projector" not in k}
             
