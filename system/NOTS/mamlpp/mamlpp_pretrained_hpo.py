@@ -19,6 +19,7 @@ from pathlib import Path
 
 # Allow numpy scalars to be loaded in weights_only mode
 torch.serialization.add_safe_globals([np.core.multiarray.scalar])
+torch.serialization.add_safe_globals([np.scalar])
 
 print(f"CUDA Available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
