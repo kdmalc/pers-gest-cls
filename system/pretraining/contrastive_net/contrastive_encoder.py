@@ -157,7 +157,8 @@ class ContrastiveGestureEncoder(nn.Module):
 
         imu_out_ch = 0
         self.imu_encoder = None
-        if config.get('use_imu', False):
+        self.use_imu = config['use_imu']
+        if self.use_imu:
             self.imu_encoder = self._build_cnn(
                 config['imu_in_ch'],
                 config['imu_base_cnn_filters'],
@@ -294,6 +295,10 @@ class ContrastiveGestureEncoder(nn.Module):
         DOES APPLY THE PROJECTION HEAD
         Returns z: (B, embedding_dim), unit-norm vectors on the hypersphere.
         """
+        if self.use_imu==True and imu is None:
+            print("NO IMU DATA PASSED INTO THE FORWARD FUNCTION")
+            raise ValueError("NO IMU DATA PASSED INTO THE FORWARD FUNCTION")
+
         d_emb = self.demo_encoder(demo) if (self.demo_encoder and demo is not None) else None
         feat = self._encode_signals(emg, imu, d_emb)
         return self.proj_head(feat)

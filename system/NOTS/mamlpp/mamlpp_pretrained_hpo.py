@@ -89,7 +89,6 @@ def inject_model_config(config: dict, model_type: str):
     config['emg_in_ch'] = 16
     config['imu_in_ch'] = 72
     config['demo_in_dim'] = 12
-    config["use_imu"] = True 
 
     # TODO: I dont think I can call trial to HPO these values?
     ## Architecture values cannot be HPOd (need to match the pretrained model)
