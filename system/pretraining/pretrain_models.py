@@ -127,7 +127,7 @@ class MetaCNNLSTM(nn.Module):
             self.head = MLPHead(self.feat_dim, self.feat_dim // 2, n_way, drop)
 
     # ── backbone returns (final_feat, [layer1_feat, layer2_feat, layer3_feat]) ──
-    def backbone(self, x_emg: torch.Tensor, x_imu=None):
+    def backbone(self, x_emg: torch.Tensor, x_imu=None, demographics=None):
         """
         Returns the final feature vector AND intermediate LSTM representations
         (needed for Fig.4-style tSNE visualization).
@@ -168,16 +168,13 @@ class MetaCNNLSTM(nn.Module):
         """
         return lstm_out.mean(dim=1)
 
-    def forward(self, x_emg: torch.Tensor, x_imu=None):
-        feat, _ = self.backbone(x_emg, x_imu)
-        #print("--- FEATURE STATS ---")
-        #print(f"feat mean={feat.mean().item():.4f} std={feat.std().item():.4f} norm={feat.norm().item():.4f}")
+    def forward(self, x_emg: torch.Tensor, x_imu=None, demographics=None):
+        feat, _ = self.backbone(x_emg, x_imu, demographics=demographics)
         return self.head(feat)
 
-    def get_features(self, x_emg: torch.Tensor, x_imu=None):
-        """Convenience wrapper for eval / probing."""
+    def get_features(self, x_emg: torch.Tensor, x_imu=None, demographics=None):
         with torch.no_grad():
-            feat, layers = self.backbone(x_emg, x_imu)
+            feat, layers = self.backbone(x_emg, x_imu, demographics=demographics)
         return feat, layers
 
 
@@ -262,7 +259,7 @@ class DeepCNNLSTM(nn.Module):
         else:
             self.head = MLPHead(self.feat_dim, self.feat_dim // 2, n_way, drop)
 
-    def backbone(self, x_emg: torch.Tensor, x_imu=None):
+    def backbone(self, x_emg: torch.Tensor, x_imu=None, demographics=None):
         x = x_emg
         if self.config.get('use_imu', False) and x_imu is not None:
             x = torch.cat([x, x_imu], dim=1)
@@ -279,15 +276,13 @@ class DeepCNNLSTM(nn.Module):
 
         return layer3_feat, [layer1_feat, layer2_feat, layer3_feat]
 
-    def forward(self, x_emg: torch.Tensor, x_imu=None):
-        feat, _ = self.backbone(x_emg, x_imu)
-        #print("--- FEATURE STATS ---")
-        #print(f"feat mean={feat.mean().item():.4f} std={feat.std().item():.4f} norm={feat.norm().item():.4f}")
+    def forward(self, x_emg: torch.Tensor, x_imu=None, demographics=None):
+        feat, _ = self.backbone(x_emg, x_imu, demographics=demographics)
         return self.head(feat)
 
-    def get_features(self, x_emg, x_imu=None):
+    def get_features(self, x_emg, x_imu=None, demographics=None):
         with torch.no_grad():
-            return self.backbone(x_emg, x_imu)
+            return self.backbone(x_emg, x_imu, demographics=demographics)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -429,11 +424,13 @@ class TST(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
-    def backbone(self, x_emg: torch.Tensor, x_imu=None):
+    def backbone(self, x_emg: torch.Tensor, x_imu=None, demographics=None):
         """
         Returns (cls_feat, [block_i_cls_feat, ...])
         cls_feat: (B, d_model) — CLS token output from final block
         block_feats: list of (B, d_model) from each block (for visualization/probing)
+
+        demographics is not used at all...
         """
         x = x_emg
         if self.config.get('use_imu', False) and x_imu is not None:
@@ -461,15 +458,15 @@ class TST(nn.Module):
         cls_feat = self.norm_final(tokens[:, 0])
         return cls_feat, block_feats
 
-    def forward(self, x_emg: torch.Tensor, x_imu=None):
-        feat, _ = self.backbone(x_emg, x_imu)
+    def forward(self, x_emg: torch.Tensor, x_imu=None, demographics=None):
+        feat, _ = self.backbone(x_emg, x_imu, demographics=demographics)
         #print("--- FEATURE STATS ---")
         #print(f"feat mean={feat.mean().item():.4f} std={feat.std().item():.4f} norm={feat.norm().item():.4f}")
         return self.head(feat)
 
-    def get_features(self, x_emg, x_imu=None):
+    def get_features(self, x_emg, x_imu=None, demographics=None):
         with torch.no_grad():
-            return self.backbone(x_emg, x_imu)
+            return self.backbone(x_emg, x_imu, demographics=demographics)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
