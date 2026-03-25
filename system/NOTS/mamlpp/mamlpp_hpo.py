@@ -169,8 +169,8 @@ def build_model_from_trial(trial, base_config=None):
     # Set use_MOE to trial.suggest_categorical if you want Optuna to decide
     config["use_MOE"] = False 
     if config["use_MOE"]:
-        config["num_experts"] = trial.suggest_int("num_experts", 3, 6)
-        config["top_k"] = trial.suggest_int("top_k", 1, 2, 3)
+        config["num_experts"] = trial.suggest_int("num_experts", 4, 8)
+        config["top_k"] = trial.suggest_int("top_k", 2, 4)
         config["gate_type"] = "context_feature_demo"
         config["expert_architecture"] = "MLP"
     
@@ -216,7 +216,7 @@ def build_model_from_trial(trial, base_config=None):
     # NOTE: Hardcoded for the local adaptation HPO check
     config["maml_opt_order"] = trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
     if config["maml_opt_order"] == "hybrid":
-        config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 1, 40)      # DOA threshold (epochs <= this are first-order)
+        config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 5, 40)      # DOA threshold (epochs <= this are first-order)
     # Theoretically this should be even be used, but just in case...
     elif config["maml_opt_order"] == "first":
         config["maml_first_order_to_second_order_epoch"] = 1000000  # Arbitrarily large to never trigger and switch to second

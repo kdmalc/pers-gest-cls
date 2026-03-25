@@ -492,7 +492,8 @@ def mamlpp_adapt_and_eval(model, config, support_batch, query_batch):
     q_loss = criterion(logits, labels).item()
     acc = (preds == labels).sum().item() / max(1, B)
 
-    return {"loss": q_loss, "acc": acc, "adapted_params": theta_prime}
+    # NOTE: theta_prime is not used by the rest of the code, and I think it returns the entire computational graph each time this func is called...
+    return {"loss": q_loss, "acc": acc}#, "adapted_params": theta_prime}
 
 def compute_meta_batch_alignment(task_gradients_list):
     """

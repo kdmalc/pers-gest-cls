@@ -37,7 +37,7 @@ def meta_evaluate(model, episodic_loader, config, adapt_and_eval_fn):
             
             # Aggregate
             q_size = len(ep["query"]["labels"]) if isinstance(ep["query"], dict) else len(ep["query"][1])
-            total_loss += metrics["loss"]
+            total_loss += metrics["loss"].item()
             total_correct += (metrics["acc"] * q_size)
             total_count += q_size
             n_eps += 1
