@@ -73,14 +73,14 @@ def inject_model_config(config: dict, model_type: str):
     config['demo_in_dim'] = 12
     config["use_imu"] = True 
 
+    # TODO: I dont think I can call trial to HPO these values?
+    ## Architecture values cannot be HPOd (need to match the pretrained model)
+    ## Other things (learning rate and such) can be HPOd... not totally sure if NONE of these values need to be HPOd...
+
     if model_type == "MetaCNNLSTM":
-        # emg_base_cnn_filters, imu_base_cnn_filters
-        # cnn_kernel_size, groupnorm_num_groups
-        # NOTE: These HPs need to match what was run in the pretrained configs...
-        ## Names... uh oh
-        ## Names need to match what was run in pretrained surely. 
-        ## Do they also need to match whatever appears in this file? Or are they only used in that file...
         config.update({
+            # emg_base_cnn_filters, imu_base_cnn_filters
+            # cnn_kernel_size, groupnorm_num_groups
             "cnn_filters": 32, "emg_cnn_layers": 1, "imu_cnn_layers": 1,
             "cnn_kernel": 5, "gn_groups": 8,
             "lstm_hidden": 32, "lstm_layers": 1, "bidirectional": True,
@@ -120,43 +120,57 @@ def inject_model_config(config: dict, model_type: str):
             "use_lstm":             config['arch_mode'] == 'cnn_lstm',  # TODO: So what happens when this is true but arch_mode is set to attn...
             "lstm_hidden":          128,
             "lstm_layers":          2,
-            # TODO: Is GAP used AFTER CNN BEFORE LSTM, or just AFTER LSTM? If its after it doesnt matter
+            # In Contrastive: GAP used AFTER LSTM
             "use_GlobalAvgPooling": True,         # True=GAP over LSTM outputs; False=concat last hidden
             # ATTENTION POOLING  (only used if arch_mode == 'cnn_attn')
             "attn_pool_heads":      4,
             # PROJECTION HEAD  (maps backbone features → contrastive embedding)
             "embedding_dim":        128,
             "proj_hidden_dim":      256,          # None → single linear layer
-            # SUPCON LOSS  (loss_mode == 'supcon')
-            "supcon_temperature":   0.07,
-            "hard_negative_mining": False,        # Start False; ablate on
-            "label_hierarchy":      False,        # 4-level: (user,gest) > (user,diff) > (diff,gest) > (diff,diff)
+
+            # SUPCON LOSS SPECIFC (loss_mode == 'supcon') --> No effect / not called with MAML??
+            #"supcon_temperature":   0.07,         # NOTE: This isn't changed (is it even used?) during MAML training right? This is SupConLoss (pretraining) specific right?
+            #"hard_negative_mining": False,        # Start False; ablate on
+            #"label_hierarchy":      False,        # 4-level: (user,gest) > (user,diff) > (diff,gest) > (diff,diff)
             # SIAMESE LOSS  (loss_mode == 'siamese')
-            "cosine_margin":        0.4,
-            "pos_weight":           1.0,
+            #"cosine_margin":        0.4,
+            #"pos_weight":           1.0,
             # DATALOADER / BATCH CONSTRUCTION
-            "batch_construction":   "balanced",   # 'balanced' (recommended) or 'random'
-            "samples_per_class":    6,            # M samples per gesture per batch  
-            "classes_per_batch":    10,           # How many gesture classes to include per batch
+            #"batch_construction":   "balanced",   # 'balanced' (recommended) or 'random'
+            #"samples_per_class":    6,            # M samples per gesture per batch  
+            #"classes_per_batch":    10,           # How many gesture classes to include per batch
             # Validation: 1-shot prototyping accuracy (mimics test-time protocol exactly)
-            "val_support_shots":    1,            # k-shot for prototype construction
-            "val_query_per_class":  9,            # How many query samples to evaluate per class
+            #"val_support_shots":    1,            # k-shot for prototype construction
+            #"val_query_per_class":  9,            # How many query samples to evaluate per class
+
             "num_val_episodes":     20,           
             # OPTIMIZATION
             "lr_scheduler":         "cosine",     # 'cosine', 'reduce_on_plateau', or None
             "lr_warmup_epochs":     5,
             "lr_min":               1e-6,         # Cosine annealing minimum
             # LINEAR PROBE EVALUATION
-            "epochs_between_linprob": 5,          # How often to run the linear probe
-            "linprob_epochs":         50,         # How many CE epochs to fit the linear layer
-            "linprob_lr":             1e-2,       # LR for the linear probe Adam optimizer
+            #"epochs_between_linprob": 5,          # How often to run the linear probe
+            #"linprob_epochs":         50,         # How many CE epochs to fit the linear layer
+            #"linprob_lr":             1e-2,       # LR for the linear probe Adam optimizer
             # MISC
             "grad_clip":            5.0,          # Max gradient norm; None to disable
             "log_interval":         100,          # Steps between training log prints
         })
-
+    #elif model_type == "MOECNNLSTM":
     else:
         print("Falling back to old MOE dynamic config (this may not be supported...)")
+
+        # TODO: This is the original network... I dont think it is really support right now...
+        # CNN Width & Depth
+        config["emg_base_cnn_filters"] = 64
+        config["imu_base_cnn_filters"] = 64
+        config["emg_cnn_layers"] = 2
+        config["imu_cnn_layers"] = 2
+        config["cnn_kernel_size"] = 3
+        # LSTM
+        config["use_lstm"] = True 
+        config["lstm_hidden"] = 128
+        config["lstm_layers"] = 2
     
     return config
 
@@ -169,9 +183,10 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config = inject_model_config(config, model_type)
 
     # === Task Setup ===
+    # NOTE: Running 1-shot 3-way for now. Final will be 1-shot 10-way... (harder...)
     config["n_way"] = 3  
-    config["k_shot"] = 5  
-    config["q_query"] = 5
+    config["k_shot"] = 1  
+    config["q_query"] = 9
     config["num_classes"] = 10
 
     config["feature_engr"] = "None"
@@ -201,7 +216,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
         config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds//"
 
     # DEBUG
-    config["track_gradient_alignment"] = True
+    config["track_gradient_alignment"] = False
     config["verbose"] = False
     config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
     config['num_eval_episodes'] = 10
@@ -229,20 +244,9 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config["groupnorm_num_groups"] = trial.suggest_categorical("groupnorm_num_groups", [4, 8])
     config["dropout"] = 0.1 
 
-    # TODO: What? These have to match the pretrained networks... I think the pretrained networks call them slightly different things so these might not even get used
-    # CNN Width & Depth
-    #config["emg_base_cnn_filters"] = trial.suggest_categorical("emg_width", [32, 64, 128, 256])
-    #config["imu_base_cnn_filters"] = trial.suggest_categorical("imu_width", [32, 64, 128, 256])
-    #config["emg_cnn_layers"] = trial.suggest_int("emg_depth", 2, 4)
-    #config["imu_cnn_layers"] = trial.suggest_int("imu_depth", 2, 4)
-    #config["cnn_kernel_size"] = trial.suggest_categorical("cnn_kernel", [3, 5])
     config['emg_stride'] = 1  
     config['imu_stride'] = 1  
     config["padding"] = 0 
-    # LSTM
-    #config["use_lstm"] = True 
-    #config["lstm_hidden"] = trial.suggest_categorical("lstm_hidden", [64, 128, 256])
-    #config["lstm_layers"] = trial.suggest_int("lstm_layers", 1, 3)
 
     # TODO: Is this GAP after the CNN or after the LSTM...
     config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])

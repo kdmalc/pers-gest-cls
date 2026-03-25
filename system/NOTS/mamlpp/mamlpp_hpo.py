@@ -75,7 +75,7 @@ def build_model_from_trial(trial, base_config=None):
 
     # === Task Setup ===
     config["n_way"] = 3  
-    config["k_shot"] = 5  # Stick with 5-shot as your baseline
+    config["k_shot"] = 1
     config["q_query"] = 5
     config["num_classes"] = 10
 
