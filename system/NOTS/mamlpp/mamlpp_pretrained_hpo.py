@@ -367,15 +367,19 @@ def build_model_from_trial(trial, model_type, base_config=None):
         else: # Windows uses back slashes
             pretrain_path = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\pretrain_outputs\\checkpoints\\"
         
-        weight_paths = {
-            "MetaCNNLSTM": f"{pretrain_path}MetaCNNLSTM_03232026_170503_{config['best_or_last_pretr']}.pt",
-            "DeepCNNLSTM": f"{pretrain_path}DeepCNNLSTM_03232026_165043_{config['best_or_last_pretr']}.pt",
-            "TST": f"{pretrain_path}TST_03232026_163527_{config['best_or_last_pretr']}.pt",
-            "ContrastiveNet": f"{pretrain_path}ContrastiveNet_{config['arch_mode'][-4:]}_20260325_1558_{config['best_or_last_pretr']}.pt",
-            "MOE": None # THERE IS NO PRETRAINED WEIGHTS FOR THIS ONE!
-        }
-        
-        load_path = weight_paths.get(model_type, "")
+
+        if model_type == "MetaCNNLSTM":
+            load_path = f"{pretrain_path}MetaCNNLSTM_03232026_170503_{config['best_or_last_pretr']}.pt"
+        elif model_type == "DeepCNNLSTM":
+            load_path = f"{pretrain_path}DeepCNNLSTM_03232026_165043_{config['best_or_last_pretr']}.pt"
+        elif model_type == "TST":
+            load_path = f"{pretrain_path}TST_03232026_163527_{config['best_or_last_pretr']}.pt"
+        elif model_type == "MOE":
+            load_path = None  # There is no pretrained MOE-CNN-LSTM model!!
+        elif model_type == "ContrastiveNet": 
+            load_path = f"{pretrain_path}ContrastiveNet_{config['arch_mode'][-4:]}_20260325_1558_{config['best_or_last_pretr']}.pt"
+        else:
+            raise ValueError("Unknown model_type!")
         
         try:
             # Load the full checkpoint
