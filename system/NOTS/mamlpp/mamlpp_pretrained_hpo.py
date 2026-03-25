@@ -308,8 +308,8 @@ def build_model_from_trial(trial, model_type, base_config=None):
     elif config["use_maml_msl"] == False:
         config["maml_msl_num_epochs"] = 0
     # OPTIMIZATION ORDER
-    # NOTE: Hardcoded for the local adaptation HPO check
-    config["maml_opt_order"] = trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
+    # NOTE: CuDNN doesnt support second order. So either just use first order OR wrap a context manager around EVERY forward pass that disables CuDNN flags.
+    config["maml_opt_order"] = "first"  #trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
     if config["maml_opt_order"] == "hybrid":
         config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 5, 40)      # DOA threshold (epochs <= this are first-order)
     # Theoretically this should be even be used, but just in case...

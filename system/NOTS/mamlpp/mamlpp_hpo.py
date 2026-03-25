@@ -219,7 +219,7 @@ def build_model_from_trial(trial, base_config=None):
         config["maml_msl_num_epochs"] = 0
     # OPTIMIZATION ORDER
     # NOTE: Hardcoded for the local adaptation HPO check
-    config["maml_opt_order"] = trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
+    config["maml_opt_order"] = "first"  #trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
     if config["maml_opt_order"] == "hybrid":
         config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 5, 40)      # DOA threshold (epochs <= this are first-order)
     # Theoretically this should be even be used, but just in case...
