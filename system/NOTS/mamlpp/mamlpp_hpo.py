@@ -22,6 +22,10 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 import random
 
+print(f"CUDA Available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"GPU Name: {torch.cuda.get_device_name(0)}")
+
 from pathlib import Path
 # env -> Path objects
 CODE_DIR = Path(os.environ.get("CODE_DIR", "./")).resolve()
