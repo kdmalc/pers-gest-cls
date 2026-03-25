@@ -356,7 +356,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
             "MetaCNNLSTM": f"{pretrain_path}MetaCNNLSTM_best.pt",
             "DeepCNNLSTM": f"{pretrain_path}DeepCNNLSTM_best.pt",
             "TST": f"{pretrain_path}TST_best.pt",
-            "ContrastiveNet": f"{pretrain_path}ContrastiveNet_best_best.pt",
+            "ContrastiveNet": f"{pretrain_path}ContrastiveNet_best.pt",
             "MOE": None # THERE IS NO PRETRAINED WEIGHTS FOR THIS ONE!
         }
         
