@@ -415,7 +415,7 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
 # -----------------------------
 # Test Time Adaptation
 # -----------------------------
-def mamlpp_adapt(model, config, support_batch, *, use_lslr_at_eval=False):
+def mamlpp_adapt(model, config, support_batch):
     """
     Adaptation during Meta-Evaluation. 
     CRITICAL: Must use model.train() to allow RNN gradient computation (cuDNN requirement).
@@ -436,7 +436,7 @@ def mamlpp_adapt(model, config, support_batch, *, use_lslr_at_eval=False):
     criterion = nn.CrossEntropyLoss(label_smoothing=label_smooth) if label_smooth > 0 else nn.CrossEntropyLoss()
     
     # LSLR Logic
-    use_lslr = bool(config["maml_use_lslr"]) and use_lslr_at_eval and hasattr(model, "_lslr")
+    use_lslr = bool(config["maml_use_lslr"]) and config['use_lslr_at_eval'] and hasattr(model, "_lslr")
     alpha_eval = float(config["maml_alpha_init_eval"])
 
     with torch.enable_grad():

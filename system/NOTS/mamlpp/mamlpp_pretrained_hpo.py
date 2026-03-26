@@ -295,10 +295,10 @@ def build_model_from_trial(trial, model_type, base_config=None):
         config["gate_type"] = "context_feature_demo"
         config["expert_architecture"] = "MLP"
 
-    config["use_label_shuf_meta_aug"] = False  # TODO: This probably should be turned back on?
+    config["use_label_shuf_meta_aug"] = True  # TODO: This probably should be turned back on?
     config["num_epochs"] = 50 
     config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [100, 150, 200, 250, 400, 500, 750])
-    config["label_smooth"] = 0.0
+    config["label_smooth"] = trial.suggest_categorical("label_smooth", [0.0, 0.05, 0.1, 0.15, 0.2])
 
     config["num_total_users"] = 32  # TODO: Not sure if this is still used
 
@@ -331,18 +331,18 @@ def build_model_from_trial(trial, model_type, base_config=None):
     # NOTE: CuDNN doesnt support second order. So either just use first order OR wrap a context manager around EVERY forward pass that disables CuDNN flags.
     config["maml_opt_order"] = "first"  #trial.suggest_categorical("maml_opt_order", ["first", "second", "hybrid"])                         # enables second-order when DOA switches on
     if config["maml_opt_order"] == "hybrid":
-        config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 5, 40)      # DOA threshold (epochs <= this are first-order)
+        config["maml_first_order_to_second_order_epoch"] = trial.suggest_int("maml_first_order_to_second_order_epoch", 5, 25)      # DOA threshold (epochs <= this are first-order)
     # Theoretically this should be even be used, but just in case...
     elif config["maml_opt_order"] == "first":
         config["maml_first_order_to_second_order_epoch"] = 1000000  # Arbitrarily large to never trigger and switch to second
     elif config["maml_opt_order"] == "second":
         config["maml_first_order_to_second_order_epoch"] = 0  # Do second the whole time
     # LSLR
-    config["maml_use_lslr"] = True
+    config["maml_use_lslr"] = trial.suggest_categorical("maml_use_lslr", [True, False])
     # MISC  
     config["enable_inner_loop_optimizable_bn_params"] = False  # by default, do NOT adapt BN in inner loop --> I should not be using BN at all AFAIK
     config["use_cosine_outer_lr"] = False                       # This is cosine-based lr annealing... is this in addition to my lr scheduler....
-    config["use_lslr_at_eval"] = False                         # set True if you want to use learned per-parameter step sizes at eval
+    config["use_lslr_at_eval"] = trial.suggest_categorical("use_lslr_at_eval", [True, False])                         # set True if you want to use learned per-parameter step sizes at eval
 
     # =========================================================================
     # MODEL INITIALIZATION
