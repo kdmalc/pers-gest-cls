@@ -234,17 +234,17 @@ class ContrastiveGestureEncoder(nn.Module):
         return nn.Sequential(*layers)
 
     # ----------------------------------------------------------
-    def _encode_signals(self, emg: torch.Tensor,
-                        imu: torch.Tensor = None,
+    def _encode_signals(self, x_emg: torch.Tensor,
+                        x_imu: torch.Tensor = None,
                         d_emb: torch.Tensor = None) -> torch.Tensor:
         """CNN → (optional FiLM) → concat → temporal → (B, backbone_dim)"""
 
         # 1. CNN
-        e = self.emg_encoder(emg)   # (B, emg_out_ch, T')
+        e = self.emg_encoder(x_emg)   # (B, emg_out_ch, T')
 
         i = None
-        if self.imu_encoder is not None and imu is not None:
-            i = self.imu_encoder(imu)
+        if self.imu_encoder is not None and x_imu is not None:
+            i = self.imu_encoder(x_imu)
 
         # 2. FiLM conditioning
         if d_emb is not None and self.film_emg is not None:
@@ -275,8 +275,8 @@ class ContrastiveGestureEncoder(nn.Module):
         return feat
 
     # ----------------------------------------------------------
-    def encode(self, emg: torch.Tensor,
-               imu: torch.Tensor = None,
+    def encode(self, x_emg: torch.Tensor,
+               x_imu: torch.Tensor = None,
                demo: torch.Tensor = None) -> torch.Tensor:
         """
         Backbone only (before projection head, DOES NOT APPLY THE PROJECTION HEAD).
@@ -284,23 +284,23 @@ class ContrastiveGestureEncoder(nn.Module):
         Returns (B, backbone_dim), NOT normalized.
         """
         d_emb = self.demo_encoder(demo) if (self.demo_encoder and demo is not None) else None
-        return self._encode_signals(emg, imu, d_emb)
+        return self._encode_signals(x_emg, x_imu, d_emb)
 
     # ----------------------------------------------------------
-    def forward(self, emg: torch.Tensor,
-                imu: torch.Tensor = None,
+    def forward(self, x_emg: torch.Tensor,
+                x_imu: torch.Tensor = None,
                 demo: torch.Tensor = None) -> torch.Tensor:
         """
         Full forward pass: signal → backbone → projection head → L2-norm.
         DOES APPLY THE PROJECTION HEAD
         Returns z: (B, embedding_dim), unit-norm vectors on the hypersphere.
         """
-        if self.use_imu==True and imu is None:
+        if self.use_imu==True and x_imu is None:
             print("NO IMU DATA PASSED INTO THE FORWARD FUNCTION")
             raise ValueError("NO IMU DATA PASSED INTO THE FORWARD FUNCTION")
 
         d_emb = self.demo_encoder(demo) if (self.demo_encoder and demo is not None) else None
-        feat = self._encode_signals(emg, imu, d_emb)
+        feat = self._encode_signals(x_emg, x_imu, d_emb)
         return self.proj_head(feat)
 
     # ----------------------------------------------------------
