@@ -245,21 +245,21 @@ def build_model_from_trial(trial, model_type, base_config=None):
     elif config['debug_five_episodes']:
         config["meta_batchsize"] = 5
     else:
-        config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [4, 8, 16, 24, 32])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
+        config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [4, 8, 16, 24])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
 
     # === MAML Core Hyperparameters ===
-    config["maml_inner_steps"] = trial.suggest_categorical("maml_inner_steps", [2, 3, 5, 7])
-    config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [10, 15, 20, 30])
+    config["maml_inner_steps"] = trial.suggest_categorical("maml_inner_steps", [3, 5, 7, 9, 11])
+    config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [15, 20, 30, 50, 75])
     
-    config["maml_alpha_init"] = trial.suggest_float("maml_alpha_init", 1e-4, 1e-1, log=True)
-    config["maml_alpha_init_eval"] = trial.suggest_float("maml_alpha_init_eval", 1e-4, 1e-2, log=True)
-    config["learning_rate"] = trial.suggest_float("outer_lr", 1e-5, 1e-2, log=True)
-    config["weight_decay"] = trial.suggest_float("wd", 1e-6, 1e-4, log=True)
+    config["maml_alpha_init"] = trial.suggest_float("maml_alpha_init", 0.001, 0.1, log=True)
+    config["maml_alpha_init_eval"] = trial.suggest_float("maml_alpha_init_eval", 0.001, 0.1, log=True)
+    config["learning_rate"] = trial.suggest_float("outer_lr", 0.0001, 5e-3, log=True)
+    config["weight_decay"] = trial.suggest_float("wd", 1e-6, 1e-3, log=True)
 
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     config["use_batch_norm"] = False
     config["groupnorm_num_groups"] = trial.suggest_categorical("groupnorm_num_groups", [4, 8])
-    config["dropout"] = 0.1 
+    config["dropout"] = 0.1  # TODO: That's crazy that I wasn't HPOing over dropout lol --> Is this used in the CNN and LSTM, or just MLP? Have separate dropouts for different layer types?
 
     config['emg_stride'] = 1  
     config['imu_stride'] = 1  
@@ -270,9 +270,10 @@ def build_model_from_trial(trial, model_type, base_config=None):
 
     # === Finetuning / Transfer Learning Strategy ===
     config["finetuning_approach"] = trial.suggest_categorical("finetuning_approach", ["full"])  #, "anil", "frozen_backbone"])
-
     config["use_pretrained"] = True 
     config["best_or_last_pretr"] = trial.suggest_categorical("best_or_last_pretr", ["best", "last"])
+    # TODO: Enable this below to replace the above!
+    #config["pretrain_approach"] = trial.suggest_categorical("pretrain_approach", ["full_best", "full_last", "None", "enc_best", "enc_last", "frozen_enc_best", "frozen_enc_last"])
 
     # === Multimodal & Conditioning (Keeping these if you still use FiLM/Demo heads) ===
     # NOTE: Turning demographics off (wasnt used in pretraining)
@@ -280,8 +281,8 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config["use_imu"] = True 
     config["use_demographics"] = False
     config["use_film_x_demo"] = False  #trial.suggest_categorical("use_film_x_demo", [True, False])
-    config["FILM_on_context_or_demo"] = 'context' 
-    config["context_emb_dim"] = trial.suggest_categorical("context_emb_dim", [8, 16, 32, 64])
+    config["FILM_on_context_or_demo"] = 'context'  # TODO: Is this currently used...
+    config["context_emb_dim"] = trial.suggest_categorical("context_emb_dim", [16, 24, 32, 64])
     #config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [8, 16, 32, 64])
     config["context_pool_type"] = trial.suggest_categorical("context_pool_type", ['mean', 'attn'])  
 
@@ -296,7 +297,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
 
     config["use_label_shuf_meta_aug"] = False  # TODO: This probably should be turned back on?
     config["num_epochs"] = 50 
-    config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500])
+    config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [100, 150, 200, 250, 400, 500, 750])
     config["label_smooth"] = 0.0
 
     config["num_total_users"] = 32  # TODO: Not sure if this is still used
@@ -305,7 +306,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config["target_trial_indices"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # NOTE: THIS IS GESTURE TRIAL/REPETITION NUM
 
     # Pretraining optim
-    config["optimizer"]          = trial.suggest_categorical("optimizer", ["adamw", "adam", "sgd"])
+    config["optimizer"]          = trial.suggest_categorical("optimizer", ["adamw", "adam"])
     config["use_earlystopping"] = True
     config["lr_scheduler_factor"]= 0.1  #trial.suggest_categorical("pre_sched_factor", [0.1, 0.2])
     config["lr_scheduler_patience"]= 6  #trial.suggest_int("pre_sched_pat", 4, 10)
