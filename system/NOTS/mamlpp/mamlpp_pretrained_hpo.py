@@ -248,8 +248,8 @@ def build_model_from_trial(trial, model_type, base_config=None):
         config["meta_batchsize"] = trial.suggest_categorical("meta_batchsize", [4, 8, 16, 24])  # Meta learning batch size, ie number of episodes per batch (this is handled via looping NOT in the dataloaders since sizes may not match bewteen episodes)
 
     # === MAML Core Hyperparameters ===
-    config["maml_inner_steps"] = trial.suggest_categorical("maml_inner_steps", [3, 5, 7, 9, 11])
-    config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [15, 20, 30, 50, 75])
+    config["maml_inner_steps"] = trial.suggest_categorical("maml_inner_steps", [3, 5, 7, 9, 11, 15])
+    config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [15, 20, 30, 50, 75, 100])
     
     config["maml_alpha_init"] = trial.suggest_float("maml_alpha_init", 0.001, 0.1, log=True)
     config["maml_alpha_init_eval"] = trial.suggest_float("maml_alpha_init_eval", 0.001, 0.1, log=True)
@@ -460,7 +460,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
 # ---------- Load splits once ----------
 with open(user_split_json_filepath, "r") as f:
     ALL_SPLITS = json.load(f)
-NUM_FOLDS = 2  
+NUM_FOLDS = 1
 
 BASE_CONFIG = {} 
 
@@ -479,6 +479,10 @@ def objective(trial, model_type):
 
         # ---- Build model + config for this trial/fold ----
         model, config = build_model_from_trial(trial, model_type, base_config=BASE_CONFIG)
+
+        print("\nCONFIG:")
+        print(config)
+        print("\n")
 
         if config["device"].type == "cpu":
             print("HPO is happening on the CPU! Probably ought to switch to GPU!")

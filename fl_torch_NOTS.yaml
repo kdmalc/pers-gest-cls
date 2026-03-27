@@ -1,0 +1,67 @@
+name: fl_torch
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  # Core Python
+  - python=3.10
+  - pip
+  
+  # PyTorch & GPU Support
+  - pytorch=2.4.0
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.1
+  
+  # Core Data Science & ML
+  - numpy>=1.24
+  - pandas>=2.0
+  - scipy>=1.10
+  - scikit-learn>=1.2
+  - statsmodels
+  - networkx
+  - numba
+  - sympy
+  - h5py
+  
+  # Visualization & Dimensionality Reduction
+  - matplotlib>=3.7
+  - seaborn>=0.13
+  - plotly
+  - umap-learn
+  
+  # Utilities & Infrastructure
+  - optuna
+  - sqlalchemy>=2.0
+  - alembic
+  - tqdm
+  - pyyaml
+  - cryptography
+  - beautifulsoup4
+  - pillow
+  - colorlog
+  
+  # Jupyter Environment
+  - jupyterlab
+  - notebook
+  - ipywidgets
+
+  # Pip dependencies (Kept exactly as requested)
+  - pip:
+      - blinker==1.9.0
+      - click==8.1.7
+      - flask==3.0.3
+      - importlib-metadata==8.5.0
+      - itsdangerous==2.2.0
+      - jinja2>=3.0.3
+      - mistune==3.0.2
+      - nbconvert==7.16.4
+      - pandoc==2.4
+      - plumbum==1.9.0
+      - pyee==11.1.1
+      - pyppeteer==2.0.0
+      - tinycss2==1.4.0
+      - websockets==10.4
+      - werkzeug==3.1.3
+      - zipp==3.21.0

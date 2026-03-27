@@ -243,7 +243,7 @@ def build_model_from_trial(trial, base_config=None):
 # ---------- Load splits once ----------
 with open(user_split_json_filepath, "r") as f:
     ALL_SPLITS = json.load(f)
-NUM_FOLDS = 2  #len(ALL_SPLITS) --> Overwriting to just be 1 for HPO, otherwise runs legit cannot finish
+NUM_FOLDS = 1  #len(ALL_SPLITS) --> Overwriting to just be 1 for HPO, otherwise runs legit cannot finish
 ## Im going to change it to 2 so that we dont just overfit to the fixed val set...
 ## I dont think 2 folds can finish in 24 hours... increase the time to 24 hours ig...
 # If you want to store per-fold metrics:
@@ -282,6 +282,10 @@ def objective(trial):
         # ---- Build model + config for this trial/fold ----
         # Uses your new builder that takes `trial` and sets hyperparams via trial.suggest_*
         model, config = build_model_from_trial(trial, base_config=BASE_CONFIG)
+
+        print("\nCONFIG:")
+        print(config)
+        print("\n")
 
         if config["use_MOE"]:
             print(f"CONFIG[GATE_TYPE]: {config['gate_type']}")
