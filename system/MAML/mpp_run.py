@@ -670,6 +670,7 @@ def main():
     config["pwoutmd_xlsx_filepath"]  = str(CODE_DIR / "dataset" / "Biosignal gesture questionnaire for participants without disabilities.xlsx")
     config["dfs_save_path"]          = str(CODE_DIR / "dataset" / "")
     config["dfs_load_path"]          = str(CODE_DIR / "dataset" / "meta-learning-sup-que-ds" / "")
+    config["pretrain_dir"]           = str(CODE_DIR / "pretrain_outputs" / "checkpoints" / "")
     config["meta_learning"]          = True
     config["device"]                 = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

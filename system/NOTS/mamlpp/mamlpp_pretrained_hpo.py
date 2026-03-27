@@ -218,19 +218,19 @@ def build_model_from_trial(trial, model_type, base_config=None):
         config["user_split_json_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\fixed_user_splits\\4kfcv_splits_shared_test.json"
         config["results_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\results\\local_{timestamp}"
         config["models_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\models\\local_{timestamp}"
+        config["pretrain_dir"]           = str(CODE_DIR / "pretrain_outputs" / "checkpoints" / "")
     elif config["NOTS"]==True:
         ## SAVING
         config["user_split_json_filepath"] = user_split_json_filepath
         config["results_save_dir"] = results_save_dir
         config["models_save_dir"] = models_save_dir
-        ## Mutlimodal LOADING
+        ## LOADING
         config["emg_imu_pkl_full_path"] = f"{CODE_DIR}//dataset//filtered_datasets//metadata_IMU_EMG_allgestures_allusers.pkl" 
-        
         config["pwmd_xlsx_filepath"] = f"{CODE_DIR}//dataset//Biosignal gesture questionnaire for participants with disabilities.xlsx"
         config["pwoutmd_xlsx_filepath"] = f"{CODE_DIR}//dataset//Biosignal gesture questionnaire for participants without disabilities.xlsx"
-        
         config["dfs_save_path"] = f"{CODE_DIR}/dataset//"
         config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds//"
+        config["pretrain_dir"]           = str(CODE_DIR / "pretrain_outputs" / "checkpoints" / "")
 
     # DEBUG
     config["track_gradient_alignment"] = False
