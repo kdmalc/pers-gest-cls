@@ -288,7 +288,7 @@ def get_pretrain_path(config
     else:
         best_or_last = ""
     pretrain_dir = config['pretrain_dir']
-    model_filename = config['pretrain_model_filename']
+    model_filename = config['pretrained_model_filename']
 
     if model_filename is not None:
         # Explicit override — caller knows exactly which checkpoint they want.
