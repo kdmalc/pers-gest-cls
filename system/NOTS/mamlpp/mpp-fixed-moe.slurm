@@ -49,7 +49,7 @@ mkdir -p "$RUN_DIR"
 
 echo "Condition: pretrain=$PRETRAIN $MOE_FLAG | fold=0"
 
-python -u "$CODE_DIR/system/NOTS/mamlpp/mpp_run.py" \
+python -u "$MAML_DIR/mpp_run.py" \
     --model_type DeepCNNLSTM \
     --fold 0 \
     --pretrain_approach $PRETRAIN \
