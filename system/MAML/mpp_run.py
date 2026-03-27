@@ -296,7 +296,7 @@ def get_pretrain_path(config
             fname = model_filename
         else:
             fname = f"{model_filename}.pt"  #_{best_or_last}
-        return str(pretrain_dir / fname)
+        return str(Path(pretrain_dir) / fname)
     else:
         if config["use_MOE"]:
             placement_str_abv = config["MOE_placement"][:4]  # Take the first 3 chars
@@ -332,7 +332,7 @@ def get_pretrain_path(config
         if stem is None:
             raise ValueError("stem is None")
             return None
-        return str(pretrain_dir / f"{stem}{best_or_last}.pt")
+        return str(Path(pretrain_dir) / f"{stem}{best_or_last}.pt")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

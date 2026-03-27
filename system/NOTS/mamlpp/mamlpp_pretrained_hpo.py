@@ -302,7 +302,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
         config["gate_type"] = "context_feature_demo"
         config["expert_architecture"] = "MLP"
 
-    config["use_label_shuf_meta_aug"] = True  # TODO: This probably should be turned back on?
+    config["use_label_shuf_meta_aug"] = True  
     config["num_epochs"] = 50 
     config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [100, 150, 200, 250, 400, 500, 750])
     config["label_smooth"] = trial.suggest_categorical("label_smooth", [0.0, 0.05, 0.1, 0.15, 0.2])
@@ -391,14 +391,16 @@ def build_model_from_trial(trial, model_type, base_config=None):
         print(f"--> Loading pretrained weights for {model_type} "
               f"(approach={pretrain_approach}, model_filename={model_filename})...")
 
-        if config["NOTS"]:
-            pretrain_path = Path(r"/projects/my13/kai/meta-pers-gest/pers-gest-cls/pretrain_outputs/checkpoints/")
-        else:
-            pretrain_path = Path(r"C:\Users\kdmen\Repos\pers-gest-cls\pretrain_outputs\checkpoints")
+        # TODO: This should pull it from the config....
+        #if config["NOTS"]:
+        #    pretrain_dir = Path(r"/projects/my13/kai/meta-pers-gest/pers-gest-cls/pretrain_outputs/checkpoints/")
+        #else:
+        #    pretrain_dir = Path(r"C:\Users\kdmen\Repos\pers-gest-cls\pretrain_outputs\checkpoints")
+        pretrain_dir = config['pretrain_dir']
 
         # Build the checkpoint path (use model_filename override if provided)
         if model_filename is not None:
-            load_path = str(pretrain_path / f"{model_filename}_{best_or_last}.pt")
+            load_path = str(Path(pretrain_dir) / f"{model_filename}_{best_or_last}.pt")
         else:
             # Per-model-type default stems — update when you retrain pretraining
             default_stems = {
@@ -409,7 +411,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
                 "MOE":            None,
             }
             stem = default_stems.get(model_type)
-            load_path = str(pretrain_path / f"{stem}_{best_or_last}.pt") if stem else None
+            load_path = str(Path(pretrain_dir) / f"{stem}_{best_or_last}.pt") if stem else None
 
         if load_path is None:
             print(f"--> No default pretrained checkpoint for model_type='{model_type}'. Random init.")
