@@ -64,10 +64,10 @@ def apply_fold_to_config(config, all_splits, fold_idx):
     #config["num_pretrain_users"] = len(config["train_PIDs"])
     #config["num_testft_users"] = len(config["val_PIDs"])
 
-from system.MAML_MOE.mamlpp import *
-from system.MAML_MOE.maml_data_pipeline import get_maml_dataloaders
-from system.MAML_MOE.shared_maml import *
-from system.MAML_MOE.MOE_CNN_LSTM import *
+from system.MAML.mamlpp import *
+from system.MAML.maml_data_pipeline import get_maml_dataloaders
+from system.MAML.shared_maml import *
+from system.MAML.MOE_CNN_LSTM import *
 
 from system.pretraining.pretrain_models import build_model
 from system.pretraining.contrastive_net.contrastive_encoder import ContrastiveGestureEncoder
@@ -269,11 +269,18 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
 
     # === Finetuning / Transfer Learning Strategy ===
-    config["finetuning_approach"] = trial.suggest_categorical("finetuning_approach", ["full"])  #, "anil", "frozen_backbone"])
-    config["use_pretrained"] = True 
-    config["best_or_last_pretr"] = trial.suggest_categorical("best_or_last_pretr", ["best", "last"])
-    # TODO: Enable this below to replace the above!
-    #config["pretrain_approach"] = trial.suggest_categorical("pretrain_approach", ["full_best", "full_last", "None", "enc_best", "enc_last", "frozen_enc_best", "frozen_enc_last"])
+    # pretrain_approach unifies use_pretrained + best_or_last_pretr + finetuning_approach
+    # into a single axis. "None" skips weight loading entirely.
+    # "frozen_enc_*" variants raise NotImplementedError (require inner-loop plumbing).
+    config["pretrain_approach"] = trial.suggest_categorical(
+        "pretrain_approach",
+        ["full_best", "full_last", "None", "enc_best", "enc_last"]
+        # "frozen_enc_best" and "frozen_enc_last" are not yet implemented — add when ready
+    )
+    # pretrained_model_filename: None = use per-model-type default checkpoint stem.
+    # Set to a string (e.g. "MetaCNNLSTM_03232026_170503") to load a specific run,
+    # e.g. a non-MOE checkpoint into a MOE model or vice-versa.
+    config["pretrained_model_filename"] = None  # override manually if needed
 
     # === Multimodal & Conditioning (Keeping these if you still use FiLM/Demo heads) ===
     # NOTE: Turning demographics off (wasnt used in pretraining)
@@ -286,7 +293,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
     #config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [8, 16, 32, 64])
     config["context_pool_type"] = trial.suggest_categorical("context_pool_type", ['mean', 'attn'])  
 
-    # === MoE (Mixture of Experts) ===
+    # === MOE (Mixture of Experts) ===
     # Set use_MOE to trial.suggest_categorical if you want Optuna to decide
     config["use_MOE"] = False 
     if config["use_MOE"]:
@@ -308,8 +315,6 @@ def build_model_from_trial(trial, model_type, base_config=None):
     # Pretraining optim
     config["optimizer"]          = trial.suggest_categorical("optimizer", ["adamw", "adam"])
     config["use_earlystopping"] = True
-    config["lr_scheduler_factor"]= 0.1  #trial.suggest_categorical("pre_sched_factor", [0.1, 0.2])
-    config["lr_scheduler_patience"]= 6  #trial.suggest_int("pre_sched_pat", 4, 10)
     config["earlystopping_patience"]= 8 #trial.suggest_int("pre_es_pat", 6, 14)
     config["earlystopping_min_delta"]= 0.005 #trial.suggest_float("pre_es_delta", 0.001, 0.01)
 
@@ -341,8 +346,12 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config["maml_use_lslr"] = trial.suggest_categorical("maml_use_lslr", [True, False])
     # MISC  
     config["enable_inner_loop_optimizable_bn_params"] = False  # by default, do NOT adapt BN in inner loop --> I should not be using BN at all AFAIK
-    config["use_cosine_outer_lr"] = False                       # This is cosine-based lr annealing... is this in addition to my lr scheduler....
     config["use_lslr_at_eval"] = trial.suggest_categorical("use_lslr_at_eval", [True, False])                         # set True if you want to use learned per-parameter step sizes at eval
+
+    # NOTE: lr_scheduler is not used if use_cosine_outer_lr is False!
+    config["use_cosine_outer_lr"] =    False
+    config["lr_scheduler_factor"] =    0.1
+    config["lr_scheduler_patience"] =  6
 
     # =========================================================================
     # MODEL INITIALIZATION
@@ -359,53 +368,86 @@ def build_model_from_trial(trial, model_type, base_config=None):
     # =========================================================================
     # ################### PRETRAINED WEIGHT LOADING ######################### #
     # =========================================================================
-    if config["use_pretrained"]:
-        print(f"--> Loading pretrained weights for {model_type}...")
+    pretrain_approach = config.get("pretrain_approach", "full_best")
 
-        if config["NOTS"]: # Linux uses forward slashes
-            pretrain_path = r"/projects/my13/kai/meta-pers-gest/pers-gest-cls/pretrain_outputs/checkpoints/"
-        else: # Windows uses back slashes
-            pretrain_path = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\pretrain_outputs\\checkpoints\\"
-        
+    if pretrain_approach == "None":
+        print(f"--> pretrain_approach='None' — using random initialisation for {model_type}.")
 
-        if model_type == "MetaCNNLSTM":
-            load_path = f"{pretrain_path}MetaCNNLSTM_03232026_170503_{config['best_or_last_pretr']}.pt"
-        elif model_type == "DeepCNNLSTM":
-            load_path = f"{pretrain_path}DeepCNNLSTM_03232026_165043_{config['best_or_last_pretr']}.pt"
-        elif model_type == "TST":
-            load_path = f"{pretrain_path}TST_03232026_163527_{config['best_or_last_pretr']}.pt"
-        elif model_type == "MOE":
-            load_path = None  # There is no pretrained MOE-CNN-LSTM model!!
-        elif model_type == "ContrastiveNet": 
-            load_path = f"{pretrain_path}ContrastiveNet_{config['arch_mode'][-4:]}_20260325_1810_{config['best_or_last_pretr']}.pt"
+    elif pretrain_approach in ("full_best", "full_last", "enc_best", "enc_last",
+                               "frozen_enc_best", "frozen_enc_last"):
+
+        if pretrain_approach.startswith("frozen_enc"):
+            raise NotImplementedError(
+                f"pretrain_approach='{pretrain_approach}' is not yet implemented. "
+                "Freezing the encoder requires plumbing changes in named_param_dict() "
+                "so that frozen parameters are excluded from the inner-loop update. "
+                "Use 'enc_best' or 'enc_last' for encoder-only loading without freezing."
+            )
+
+        best_or_last = "best" if pretrain_approach.endswith("best") else "last"
+        enc_only     = pretrain_approach.startswith("enc")
+        model_filename     = config.get("pretrained_model_filename", None)  # None → per-model-type default
+
+        print(f"--> Loading pretrained weights for {model_type} "
+              f"(approach={pretrain_approach}, model_filename={model_filename})...")
+
+        if config["NOTS"]:
+            pretrain_path = Path(r"/projects/my13/kai/meta-pers-gest/pers-gest-cls/pretrain_outputs/checkpoints/")
         else:
-            raise ValueError("Unknown model_type!")
-        
-        try:
-            # Load the full checkpoint
-            checkpoint = torch.load(load_path, map_location=config["device"], weights_only=False)
-            # Extract just the weights
-            if "model_state" in checkpoint:
-                state_dict = checkpoint["model_state"]
-            elif "model_state_dict" in checkpoint:
-                state_dict = checkpoint["model_state_dict"]
-            else:
-                # Fallback in case some files are just the weights
-                state_dict = checkpoint
+            pretrain_path = Path(r"C:\Users\kdmen\Repos\pers-gest-cls\pretrain_outputs\checkpoints")
 
-            # Filter out the classification/projection head so we only load the backbone
-            filtered_dict = {k: v for k, v in state_dict.items() if "head" not in k and "projector" not in k}
-            
-            model_dict = model.state_dict()
-            model_dict.update(filtered_dict)
-            model.load_state_dict(model_dict)
-            print(f"--> Successfully loaded backbone weights from: {load_path}")
-            
-        except FileNotFoundError:
-            print(f"\n#################################################################")
-            print(f"WARNING: Pretrained weight file not found at {load_path}. ")
-            print(f"Using random initialization instead!")
-            print(f"#################################################################\n")
+        # Build the checkpoint path (use model_filename override if provided)
+        if model_filename is not None:
+            load_path = str(pretrain_path / f"{model_filename}_{best_or_last}.pt")
+        else:
+            # Per-model-type default stems — update when you retrain pretraining
+            default_stems = {
+                "MetaCNNLSTM":    "MetaCNNLSTM_03232026_170503",
+                "DeepCNNLSTM":    "DeepCNNLSTM_03232026_165043",
+                "TST":            "TST_03232026_163527",
+                "ContrastiveNet": f"ContrastiveNet_{config.get('arch_mode', 'cnn_attn')[-4:]}_20260325_1810",
+                "MOE":            None,
+            }
+            stem = default_stems.get(model_type)
+            load_path = str(pretrain_path / f"{stem}_{best_or_last}.pt") if stem else None
+
+        if load_path is None:
+            print(f"--> No default pretrained checkpoint for model_type='{model_type}'. Random init.")
+        else:
+            try:
+                checkpoint = torch.load(load_path, map_location=config["device"], weights_only=False)
+                if "model_state" in checkpoint:
+                    state_dict = checkpoint["model_state"]
+                elif "model_state_dict" in checkpoint:
+                    state_dict = checkpoint["model_state_dict"]
+                else:
+                    state_dict = checkpoint
+
+                def _keep_key(k: str, enc_only: bool) -> bool:
+                    if "head" in k or "projector" in k:
+                        return False  # always drop classification/projection head
+                    if enc_only and ("mlp" in k or "classifier" in k or "fc" in k):
+                        return False  # additionally drop MLP body when enc_only
+                    return True
+
+                filtered = {k: v for k, v in state_dict.items() if _keep_key(k, enc_only)}
+                mdict = model.state_dict()
+                mdict.update(filtered)
+                model.load_state_dict(mdict)
+                scope = "encoder (CNN+LSTM)" if enc_only else "full backbone"
+                print(f"--> Successfully loaded {scope} weights ({len(filtered)}/{len(state_dict)} tensors) from: {load_path}")
+
+            except FileNotFoundError:
+                print(f"\n{'#'*65}")
+                print(f"WARNING: Pretrained weight file not found at {load_path}.")
+                print(f"Using random initialization instead!")
+                print(f"{'#'*65}\n")
+    else:
+        raise ValueError(
+            f"Unknown pretrain_approach='{pretrain_approach}'. "
+            "Must be one of: 'None', 'full_best', 'full_last', "
+            "'enc_best', 'enc_last', 'frozen_enc_best', 'frozen_enc_last'."
+        )
     # =========================================================================
     # ####################################################################### #
     # =========================================================================

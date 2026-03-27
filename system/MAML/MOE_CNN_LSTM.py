@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from MOE_shared import MOELayer, SingleExpertHead
+from MOE.MOE_shared import MOELayer, SingleExpertHead
 
 class MultimodalCNNLSTMMOE(nn.Module):
     def __init__(self, config):

@@ -6,8 +6,8 @@ import torch.nn as nn
 import time
 
 # Reusing your existing project-specific routers and logic
-from system.MAML_MOE.MOE_training import _model_forward_router, set_MOE_optimizer, SmoothedEarlyStopping
-from system.MAML_MOE.shared_maml import *
+from system.MOE.MOE_training import _model_forward_router, set_MOE_optimizer, SmoothedEarlyStopping
+from system.MAML.shared_maml import *
 
 # -----------------------------
 # Functional execution helpers

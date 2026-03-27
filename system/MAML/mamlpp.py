@@ -7,8 +7,14 @@ import numpy as np
 import time
 import torch.nn.functional as F
 
-from system.MAML_MOE.MOE_training import _model_forward_router, set_MOE_optimizer, SmoothedEarlyStopping
-from system.MAML_MOE.shared_maml import *
+import sys
+import os
+# This finds the 'system' directory (one level up from 'pretraining') and adds it to the search path.
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from MOE.MOE_training import _model_forward_router, set_MOE_optimizer, SmoothedEarlyStopping
+from MAML.shared_maml import *
+from MOE.MOE_encoder import MOE_aux_loss as _MOE_aux_loss
+from MOE.MOE_analysis import RoutingCollector, RoutingAnalyzer
 
 # -----------------------------
 # Functional execution helpers
@@ -98,16 +104,27 @@ def inner_loop_mamlpp(
     criterion,
     epoch: int,
 ):
-    """Runs the MAML++ inner loop, calculating MSL and derivatives."""
+    """Runs the MAML++ inner loop, calculating MSL and derivatives.
+
+    MOE note: when config["use_MOE"]=True the support forward pass calls
+    model(x, imu, return_routing=True) through FunctionalModel, which forwards
+    kwargs to the underlying module via functional_call.  The auxiliary
+    load-balancing loss is added to the support loss so the gate is trained
+    during inner-loop adaptation, encouraging expert specialisation per task.
+    We deliberately do NOT add aux loss to the query loss so the outer loop
+    optimises only classification performance, not expert balance.
+    """
     device = config['device']
     multimodal = config['multimodal']
-    
+    use_MOE    = config.get('use_MOE', False)
+    aux_coeff  = float(config.get('MOE_aux_coeff', 1e-2))
+
     # MSL Logic
     msl_use = (config['use_maml_msl'] == True) or (config['use_maml_msl'] == "hybrid" and epoch <= config['maml_msl_num_epochs'])
     msl_num_epochs = config['maml_msl_num_epochs'] if config['use_maml_msl'] != False else -1
-    
+
     # Second Order Logic
-    use_second_order = (config['maml_opt_order'] == "second") or (config['maml_opt_order'] == "hybrid" and epoch >= config['maml_first_order_to_second_order_epoch']) 
+    use_second_order = (config['maml_opt_order'] == "second") or (config['maml_opt_order'] == "hybrid" and epoch >= config['maml_first_order_to_second_order_epoch'])
 
     fallback_alpha = config['maml_alpha_init']
     inner_steps = config['maml_inner_steps']
@@ -118,29 +135,40 @@ def inner_loop_mamlpp(
 
     # Step 0 to N
     for step in range(inner_steps + 1):
-        
-        # 1. Query Loss at current params (for MSL)
+
+        # 1. Query Loss at current params (for MSL) — no aux loss here
         f_q = FunctionalModel(model, params_i)
         outputs_q, labels_q, _ = _model_forward_router(f_q, query_batch, device, multimodal=multimodal)
         logits_q = outputs_q[0] if isinstance(outputs_q, tuple) else outputs_q
-        
+
         q_loss_step = criterion(logits_q, labels_q)
         per_step_query_losses.append(q_loss_step)
         last_q_logits, last_q_labels = logits_q, labels_q
 
-        # If the loss at step 0 and the final inner step are the same then we literally are not training
-        #if step == 0:
-        #    print(f"Initial Query Loss: {q_loss_step.item()}")
         if step == inner_steps:
-            #print(f"Adapted Query Loss: {q_loss_step.item()}")
-            break  # We only do `inner_steps` updates, but we need `inner_steps + 1` query evaluations
+            break
 
         # 2. Support Forward & Inner Update
         f_s = FunctionalModel(model, params_i)
-        outputs_s, labels_s, _ = _model_forward_router(f_s, support_batch, device, multimodal=multimodal)
-        logits_s = outputs_s[0] if isinstance(outputs_s, tuple) else outputs_s
-        s_loss = criterion(logits_s, labels_s)
-        
+
+        if use_MOE:
+            # Request routing info from MOE model via functional_call kwarg
+            # _model_forward_router_MOE handles the (logits, routing_info) return
+            outputs_s, labels_s, _, routing_info_s = _model_forward_router_MOE(
+                f_s, support_batch, device, multimodal=multimodal
+            )
+            logits_s = outputs_s[0] if isinstance(outputs_s, tuple) else outputs_s
+            s_loss = criterion(logits_s, labels_s)
+            # Add aux loss to support loss so gate routing is shaped during adaptation
+            if routing_info_s is not None and aux_coeff > 0:
+                gate_w = routing_info_s.get('gate_weights')
+                if gate_w is not None:
+                    s_loss = s_loss + _MOE_aux_loss(gate_w, coeff=aux_coeff)
+        else:
+            outputs_s, labels_s, _ = _model_forward_router(f_s, support_batch, device, multimodal=multimodal)
+            logits_s = outputs_s[0] if isinstance(outputs_s, tuple) else outputs_s
+            s_loss = criterion(logits_s, labels_s)
+
         # Calculate gradients maintaining graph connection back to theta0
         grads = torch.autograd.grad(
             s_loss,
@@ -149,13 +177,12 @@ def inner_loop_mamlpp(
             retain_graph=use_second_order,
             allow_unused=True,
         )
-        
+
         # Apply LSLR update (maintains graph inherently via math operations)
         params_i = apply_update_repo_style(params_i, grads, lslr, step, fallback_alpha=fallback_alpha)
 
     # Calculate final Meta-Loss
     if msl_use and (epoch <= msl_num_epochs):
-        # Weight array size must match the number of query evaluations (inner_steps + 1)
         w = repo_msl_weights(inner_steps + 1, epoch, msl_num_epochs, device=device)
         meta_loss = torch.sum(torch.stack(per_step_query_losses) * w)
     else:
@@ -167,6 +194,44 @@ def _normalize_step_item(step_item):
     if isinstance(step_item, dict): return [step_item]
     if isinstance(step_item, (list, tuple)): return list(step_item)
     raise TypeError(f"Episode item must be dict or list of dicts.")
+
+
+def _model_forward_router_MOE(fmodel, batch, device, multimodal=True):
+    """
+    Like _model_forward_router but requests routing info from MOE models.
+
+    Returns (outputs, labels, B, routing_info).
+    routing_info is None for non-MOE models or if the model doesn't return it.
+
+    This works through FunctionalModel because torch.func.functional_call
+    passes **kwargs through to the underlying module's forward().
+    """
+    # Reuse existing router to extract (emg, imu, labels) from the batch dict
+    # Then call with return_routing=True
+    try:
+        emg    = batch['emg'].to(device)
+        labels = batch['labels'].to(device)
+        imu    = batch.get('imu')
+        if imu is not None and multimodal:
+            imu = imu.to(device)
+        else:
+            imu = None
+
+        B = emg.size(0)
+        out = fmodel(emg, imu, return_routing=True)
+
+        if isinstance(out, tuple) and len(out) == 2 and isinstance(out[1], dict):
+            logits, routing_info = out
+        else:
+            logits = out[0] if isinstance(out, tuple) else out
+            routing_info = None
+
+        return (logits,), labels, B, routing_info
+
+    except Exception:
+        # Fallback: non-MOE path via original router
+        outputs, labels, B = _model_forward_router(fmodel, batch, device, multimodal=multimodal)
+        return outputs, labels, B, None
 
 # -----------------------------
 # One epoch of MAML++ training: ie batched inner loops followed by one outer loop
@@ -233,7 +298,7 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
                 # --- DIAGNOSTIC BRANCH ---
                 # Isolate this task's gradient to measure its specific direction
                 ## This completely wipes the gradients from the previous task, resetting them to None rather than tensors filled with zeros (which saves memory).
-                ## Mixture of Experts (MoE) Routing: If your model uses an MoE architecture, the router decides which "experts" (sub-networks) process the data.
+                ## Mixture of Experts (MOE) Routing: If your model uses an MOE architecture, the router decides which "experts" (sub-networks) process the data.
                 ## If a specific expert is not used at all during a particular episode's forward pass, PyTorch's autograd engine will not route any gradients to it. Its .grad remains None.
                 ### For gradient alignment, since the experts are zero'd out, they basically don't contribute to alignment (just cotnribute 0s)
                 ### Actually I reworked this to ignore all components with gradients=None (when NOT using MOE!)
@@ -328,6 +393,12 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
     device = config["device"]
     model.to(device)
 
+    use_MOE       = config.get('use_MOE', False)
+    MOE_log_every = int(config.get('MOE_log_every', 5))
+    MOE_plot_dir  = config.get('MOE_plot_dir', None)
+    num_experts   = int(config.get('num_experts', 4))
+    model_name    = config.get('model_type', 'Model')
+
     meta_opt = set_MOE_optimizer(
         model,
         lr=float(config["learning_rate"]),
@@ -336,8 +407,8 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         optimizer_name=config["optimizer"],
     )
 
-    scheduler = None  # Learning rate scheduler... this is just for beat (outer lr)
-    if bool(config.get("use_cosine_outer_lr", False)): 
+    scheduler = None
+    if bool(config.get("use_cosine_outer_lr", False)):
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(meta_opt, T_max=int(config["num_epochs"]))
 
     use_es = episodic_val_loader is not None and bool(config["use_earlystopping"])
@@ -350,6 +421,7 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
 
     best_val_acc, best_state, best_val_epoch = -1.0, None, 0
     train_loss_log, train_acc_log, val_loss_log, val_acc_log = [], [], [], []
+    routing_reports = []
     num_epochs = int(config["num_epochs"])
 
     for ep in range(1, num_epochs + 1):
@@ -363,13 +435,12 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         print(f"Train completed in {time.time() - epoch_start_time:.2f}s")
         print(f'Train loss/acc: {train_metrics["loss"]:.4f}, {train_metrics["acc"]*100:.2f}%')
 
-        # If using LSLR, print the learning rates so can make sure they arent crazy low...
         if bool(config.get("maml_use_lslr")) and hasattr(model, "_lslr"):
             with torch.no_grad():
                 all_lrs = torch.cat([v.flatten() for v in model._lslr._lrs.values()])
                 mean_lr = all_lrs.mean().item()
-                min_lr = all_lrs.min().item()
-                max_lr = all_lrs.max().item()
+                min_lr  = all_lrs.min().item()
+                max_lr  = all_lrs.max().item()
                 print(f"[LSLR Stats] Mean: {mean_lr:.7f} | Min: {min_lr:.7f} | Max: {max_lr:.7f}")
 
         # Val
@@ -383,8 +454,8 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
             print(f"Val loss/acc: {cur_val_loss:.4f}, {cur_val_acc*100:.2f}%")
 
             if cur_val_acc > best_val_acc:
-                best_val_acc = cur_val_acc
-                best_state = copy.deepcopy(model.state_dict())
+                best_val_acc  = cur_val_acc
+                best_state    = copy.deepcopy(model.state_dict())
                 best_val_epoch = ep
 
             if use_es and early_stopping(cur_val_loss):
@@ -394,6 +465,17 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         else:
             print("No val loader found! Skipping during-training val evals")
 
+        # ── MOE routing analysis ─────────────────────────────────────────────
+        if use_MOE and MOE_log_every > 0 and ep % MOE_log_every == 0 and episodic_val_loader is not None:
+            print(f"\n[MOE] Routing analysis at epoch {ep}...")
+            report = _maml_routing_analysis_epoch(
+                model, episodic_val_loader, config,
+                num_experts=num_experts, model_name=model_name,
+                epoch=ep, plot_dir=MOE_plot_dir,
+            )
+            if report:
+                routing_reports.append(report)
+
         if scheduler: scheduler.step()
         print(f"Epoch completed in {time.time() - epoch_start_time:.2f}s\n")
 
@@ -402,20 +484,101 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         print(f"[MAML++] loaded best model (val acc={best_val_acc:.3f})")
 
     return model, {
-        "train_loss_log": train_loss_log,
-        "train_acc_log":  train_acc_log,
-        "val_loss_log":   val_loss_log,
-        "val_acc_log":    val_acc_log,
-        "model": model,
-        "best_state": best_state,
-        "best_val_acc": best_val_acc,
-        "best_val_epoch": best_val_epoch
+        "train_loss_log":  train_loss_log,
+        "train_acc_log":   train_acc_log,
+        "val_loss_log":    val_loss_log,
+        "val_acc_log":     val_acc_log,
+        "model":           model,
+        "best_state":      best_state,
+        "best_val_acc":    best_val_acc,
+        "best_val_epoch":  best_val_epoch,
+        "routing_reports": routing_reports,
     }
+
+
+def _maml_routing_analysis_epoch(model, episodic_val_loader, config,
+                                  num_experts, model_name, epoch, plot_dir):
+    """
+    Run one pass of the val episodic loader collecting routing info,
+    then print and optionally plot a routing analysis report.
+
+    We run with adapted parameters (after inner-loop steps on support) so
+    the routing reflects what the model actually does at query time.
+
+    Returns the report dict (or None on failure).
+    """
+
+    device     = config['device']
+    multimodal = bool(config.get('multimodal', True))
+    demo_labels = config.get('demo_dim_labels', None)
+
+    collector = RoutingCollector(num_experts=num_experts, model_name=f"{model_name}_maml_val")
+
+    try:
+        model.eval()
+        with torch.no_grad():
+            for step_item in episodic_val_loader:
+                episodes = _normalize_step_item(step_item)
+                for episode in episodes:
+                    # Use adapted params from a quick inner-loop run
+                    support_batch = episode.get('support', episode)
+                    query_batch   = episode.get('query', episode)
+
+                    # Fast inner-loop adapt (no grad needed for analysis)
+                    theta_prime = mamlpp_adapt(model, config, support_batch,
+                                               use_lslr_at_eval=False)
+                    f_q = FunctionalModel(model, theta_prime)
+
+                    # Forward with routing
+                    qemg    = query_batch['emg'].to(device)
+                    qlabels = query_batch['labels'].to(device)
+                    qimu    = query_batch.get('imu')
+                    if qimu is not None and multimodal:
+                        qimu = qimu.to(device)
+                    else:
+                        qimu = None
+
+                    out = f_q(qemg, qimu, return_routing=True)
+                    if isinstance(out, tuple) and len(out) == 2 and isinstance(out[1], dict):
+                        _, routing_info = out
+                        gate_w = routing_info.get('gate_weights')
+                        if gate_w is not None:
+                            pids = query_batch.get('pid', query_batch.get('pids',
+                                   ['?'] * qemg.size(0)))
+                            demo = query_batch.get('demographics')
+                            collector.add(
+                                gate_weights   = gate_w.cpu(),
+                                gesture_labels = qlabels.cpu(),
+                                pids           = pids,
+                                demographics   = demo.cpu() if demo is not None else None,
+                            )
+    except Exception as e:
+        print(f"[MOE routing analysis] Warning during MAML analysis: {e}")
+        model.train()
+        return None
+    finally:
+        model.train()
+
+    try:
+        record   = collector.finalize()
+        analyzer = RoutingAnalyzer(record)
+        report   = analyzer.full_report(print_report=True, demo_dim_labels=demo_labels)
+        report['epoch'] = epoch
+
+        if plot_dir is not None:
+            import os
+            epoch_dir = os.path.join(str(plot_dir), f"maml_epoch_{epoch:03d}")
+            analyzer.plot_all(save_dir=epoch_dir)
+
+        return report
+    except Exception as e:
+        print(f"[MOE routing analysis] Warning during analysis: {e}")
+        return None
 
 # -----------------------------
 # Test Time Adaptation
 # -----------------------------
-def mamlpp_adapt(model, config, support_batch):
+def mamlpp_adapt(model, config, support_batch, *, use_lslr_at_eval=False):
     """
     Adaptation during Meta-Evaluation. 
     CRITICAL: Must use model.train() to allow RNN gradient computation (cuDNN requirement).
@@ -436,7 +599,7 @@ def mamlpp_adapt(model, config, support_batch):
     criterion = nn.CrossEntropyLoss(label_smoothing=label_smooth) if label_smooth > 0 else nn.CrossEntropyLoss()
     
     # LSLR Logic
-    use_lslr = bool(config["maml_use_lslr"]) and config['use_lslr_at_eval'] and hasattr(model, "_lslr")
+    use_lslr = bool(config["maml_use_lslr"]) and use_lslr_at_eval and hasattr(model, "_lslr")
     alpha_eval = float(config["maml_alpha_init_eval"])
 
     with torch.enable_grad():

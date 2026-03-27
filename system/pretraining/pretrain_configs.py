@@ -12,39 +12,31 @@ import torch
 
 PRETRAIN_CONFIG = {
     # ── Dataset / task ────────────────────────────────────────────────────────
-    "n_way":    10,   # number of gesture classes
+    "n_way":    10,   # number of gesture classes --> NOTE: THIS IS SUPERVISED PRETRAINING, not few-shot learning! Keep this as 10 here!
 
     # ── Participant split ──────────────────────────────────────────────────────
-    #####################################################################################################################
     "train_PIDs": [
         "P102","P114","P119","P005","P107","P126","P132","P112",
-    # Using a smaller train set so it goes faster. Ig this might make the task easier? Not sure tbh
         "P103","P125","P127","P010","P128","P111","P118",
         "P124","P110","P116","P108","P104","P122","P131","P106","P115"
     ],
-    # TODO: Should val and test match train PIDs? Doing in-distribution vs cross-user out-of-distribution...
-    #"val_PIDs": ["P102","P114","P119","P005","P107","P126","P132","P112"],
     "val_PIDs":  ["P011","P006","P105","P109"],
-    "test_PIDs": ["P008","P004","P123","P121"],  
-    # TODO: OOD probe should (for now) test linear probing on the val participants
-    #####################################################################################################################
+    "test_PIDs": ["P008","P004","P123","P121"],
 
     # ── Trial/repetition split (1-indexed, range 1…10) ───────────────────────
-    # "train_reps" and "val_reps" select which of the 10 TRIALS are used.
-    # These are NOT class labels.
-    "all_rep_indices": list(range(1, 11)),   # all available trial numbers: [1..10]
-    "train_reps":      list(range(1, 9)),    # trials 1-8  → training
-    "val_reps":        [9, 10],             # trials 9-10 → validation
+    "all_rep_indices": list(range(1, 11)),
+    "train_reps":      list(range(1, 9)),
+    "val_reps":        [9, 10],
 
     # ── Gesture classes (0-indexed) ───────────────────────────────────────────
-    "available_gesture_classes": list(range(0, 10)),  # class labels 0…9
+    "available_gesture_classes": list(range(0, 10)),
 
     # ── Modality & Dataloader ──────────────────────────────────────────────────
     "use_imu":     True,
     "batch_size":  64,
     "num_workers": 4,
 
-    # ── Augmentation (train only; all aug_ keys match BASE_CONFIG) ────────────
+    # ── Augmentation (train only) ─────────────────────────────────────────────
     "augment":       False,
     "aug_noise_std": 0.05,
     "aug_max_shift": 4,
@@ -59,7 +51,7 @@ PRETRAIN_CONFIG = {
     "warmup_epochs":       5,
     "use_scheduler":       True,
     "use_early_stopping":  True,
-    "es_patience":         12,
+    "es_patience":         8,
     "es_min_delta":        1e-4,
     "grad_clip":           5.0,
     "use_amp":             False,
@@ -117,6 +109,80 @@ MODEL_CONFIGS = {
     },
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MoE Configuration (added to MODEL_CONFIGS at runtime — see build_model_with_moe)
+#
+# Two placement modes:
+#   "encoder" : Each expert IS a full CNN encoder.
+#               Context projector reads raw x → routing vector r.
+#               Gate weights E expert CNNs; weighted sum fed to LSTM.
+#               Good for: exploring whether experts specialise by signal type/user.
+#               Cost: E × CNN parameters.  Use moe_expert_expand < 1.0 to offset.
+#
+#   "middle"  : Shared CNN (identical to baseline — easy pretrain weight transfer).
+#               Context projector reads CNN features → r.
+#               Gate weights E lightweight MLP experts.
+#               Good for: starting from a strong pretrained CNN.
+#               Cost: E × small MLP parameters (much cheaper than "encoder").
+#
+# Recommended starting point: "middle" with 4 experts, moe_top_k=None (dense routing).
+# Dense routing is fully differentiable and works well with MAML.
+#
+# Load-balancing loss: add moe_aux_loss(gate_weights, coeff) to your training loss.
+# The coefficient moe_aux_coeff=1e-2 is a good starting point.
+# ─────────────────────────────────────────────────────────────────────────────
+
+MOE_CONFIG_DEFAULTS = {
+    # ── Placement ─────────────────────────────────────────────────────────────
+    "use_moe":              True,          # Set True to activate MoE
+    "moe_placement":        "encoder",       # "encoder" | "middle"
+
+    # ── Expert count and routing ──────────────────────────────────────────────
+    "num_experts":          4,              # Number of expert modules
+    "moe_top_k":            None,           # None=dense (recommended), int=sparse top-k
+
+    # ── Context projector (produces routing signal r) ─────────────────────────
+    "moe_ctx_hidden_dim":   64,             # Context projector hidden layer size
+    "moe_ctx_out_dim":      32,             # Routing vector dimension
+
+    # ── Gate ──────────────────────────────────────────────────────────────────
+    "moe_gate_temperature": 1.0,            # Softmax temp: >1 flatter, <1 sharper
+
+    # ── Expert width (encoder placement only) ─────────────────────────────────
+    "moe_expert_expand":    0.75,           # Each expert CNN is this fraction of baseline width
+    #                                       # 1.0 = same width; 0.5 = half; saves params
+
+    # ── Expert MLP width (middle placement only) ──────────────────────────────
+    "moe_mlp_hidden_mult":  1.0,            # MLP hidden = CNN_out_ch * this
+
+    # ── Dropout inside MoE modules ────────────────────────────────────────────
+    "moe_dropout":          0.1,
+
+    # ── Auxiliary load-balancing loss ─────────────────────────────────────────
+    "moe_aux_coeff":        1e-2,           # Scale for Switch Transformer aux loss
+    #                                       # Set to 0 to disable
+}
+
+# Example: MetaCNNLSTM with middle MoE, 4 experts
+MOE_META_MIDDLE = {
+    **MODEL_CONFIGS["MetaCNNLSTM"],
+    **MOE_CONFIG_DEFAULTS,
+    "use_moe":       True,
+    "moe_placement": "middle",
+    "num_experts":   4,
+}
+
+# Example: DeepCNNLSTM with encoder MoE, 4 narrower experts
+MOE_DEEP_ENCODER = {
+    **MODEL_CONFIGS["DeepCNNLSTM"],
+    **MOE_CONFIG_DEFAULTS,
+    "use_moe":              True,
+    "moe_placement":        "encoder",
+    "num_experts":          4,
+    "moe_expert_expand":    0.75,   # 4 experts × 0.75 width ≈ 3× baseline params
+}
+
+
 HPO_CONFIG = {
     "n_trials":                  50,
     "lr_range":                  [1e-4, 5e-3],
@@ -129,4 +195,11 @@ HPO_CONFIG = {
     "cnn_base_filters_choices":  [32, 64],
     "bidirectional_choices":     [True, False],
     "head_type_choices":         ["linear", "mlp"],
+    # MoE-specific HPO ranges (used when use_moe=True)
+    "moe_num_experts_choices":   [2, 4, 6, 8],
+    "moe_placement_choices":     ["middle", "encoder"],
+    "moe_ctx_out_dim_choices":   [16, 32, 64],
+    "moe_gate_temp_range":       [0.5, 2.0],
+    "moe_expert_expand_range":   [0.5, 1.5],
+    "moe_aux_coeff_range":       [1e-3, 1e-1],
 }
