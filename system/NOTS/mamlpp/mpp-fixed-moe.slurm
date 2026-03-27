@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=mpp-moe-ablation
-#SBATCH --partition=gpu
+#SBATCH --partition=commons
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
