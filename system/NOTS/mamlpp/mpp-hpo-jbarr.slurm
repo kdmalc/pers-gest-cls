@@ -36,8 +36,9 @@ export DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
 export RUN_DIR=/scratch/my13/kai/runs/logs/${SLURM_JOB_NAME}/trial_${SLURM_ARRAY_TASK_ID}
 mkdir -p "$RUN_DIR"
 
-export MOE_DIR="$CODE_DIR/system/MAML_MOE"
-export PYTHONPATH="$CODE_DIR:$MOE_DIR:$PYTHONPATH"
+export MAML_DIR="$CODE_DIR/system/MAML"
+export MOE_DIR="$CODE_DIR/system/MOE"
+export PYTHONPATH="$CODE_DIR:$MAML_DIR:$MOE_DIR:$PYTHONPATH"
 
 echo "CWD: $(pwd)"
 echo "Output Directory: $RUN_DIR"

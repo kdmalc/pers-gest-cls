@@ -24,7 +24,7 @@ Environment variables (same as the cluster script)
 ---------------------------------------------------
   CODE_DIR   root of the repo      (default: ./)
   DATA_DIR   data root             (default: ./data)
-  RUN_DIR    where outputs go      (default: ./)
+  SAVE_DIR    where outputs go      (default: ./)
 """
 
 import os
@@ -55,6 +55,7 @@ warnings.filterwarnings("ignore", message=".*weights_only=False.*", category=Fut
 CODE_DIR = Path(os.environ.get("CODE_DIR", "./")).resolve()
 DATA_DIR  = Path(os.environ.get("DATA_DIR", "./data")).resolve()
 RUN_DIR   = Path(os.environ.get("RUN_DIR",  "./")).resolve()
+SAVE_DIR   = Path(os.environ.get("SAVE_DIR",  "./maml_res")).resolve()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Project imports
@@ -186,7 +187,7 @@ FIXED_CONFIG = {
     "MOE_expert_expand":    0.75,       # encoder-MOE expert CNN width fraction
     "MOE_mlp_hidden_mult":  1.0,        # middle-MOE expert MLP width multiplier
     "MOE_dropout":          0.1,
-    "MOE_aux_coeff":        1e-2,
+    "MOE_aux_coeff":        0.1,
     "MOE_log_every":        5,          # routing analysis every N epochs (0=never)
     "MOE_plot_dir":         None,       # set to a path string to save heatmaps
 }
@@ -286,7 +287,6 @@ def get_pretrain_path(config
         best_or_last = "_last" 
     else:
         best_or_last = ""
-    best_or_last = config['??']
     pretrain_dir = config['pretrain_dir']
     model_filename = config['pretrain_model_filename']
 
@@ -644,12 +644,13 @@ def main():
     print(f"CODE_DIR: {CODE_DIR}")
     print(f"DATA_DIR: {DATA_DIR}")
     print(f"RUN_DIR:  {RUN_DIR}")
+    print(f"SAVE_DIR:  {SAVE_DIR}")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 
     # ── Output dirs ──────────────────────────────────────────────────────────
-    results_save_dir = RUN_DIR
-    models_save_dir  = RUN_DIR
+    results_save_dir = SAVE_DIR
+    models_save_dir  = SAVE_DIR
     results_save_dir.mkdir(parents=True, exist_ok=True)
     models_save_dir.mkdir(parents=True, exist_ok=True)
 

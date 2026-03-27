@@ -1,9 +1,3 @@
-# TODO: I dont know if this is used at all...
-
-
-# This is a legacy file. I deleted most of the unused funcs.
-## Honestly could probably replace a lot of this code or move it into a more relevant file...
-
 import numpy as np
 import torch
 import torch.nn as nn

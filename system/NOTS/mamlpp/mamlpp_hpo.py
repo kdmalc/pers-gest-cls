@@ -60,10 +60,10 @@ def apply_fold_to_config(config, all_splits, fold_idx):
     config["num_testft_users"] = len(config["val_PIDs"])
 ###########################
 
-from system.MAML_MOE.mamlpp import *
-from system.MAML_MOE.maml_data_pipeline import get_maml_dataloaders
-from system.MAML_MOE.shared_maml import *
-from system.MAML_MOE.MOE_CNN_LSTM import *
+from system.MAML.mamlpp import *
+from system.MAML.maml_data_pipeline import get_maml_dataloaders
+from system.MAML.shared_maml import *
+from system.MAML.MOE_CNN_LSTM import *  # This is an old model, we should just be running pretrained / MetaCNNLSTM / DeepCNNLSTM now...
 
 current_directory = os.getcwd()
 print(f"The current working directory is: {current_directory}")

@@ -42,12 +42,9 @@ export DEBUG_RUN_DIR=/scratch/my13/kai/runs
 export RUN_DIR=/scratch/my13/kai/runs/logs/${SLURM_JOB_NAME}/trial_${SLURM_ARRAY_TASK_ID}
 mkdir -p "$RUN_DIR"
 
-# For relative file imports (in other .py files)
-export MOE_DIR="$CODE_DIR/system/MAML_MOE"
-
-# before running python
-# Put CODE_DIR (for April_25.* imports) and MOE_DIR (for MOE_model_classes, etc.) on PYTHONPATH
-export PYTHONPATH="$CODE_DIR:$MOE_DIR:$PYTHONPATH"
+export MAML_DIR="$CODE_DIR/system/MAML"
+export MOE_DIR="$CODE_DIR/system/MOE"
+export PYTHONPATH="$CODE_DIR:$MAML_DIR:$MOE_DIR:$PYTHONPATH"
 
 echo "===== Environment Diagonstics ====="
 echo "Host: $(hostname)"

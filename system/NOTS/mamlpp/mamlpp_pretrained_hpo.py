@@ -67,7 +67,7 @@ def apply_fold_to_config(config, all_splits, fold_idx):
 from system.MAML.mamlpp import *
 from system.MAML.maml_data_pipeline import get_maml_dataloaders
 from system.MAML.shared_maml import *
-from system.MAML.MOE_CNN_LSTM import *
+#from system.MAML.MOE_CNN_LSTM import *  # This needs to get replaced/updated...
 
 from system.pretraining.pretrain_models import build_model
 from system.pretraining.contrastive_net.contrastive_encoder import ContrastiveGestureEncoder
@@ -358,8 +358,8 @@ def build_model_from_trial(trial, model_type, base_config=None):
     # =========================================================================
     if model_type in ["MetaCNNLSTM", "DeepCNNLSTM", "TST"]:
         model = build_model(config)
-    elif model_type == "MOE":
-        model = MultimodalCNNLSTMMOE(config)
+    #elif model_type == "CNNLSTM":
+    #    model = MultimodalCNNLSTMMOE(config)
     elif model_type == "ContrastiveNet": 
         model = ContrastiveGestureEncoder(config)
     else:
