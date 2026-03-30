@@ -524,6 +524,21 @@ def _maml_routing_analysis_epoch(model, episodic_val_loader, config,
                     support_batch = episode.get('support', episode)
                     query_batch   = episode.get('query', episode)
 
+                    # --- PID extraction ---
+                    # user_id lives at the episode level (set by maml_mm_collate),
+                    # NOT inside query_batch. Replicate it once per query sample.
+                    user_id = episode.get('user_id')
+                    if user_id is None:
+                        # Flat (non-episodic) loader fallback: check both common key names
+                        user_id = episode.get('pid', episode.get('pids', 'unknown'))
+                    # Normalise to a flat list of strings, one entry per query sample
+                    if isinstance(user_id, (list, tuple)):
+                        # Already a per-sample list (flat loader); use as-is
+                        episode_pids = [str(p) for p in user_id]
+                    else:
+                        # Single string (episodic loader) — replicate after we know B
+                        episode_pids = str(user_id)   # resolved to list below
+
                     # Fast inner-loop adapt (no grad needed for analysis)
                     theta_prime = mamlpp_adapt(model, config, support_batch,
                                                use_lslr_at_eval=False)
@@ -538,18 +553,25 @@ def _maml_routing_analysis_epoch(model, episodic_val_loader, config,
                     else:
                         qimu = None
 
+                    # Resolve scalar PID → per-sample list now that we know batch size
+                    if isinstance(episode_pids, str):
+                        episode_pids = [episode_pids] * qemg.size(0)
+
                     out = f_q(qemg, qimu, return_routing=True)
                     if isinstance(out, tuple) and len(out) == 2 and isinstance(out[1], dict):
                         _, routing_info = out
                         gate_w = routing_info.get('gate_weights')
                         if gate_w is not None:
-                            pids = query_batch.get('pid', query_batch.get('pids',
-                                   ['?'] * qemg.size(0)))
                             demo = query_batch.get('demographics')
+                            # Use global_labels (dataset-level gesture IDs, 0…N_classes-1)
+                            # rather than local episode labels (0…n_way-1), which are
+                            # arbitrary and shuffled per episode by meta-augmentation.
+                            # Falls back to local labels if global_labels absent.
+                            gesture_ids = query_batch.get('global_labels', qlabels).cpu()
                             collector.add(
                                 gate_weights   = gate_w.cpu(),
-                                gesture_labels = qlabels.cpu(),
-                                pids           = pids,
+                                gesture_labels = gesture_ids,
+                                pids           = episode_pids,
                                 demographics   = demo.cpu() if demo is not None else None,
                             )
     except Exception as e:

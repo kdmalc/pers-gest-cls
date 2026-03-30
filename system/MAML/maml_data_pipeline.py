@@ -98,8 +98,16 @@ def maml_mm_collate(batch):
 
         demo   = torch.stack([s["demo"]  for s in sample_list], dim=0).float()
         labels = torch.as_tensor([s["label"] for s in sample_list], dtype=torch.long)
+        # global_class: the dataset-level gesture ID (0…N_classes-1), invariant to
+        # within-episode label shuffling.  Used by routing analysis to report which
+        # real gestures each expert handles.  Falls back to local label if absent
+        # (e.g. legacy episode dicts built before this field was added).
+        global_labels = torch.as_tensor(
+            [s.get("global_class", s["label"]) for s in sample_list], dtype=torch.long
+        )
 
-        return {"emg": emg, "imu": imu, "demo": demo, "labels": labels}
+        return {"emg": emg, "imu": imu, "demo": demo, "labels": labels,
+                "global_labels": global_labels}
 
     return {
         "support":   stack_samples(episode["support"]),

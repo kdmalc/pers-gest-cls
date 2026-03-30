@@ -538,7 +538,10 @@ def run_routing_analysis(model: "nn.Module",
             else:
                 imu = None
 
-            pids = batch.get("pid", batch.get("pids", ["unknown"] * emg.size(0)))
+            pids = batch.get("user_id", batch.get("pid", batch.get("pids", ["unknown"] * emg.size(0))))
+            # Also handle the case where user_id is a single string (episodic):
+            if isinstance(pids, str):
+                pids = [pids] * emg.size(0)
             demo = batch.get("demographics")
 
             # Support both model output styles
