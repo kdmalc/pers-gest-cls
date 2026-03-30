@@ -177,7 +177,7 @@ FIXED_CONFIG = {
     "debug_five_episodes":  False,
 
     # ── MOE defaults (only active when --use_MOE is passed) ──────────────────
-    "use_MOE":              True,      # overridden by --use_MOE flag
+    "use_MOE":              False,      # overridden by --use_MOE flag, default is off
     "MOE_placement":        "encoder",   # "middle" | "encoder"
     "num_experts":          4,
     "MOE_ctx_hidden_dim":   64,
