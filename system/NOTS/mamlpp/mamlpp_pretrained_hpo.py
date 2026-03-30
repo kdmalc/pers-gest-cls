@@ -385,7 +385,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
             )
 
         best_or_last = "best" if pretrain_approach.endswith("best") else "last"
-        enc_only     = pretrain_approach.startswith("enc")
+        enc_only     = pretrain_approach.startswith("enc")  # TODO: This is not very robust...
         model_filename     = config.get("pretrained_model_filename", None)  # None → per-model-type default
 
         print(f"--> Loading pretrained weights for {model_type} "

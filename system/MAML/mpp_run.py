@@ -299,7 +299,7 @@ def get_pretrain_path(config
         return str(Path(pretrain_dir) / fname)
     else:
         if config["use_MOE"]:
-            placement_str_abv = config["MOE_placement"][:4]  # Take the first 3 chars
+            placement_str_abv = config["MOE_placement"][:3]  # Take the first 3 chars
             MOE_str = "MOE"+placement_str_abv+"_"
             if config["MOE_placement"].lower() == "encoder" or config["MOE_placement"].lower() == "enc":
                 time_ID = "03272026_124829"
@@ -393,7 +393,7 @@ def build_model(config: dict) -> nn.Module:
         enc_only = pretrain_approach.startswith("enc")
 
         # This should be pulled from the config...
-        pretrain_dir = Path(r"/projects/my13/kai/meta-pers-gest/pers-gest-cls/pretrain_outputs/checkpoints/")
+        #pretrain_dir = Path(r"/projects/my13/kai/meta-pers-gest/pers-gest-cls/pretrain_outputs/checkpoints/")
         load_path    = get_pretrain_path(config)  #model_type, best_or_last, pretrain_dir, model_filename=model_filename
 
         if load_path is None:
