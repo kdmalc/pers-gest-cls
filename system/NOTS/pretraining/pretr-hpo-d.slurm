@@ -43,7 +43,7 @@ mamba activate /projects/my13/kai/meta-pers-gest/envs/fl-torch
 
 # ── Project paths ──────────────────────────────────────────────────────────────
 export CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
-export DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
+export DATA_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls/dataset/meta-learning-sup-que-ds
 
 export RUN_DIR=/scratch/my13/kai/runs/pretrain_hpo_debug
 mkdir -p "$RUN_DIR"
@@ -76,7 +76,7 @@ fi
 STUDY_NAME="pretrain_hpo_debug_${MODEL}${MOE_SUFFIX}"
 JOURNAL_PATH="${OPTUNA_DB_DIR}/${STUDY_NAME}.log"
 
-TENSOR_DICT="${DATA_DIR}/meta-learning-sup-que-ds/segfilt_rts_tensor_dict.pkl"
+TENSOR_DICT="${DATA_DIR}/segfilt_rts_tensor_dict.pkl"
 
 echo ""
 echo "Study       : ${STUDY_NAME}"
@@ -88,7 +88,7 @@ echo "RUN_DIR     : ${RUN_DIR}"
 echo ""
 
 # ── Launch ─────────────────────────────────────────────────────────────────────
-python -u "$PRETRAIN_DIR/pretrain_hpo.py" \
+python -u "$CODE_DIR/system/NOTS/pretraining/pretrain_hpo.py" \
     --model        "$MODEL"                \
     --tensor_dict  "$TENSOR_DICT"          \
     --n_trials     "$N_TRIALS_PER_WORKER"  \
