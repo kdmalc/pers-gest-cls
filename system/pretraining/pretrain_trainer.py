@@ -35,7 +35,9 @@ import sys
 import os
 # This finds the 'system' directory (one level up from 'pretraining') and adds it to the search path.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from MOE.MOE_encoder import moe_aux_loss as _moe_aux_loss
+from MOE.MOE_encoder import dense_MOE_aux_loss as _dense_MOE_aux_loss
+from MOE.MOE_encoder import topk_MOE_aux_loss as _topk_MOE_aux_loss
+# TODO: Need to define _moe_aux_loss throughout now
 from MOE.MOE_analysis import RoutingCollector, RoutingAnalyzer
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -139,7 +141,11 @@ def _run_epoch(model, loader, optimizer, criterion, device, config, scaler=None,
                 if use_moe and routing_info is not None and aux_coeff > 0 and is_train:
                     gate_w = routing_info.get('gate_weights')
                     if gate_w is not None:
-                        aux = _moe_aux_loss(gate_w, coeff=aux_coeff)
+                        if config['top_k'] is None or config['top_k']==config['num_experts']:  # dense/soft routing
+                            aux = _dense_MOE_aux_loss(gate_w, coeff=aux_coeff)
+                        else:  # top_k
+                            gate_w_soft = routing_info.get('gate_weights_soft', gate_w)
+                            aux = _topk_MOE_aux_loss(gate_w_soft, gate_w, coeff=aux_coeff)
                         loss = main_loss + aux
                         total_aux_loss += aux.item() * emg.size(0)
                     else:
@@ -151,6 +157,7 @@ def _run_epoch(model, loader, optimizer, criterion, device, config, scaler=None,
             if collect_routing and routing_info is not None:
                 gate_w = routing_info.get('gate_weights')
                 if gate_w is not None:
+                    # TODO: What? I thought batch had key user_ids, not pids... ....
                     pids  = batch.get('pid', batch.get('pids', ['?'] * emg.size(0)))
                     demo  = batch.get('demographics')
                     routing_collector.add(

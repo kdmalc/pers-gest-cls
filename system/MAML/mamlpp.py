@@ -13,7 +13,8 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from MOE.MOE_training import _model_forward_router, set_MOE_optimizer, SmoothedEarlyStopping
 from MAML.shared_maml import *
-from MOE.MOE_encoder import MOE_aux_loss as _MOE_aux_loss
+from MOE.MOE_encoder import dense_MOE_aux_loss as _dense_MOE_aux_loss
+from MOE.MOE_encoder import topk_MOE_aux_loss  as _topk_MOE_aux_loss
 from MOE.MOE_analysis import RoutingCollector, RoutingAnalyzer
 
 # -----------------------------
@@ -90,6 +91,26 @@ def repo_msl_weights(num_steps: int, epoch: int, msl_num_epochs: int, device='cp
                 1.0 - ((num_steps - 1) * min_non_final))
     return torch.tensor(w, device=device)
 
+def _compute_aux_loss(routing_info, config, aux_coeff):
+    """
+    Compute the MOE auxiliary load-balancing loss from routing_info dict.
+    Handles both dense and top-k routing.
+    Returns a scalar tensor, or 0.0 if routing info is absent.
+    """
+    if routing_info is None or aux_coeff <= 0:
+        return 0.0
+    gate_w = routing_info.get('gate_weights')
+    if gate_w is None:
+        return 0.0
+    top_k = config.get('top_k', None)
+    num_experts = config.get('num_experts', None)
+    if top_k is None or top_k == num_experts:   # dense / soft routing
+        return _dense_MOE_aux_loss(gate_w, coeff=aux_coeff)
+    else:                                        # sparse top-k routing
+        gate_w_soft = routing_info.get('gate_weights_soft', gate_w)
+        return _topk_MOE_aux_loss(gate_w_soft, gate_w, coeff=aux_coeff)
+
+
 # -----------------------------
 # Inner loop (MAML++)
 # -----------------------------
@@ -106,18 +127,30 @@ def inner_loop_mamlpp(
 ):
     """Runs the MAML++ inner loop, calculating MSL and derivatives.
 
-    MOE note: when config["use_MOE"]=True the support forward pass calls
-    model(x, imu, return_routing=True) through FunctionalModel, which forwards
-    kwargs to the underlying module via functional_call.  The auxiliary
-    load-balancing loss is added to the support loss so the gate is trained
-    during inner-loop adaptation, encouraging expert specialisation per task.
-    We deliberately do NOT add aux loss to the query loss so the outer loop
-    optimises only classification performance, not expert balance.
+    MOE aux-loss placement is controlled by config["apply_aux_loss_inner_outer"]:
+      "inner"  (default) — aux loss is added to the support loss at each inner
+                           step so the gate is regularised during fast adaptation.
+      "outer"            — aux loss is added to the query loss so the meta-update
+                           (outer loop) shapes gate balance; inner steps are free
+                           to specialise without the balancing penalty.
+      "both"             — aux loss is applied at both levels.
+
+    Tradeoff summary:
+      "inner"  keeps experts balanced during per-task adaptation but may fight
+               the adaptation signal when the task wants a specialised gate.
+      "outer"  lets the gate specialise freely per task and regularises the
+               meta-initialisation instead — usually a better default.
+      "both"   is the strongest regulariser; useful when collapse is severe.
     """
     device = config['device']
     multimodal = config['multimodal']
     use_MOE    = config.get('use_MOE', False)
     aux_coeff  = float(config.get('MOE_aux_coeff', 1e-2))
+    # "inner"  — aux loss added to support loss during inner-loop adaptation steps
+    # "outer"  — aux loss added to query loss so the meta-update shapes gate balance
+    # "both"   — aux loss applied at both inner and outer levels
+    # default is "inner" (original behaviour)
+    aux_placement = config.get('apply_aux_loss_inner_outer', 'inner')
 
     # MSL Logic
     msl_use = (config['use_maml_msl'] == True) or (config['use_maml_msl'] == "hybrid" and epoch <= config['maml_msl_num_epochs'])
@@ -136,12 +169,20 @@ def inner_loop_mamlpp(
     # Step 0 to N
     for step in range(inner_steps + 1):
 
-        # 1. Query Loss at current params (for MSL) — no aux loss here
+        # 1. Query Loss at current params (for MSL)
         f_q = FunctionalModel(model, params_i)
-        outputs_q, labels_q, _ = _model_forward_router(f_q, query_batch, device, multimodal=multimodal)
-        logits_q = outputs_q[0] if isinstance(outputs_q, tuple) else outputs_q
 
-        q_loss_step = criterion(logits_q, labels_q)
+        if use_MOE and aux_placement in ('outer', 'both'):
+            outputs_q, labels_q, _, routing_info_q = _model_forward_router_MOE(
+                f_q, query_batch, device, multimodal=multimodal
+            )
+            logits_q = outputs_q[0] if isinstance(outputs_q, tuple) else outputs_q
+            q_loss_step = criterion(logits_q, labels_q) + _compute_aux_loss(routing_info_q, config, aux_coeff)
+        else:
+            outputs_q, labels_q, _ = _model_forward_router(f_q, query_batch, device, multimodal=multimodal)
+            logits_q = outputs_q[0] if isinstance(outputs_q, tuple) else outputs_q
+            q_loss_step = criterion(logits_q, labels_q)
+
         per_step_query_losses.append(q_loss_step)
         last_q_logits, last_q_labels = logits_q, labels_q
 
@@ -151,19 +192,12 @@ def inner_loop_mamlpp(
         # 2. Support Forward & Inner Update
         f_s = FunctionalModel(model, params_i)
 
-        if use_MOE:
-            # Request routing info from MOE model via functional_call kwarg
-            # _model_forward_router_MOE handles the (logits, routing_info) return
+        if use_MOE and aux_placement in ('inner', 'both'):
             outputs_s, labels_s, _, routing_info_s = _model_forward_router_MOE(
                 f_s, support_batch, device, multimodal=multimodal
             )
             logits_s = outputs_s[0] if isinstance(outputs_s, tuple) else outputs_s
-            s_loss = criterion(logits_s, labels_s)
-            # Add aux loss to support loss so gate routing is shaped during adaptation
-            if routing_info_s is not None and aux_coeff > 0:
-                gate_w = routing_info_s.get('gate_weights')
-                if gate_w is not None:
-                    s_loss = s_loss + _MOE_aux_loss(gate_w, coeff=aux_coeff)
+            s_loss = criterion(logits_s, labels_s) + _compute_aux_loss(routing_info_s, config, aux_coeff)
         else:
             outputs_s, labels_s, _ = _model_forward_router(f_s, support_batch, device, multimodal=multimodal)
             logits_s = outputs_s[0] if isinstance(outputs_s, tuple) else outputs_s

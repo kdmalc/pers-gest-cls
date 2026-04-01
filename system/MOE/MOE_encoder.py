@@ -39,8 +39,11 @@ Design notes
 * Both placements expose the same forward signature as MetaCNNLSTM /
   DeepCNNLSTM so they drop in as MAML init models with no changes to
   mamlpp.py.
-* `return_routing` kwarg on forward() returns the gate weight tensor so
-  MOE_analysis.py can log expert assignments without breaking normal training.
+* `return_routing` kwarg on forward() returns a routing_info dict with two
+  keys so both the correct aux loss and analysis tools have what they need:
+    "gate_weights"      : (B, E) — weights_hard, actually applied to experts
+    "gate_weights_soft" : (B, E) — pre-mask softmax probs (== gate_weights
+                          for dense routing; differs only for top-k)
 
 Config keys consumed (all optional with sensible defaults)
 ──────────────────────────────────────────────────────────
@@ -189,45 +192,78 @@ class MOEGate(nn.Module):
         self.temperature = temperature
         self.linear = nn.Linear(in_dim, num_experts)
 
-    def forward(self, r: torch.Tensor) -> torch.Tensor:
-        """r: (B, in_dim) → weights: (B, num_experts), sums to 1 per sample"""
-        logits = self.linear(r) / self.temperature          # (B, E)
-        weights = F.softmax(logits, dim=-1)                 # (B, E)
+    def forward(self, r: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        r: (B, in_dim) → (weights_hard, weights_soft)
+
+        weights_soft : (B, E) — raw softmax probabilities, always differentiable.
+                       Used as P_i in the top-k aux loss and for dense routing.
+        weights_hard : (B, E) — post-top-k masked & renormalised weights that are
+                       actually applied to the experts.  Equal to weights_soft when
+                       top_k is None (dense routing).
+
+        Callers should apply weights_hard to the expert outputs and pass both
+        tensors to the routing_info dict so the correct aux loss can be computed.
+        """
+        logits       = self.linear(r) / self.temperature   # (B, E)
+        weights_soft = F.softmax(logits, dim=-1)            # (B, E)
 
         if self.top_k is not None and self.top_k < self.num_experts:
-            topk_vals, topk_idx = torch.topk(weights, self.top_k, dim=-1)
-            # Straight-through sparse mask — zero non-top-k, renormalise
-            mask = torch.zeros_like(weights).scatter_(-1, topk_idx, 1.0)
-            weights = weights * mask
-            weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-9)
+            _, topk_idx  = torch.topk(weights_soft, self.top_k, dim=-1)
+            mask         = torch.zeros_like(weights_soft).scatter_(-1, topk_idx, 1.0)
+            weights_hard = weights_soft * mask
+            weights_hard = weights_hard / (weights_hard.sum(dim=-1, keepdim=True) + 1e-9)
+        else:
+            weights_hard = weights_soft   # dense: identical
 
-        return weights
+        return weights_hard, weights_soft
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Auxiliary load-balancing loss
+# Auxiliary load-balancing losses
 # ─────────────────────────────────────────────────────────────────────────────
 
-def MOE_aux_loss(gate_weights: torch.Tensor, coeff: float = 1e-2) -> torch.Tensor:
+def dense_MOE_aux_loss(gate_weights: torch.Tensor,
+                       coeff: float = 1e-2,
+                       eps: float = 1e-8) -> torch.Tensor:
     """
-    Soft load-balancing loss: penalises any expert receiving much more
-    weight than 1/E on average.  This is the Switch Transformer formulation.
+    Load-balancing loss for dense / soft routing.
 
-    gate_weights: (B, E) — the soft routing weights output by MOEGate.
-    coeff:        scale factor; 1e-2 to 1e-3 is a good starting range.
+    Minimises KL(avg_gate_weights || uniform), pushing the mean routing
+    distribution toward equal utilisation of all experts.
 
-    Usage in training loop:
-        logits, routing_info = model(emg, imu, return_routing=True)
-        main_loss = criterion(logits, labels)
-        aux = MOE_aux_loss(routing_info["gate_weights"], coeff=config.get("MOE_aux_coeff", 1e-2))
-        loss = main_loss + aux
+    gate_weights : (B, E) — weights_hard (== weights_soft for dense routing)
+    coeff        : loss scale factor; try 1e-2 → 1e-1 if collapse persists.
+
+    Note: reduction='sum' is correct here because avg_usage is already a
+    length-E vector (batch dimension already averaged out).
     """
-    # Mean gate weight per expert (fraction of "attention" each expert gets)
-    f = gate_weights.mean(dim=0)                  # (E,)
-    # Fraction of tokens routed to each expert (dense routing: same as f)
-    p = gate_weights.mean(dim=0)                  # (E,)
-    E = gate_weights.size(-1)
-    return coeff * E * (f * p).sum()
+    avg_usage = gate_weights.mean(dim=0)               # (E,)
+    E         = avg_usage.numel()
+    target    = torch.full_like(avg_usage, 1.0 / E)
+    return coeff * F.kl_div((avg_usage + eps).log(), target, reduction='sum')
+
+
+def topk_MOE_aux_loss(gate_weights_soft: torch.Tensor,
+                      gate_weights_hard: torch.Tensor,
+                      coeff: float = 1e-2) -> torch.Tensor:
+    """
+    Switch Transformer load-balancing loss for top-k routing.
+
+    L = coeff * E * Σ_i  f_i * P_i
+      P_i : mean soft probability before masking  — differentiable
+      f_i : mean dispatch fraction after masking  — frozen (no gradient)
+
+    gate_weights_soft : (B, E) — raw softmax probs, BEFORE top-k zeroing
+    gate_weights_hard : (B, E) — weights AFTER top-k mask + renorm
+
+    The .detach() on f is critical: f is a frozen load signal, not something
+    we differentiate through.
+    """
+    P = gate_weights_soft.mean(dim=0)                  # (E,) differentiable
+    f = gate_weights_hard.detach().mean(dim=0)          # (E,) frozen
+    E = P.numel()
+    return coeff * E * (f * P).sum()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -340,20 +376,20 @@ class MetaCNNLSTM_EncoderMOE(nn.Module):
             x = torch.cat([x, x_imu], dim=1)   # (B, C_emg+C_imu, T)
 
         # 1. Routing vector from lightweight context projector
-        r = self.ctx_proj(x)                    # (B, ctx_out)
+        r = self.ctx_proj(x)                              # (B, ctx_out)
 
-        # 2. Gating weights
-        w = self.gate(r)                        # (B, E)
+        # 2. Gating weights — always returns (hard, soft)
+        w_hard, w_soft = self.gate(r)                     # each (B, E)
 
         # 3. Expert CNN forward passes
         # expert_feats[e]: (B, cnn_out_ch, T)
         expert_feats = [exp(x) for exp in self.expert_cnns]
 
-        # 4. Weighted combination: Σ wᵢ · feat_i
+        # 4. Weighted combination: Σ wᵢ · feat_i  (use w_hard for mixing)
         # Stack to (B, E, C, T), weight and sum over E dimension
-        stacked = torch.stack(expert_feats, dim=1)   # (B, E, C, T)
-        w_bcw   = w.unsqueeze(-1).unsqueeze(-1)       # (B, E, 1, 1)
-        h       = (stacked * w_bcw).sum(dim=1)        # (B, C, T)
+        stacked = torch.stack(expert_feats, dim=1)        # (B, E, C, T)
+        w_bcw   = w_hard.unsqueeze(-1).unsqueeze(-1)      # (B, E, 1, 1)
+        h       = (stacked * w_bcw).sum(dim=1)            # (B, C, T)
 
         # 5. Permute for LSTM: (B, T, C)
         h = h.permute(0, 2, 1)
@@ -368,7 +404,7 @@ class MetaCNNLSTM_EncoderMOE(nn.Module):
         layer3_feat = h3.mean(dim=1)
 
         if return_routing:
-            return layer3_feat, [layer1_feat, layer2_feat, layer3_feat], w
+            return layer3_feat, [layer1_feat, layer2_feat, layer3_feat], w_hard, w_soft
         return layer3_feat, [layer1_feat, layer2_feat, layer3_feat]
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -376,9 +412,9 @@ class MetaCNNLSTM_EncoderMOE(nn.Module):
                 return_routing: bool = False):
         result = self.backbone(x_emg, x_imu, demographics, return_routing=return_routing)
         if return_routing:
-            feat, layers, gate_w = result
+            feat, layers, w_hard, w_soft = result
             logits = self.head(feat)
-            return logits, {"gate_weights": gate_w}
+            return logits, {"gate_weights": w_hard, "gate_weights_soft": w_soft}
         else:
             feat, _ = result
             return self.head(feat)
@@ -491,13 +527,13 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
 
         # Routing
         r = self.ctx_proj(x)
-        w = self.gate(r)                                 # (B, E)
+        w_hard, w_soft = self.gate(r)                              # each (B, E)
 
         # Expert CNNs
-        expert_feats = [exp(x) for exp in self.expert_cnns]  # each (B, C, T')
-        stacked = torch.stack(expert_feats, dim=1)            # (B, E, C, T')
-        w_4d    = w.unsqueeze(-1).unsqueeze(-1)               # (B, E, 1, 1)
-        h       = (stacked * w_4d).sum(dim=1)                 # (B, C, T')
+        expert_feats = [exp(x) for exp in self.expert_cnns]       # each (B, C, T')
+        stacked = torch.stack(expert_feats, dim=1)                 # (B, E, C, T')
+        w_4d    = w_hard.unsqueeze(-1).unsqueeze(-1)               # (B, E, 1, 1)
+        h       = (stacked * w_4d).sum(dim=1)                      # (B, C, T')
 
         # LSTM
         h = h.permute(0, 2, 1)
@@ -510,15 +546,15 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         l3 = h3.mean(dim=1)
 
         if return_routing:
-            return l3, [l1, l2, l3], w
+            return l3, [l1, l2, l3], w_hard, w_soft
         return l3, [l1, l2, l3]
 
     def forward(self, x_emg, x_imu=None, demographics=None,
                 return_routing: bool = False):
         result = self.backbone(x_emg, x_imu, demographics, return_routing=return_routing)
         if return_routing:
-            feat, _, gate_w = result
-            return self.head(feat), {"gate_weights": gate_w}
+            feat, _, w_hard, w_soft = result
+            return self.head(feat), {"gate_weights": w_hard, "gate_weights_soft": w_soft}
         return self.head(result[0])
 
     def get_features(self, x_emg, x_imu=None, demographics=None):
@@ -640,14 +676,14 @@ class MetaCNNLSTM_MiddleMOE(nn.Module):
         h = self.conv(x)
 
         # Context projector operates on CNN features (not raw x)
-        r = self.ctx_proj(h)                    # (B, ctx_out)
-        w = self.gate(r)                        # (B, E)
+        r = self.ctx_proj(h)                       # (B, ctx_out)
+        w_hard, w_soft = self.gate(r)              # each (B, E)
 
         # MLP experts: operate on (B, T, n_filt), output same shape
         h_t = h.permute(0, 2, 1)               # (B, T, n_filt)
         expert_outs = [exp(h_t) for exp in self.expert_mlps]  # each (B, T, n_filt)
         stacked = torch.stack(expert_outs, dim=1)              # (B, E, T, n_filt)
-        w_4d    = w.unsqueeze(-1).unsqueeze(-1)                # (B, E, 1, 1)
+        w_4d    = w_hard.unsqueeze(-1).unsqueeze(-1)           # (B, E, 1, 1)
         h_mix   = (stacked * w_4d).sum(dim=1)                  # (B, T, n_filt)
 
         # LSTM stack (already in (B, T, C) format)
@@ -660,15 +696,15 @@ class MetaCNNLSTM_MiddleMOE(nn.Module):
         l3 = h3.mean(dim=1)
 
         if return_routing:
-            return l3, [l1, l2, l3], w
+            return l3, [l1, l2, l3], w_hard, w_soft
         return l3, [l1, l2, l3]
 
     def forward(self, x_emg, x_imu=None, demographics=None,
                 return_routing: bool = False):
         result = self.backbone(x_emg, x_imu, demographics, return_routing=return_routing)
         if return_routing:
-            feat, _, gate_w = result
-            return self.head(feat), {"gate_weights": gate_w}
+            feat, _, w_hard, w_soft = result
+            return self.head(feat), {"gate_weights": w_hard, "gate_weights_soft": w_soft}
         return self.head(result[0])
 
     def get_features(self, x_emg, x_imu=None, demographics=None):
@@ -787,12 +823,12 @@ class DeepCNNLSTM_MiddleMOE(nn.Module):
         h = self.cnn(x)                         # (B, cnn_out_ch, T')
 
         r = self.ctx_proj(h)                    # (B, ctx_out)
-        w = self.gate(r)                        # (B, E)
+        w_hard, w_soft = self.gate(r)           # each (B, E)
 
         h_t = h.permute(0, 2, 1)               # (B, T', cnn_out_ch)
         expert_outs = [exp(h_t) for exp in self.expert_mlps]
         stacked = torch.stack(expert_outs, dim=1)   # (B, E, T', cnn_out_ch)
-        w_4d    = w.unsqueeze(-1).unsqueeze(-1)
+        w_4d    = w_hard.unsqueeze(-1).unsqueeze(-1)
         h_mix   = (stacked * w_4d).sum(dim=1)       # (B, T', cnn_out_ch)
 
         h1, _ = self.lstm1(h_mix); h1 = self.lstm_dropout(h1)
@@ -804,15 +840,15 @@ class DeepCNNLSTM_MiddleMOE(nn.Module):
         l3 = h3.mean(dim=1)
 
         if return_routing:
-            return l3, [l1, l2, l3], w
+            return l3, [l1, l2, l3], w_hard, w_soft
         return l3, [l1, l2, l3]
 
     def forward(self, x_emg, x_imu=None, demographics=None,
                 return_routing: bool = False):
         result = self.backbone(x_emg, x_imu, demographics, return_routing=return_routing)
         if return_routing:
-            feat, _, gate_w = result
-            return self.head(feat), {"gate_weights": gate_w}
+            feat, _, w_hard, w_soft = result
+            return self.head(feat), {"gate_weights": w_hard, "gate_weights_soft": w_soft}
         return self.head(result[0])
 
     def get_features(self, x_emg, x_imu=None, demographics=None):
@@ -981,15 +1017,16 @@ class ContrastiveEncoderMOE(nn.Module):
                         return_routing: bool = False):
         """
         Returns:
-          feat: (B, backbone_dim)
-          gate_w: (B, E) if return_routing else None
+          feat       : (B, backbone_dim)
+          w_hard     : (B, E) — weights applied to experts (None if not return_routing)
+          w_soft     : (B, E) — pre-mask softmax probs    (None if not return_routing)
         """
         if self.MOE_placement == "encoder":
             # Context projector on raw input
             raw = x_emg if not (self.use_imu and x_imu is not None) else \
                   torch.cat([x_emg, x_imu], dim=1)
             r = self.ctx_proj(raw)
-            w = self.gate(r)
+            w_hard, w_soft = self.gate(r)          # each (B, E)
 
             # Expert encoders
             emg_feats = [exp(x_emg) for exp in self.emg_experts]
@@ -1000,25 +1037,25 @@ class ContrastiveEncoderMOE(nn.Module):
             else:
                 expert_combined = emg_feats
 
-            stacked = torch.stack(expert_combined, dim=1)   # (B, E, C, T')
-            w_4d    = w.unsqueeze(-1).unsqueeze(-1)
-            combined = (stacked * w_4d).sum(dim=1)          # (B, C, T')
+            stacked  = torch.stack(expert_combined, dim=1)   # (B, E, C, T')
+            w_4d     = w_hard.unsqueeze(-1).unsqueeze(-1)
+            combined = (stacked * w_4d).sum(dim=1)           # (B, C, T')
 
         else:  # "middle"
             e = self.emg_encoder(x_emg)
             i = self.imu_encoder(x_imu) if (self.imu_encoder is not None and x_imu is not None) else None
             combined = torch.cat([e, i], dim=1) if i is not None else e  # (B, C, T')
 
-            r = self.ctx_proj(combined)    # (B, ctx_out)
-            w = self.gate(r)               # (B, E)
+            r = self.ctx_proj(combined)            # (B, ctx_out)
+            w_hard, w_soft = self.gate(r)          # each (B, E)
 
             # MLP experts on permuted features
-            h_t = combined.permute(0, 2, 1)   # (B, T', C)
+            h_t = combined.permute(0, 2, 1)        # (B, T', C)
             expert_outs = [exp(h_t) for exp in self.expert_mlps]
-            stacked = torch.stack(expert_outs, dim=1)   # (B, E, T', C)
-            w_4d    = w.unsqueeze(-1).unsqueeze(-1)
-            h_mix   = (stacked * w_4d).sum(dim=1)       # (B, T', C)
-            combined = h_mix.permute(0, 2, 1)           # (B, C, T')
+            stacked  = torch.stack(expert_outs, dim=1)   # (B, E, T', C)
+            w_4d     = w_hard.unsqueeze(-1).unsqueeze(-1)
+            h_mix    = (stacked * w_4d).sum(dim=1)       # (B, T', C)
+            combined = h_mix.permute(0, 2, 1)            # (B, C, T')
 
         # Temporal module
         if self.temporal is not None:
@@ -1032,22 +1069,22 @@ class ContrastiveEncoderMOE(nn.Module):
             feat = self.attn_pool(combined)
 
         if return_routing:
-            return feat, w
-        return feat, None
+            return feat, w_hard, w_soft
+        return feat, None, None
 
     # ─────────────────────────────────────────────────────────────────────────
     def encode(self, x_emg, x_imu=None, demographics=None):
         """Backbone only (no projection head). Returns (B, backbone_dim)."""
-        feat, _ = self._encode_signals(x_emg, x_imu)
+        feat, _, _ = self._encode_signals(x_emg, x_imu)
         return feat
 
     def forward(self, x_emg, x_imu=None, demographics=None,
                 return_routing: bool = False):
         """Returns L2-normalised embedding (B, embedding_dim)."""
-        feat, gate_w = self._encode_signals(x_emg, x_imu, return_routing=return_routing)
+        feat, w_hard, w_soft = self._encode_signals(x_emg, x_imu, return_routing=return_routing)
         z = self.proj_head(feat)
         if return_routing:
-            return z, {"gate_weights": gate_w}
+            return z, {"gate_weights": w_hard, "gate_weights_soft": w_soft}
         return z
 
     @torch.no_grad()
