@@ -971,7 +971,10 @@ class ContrastiveEncoderMOE(nn.Module):
             self.use_gap = config.get("use_GlobalAvgPooling", True)
             self.attn_pool = None
         elif arch == "cnn_attn":
-            from pretraining.contrastive_net.contrastive_encoder import AttentionPool1d
+            try:
+                from system.pretraining.contrastive_net.contrastive_encoder import AttentionPool1d
+            except ImportError:
+                from pretraining.contrastive_net.contrastive_encoder import AttentionPool1d
             self.temporal = None
             self.attn_pool = AttentionPool1d(
                 in_dim=fused_dim,
@@ -984,7 +987,10 @@ class ContrastiveEncoderMOE(nn.Module):
         self.backbone_dim = backbone_dim
 
         # ── Projection Head ──────────────────────────────────────────────────
-        from pretraining.contrastive_net.contrastive_encoder import ProjectionHead
+        try:
+            from system.pretraining.contrastive_net.contrastive_encoder import ProjectionHead
+        except ImportError:
+            from pretraining.contrastive_net.contrastive_encoder import ProjectionHead
         self.proj_head = ProjectionHead(
             in_dim=backbone_dim,
             embedding_dim=config["embedding_dim"],

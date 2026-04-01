@@ -419,7 +419,18 @@ def train(config: dict, fold_idx: int):
     print(f"{'='*60}\n", flush=True)
 
     # ---- Model ----
-    model   = ContrastiveGestureEncoder(config).to(device)
+    # When use_moe=True, build ContrastiveEncoderMOE instead of the vanilla encoder.
+    # ContrastiveEncoderMOE has the same forward / encode / get_prototypes / predict
+    # interface as ContrastiveGestureEncoder, so nothing else in this file changes.
+    # The aux load-balancing loss is handled inside train_one_epoch() via the
+    # routing_info dict that the MoE model returns when called with return_routing=True.
+    if config.get("use_moe", False):
+        import sys, os
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+        from MOE.MOE_encoder import build_MOE_model
+        model = build_MOE_model(config).to(device)
+    else:
+        model = ContrastiveGestureEncoder(config).to(device)
     loss_fn = build_loss(config)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
