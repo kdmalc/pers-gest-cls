@@ -178,9 +178,10 @@ def build_model_from_trial(trial, base_config=None):
         config["top_k"] = trial.suggest_int("top_k", 2, 4)
         config["gate_type"] = "context_feature_demo"
         config["expert_architecture"] = "MLP"
+        config["apply_MOE_aux_loss_inner_outer"] = "outer"  # trial.suggest_categorical("MOE_aux_loss_plcmt", ["outer", "inner", "both"])
     
     # === Meta-Augmentation & Training Flow ===
-    config["use_label_shuf_meta_aug"] = False 
+    config["use_label_shuf_meta_aug"] = True  # TODO: Really ought to explore ablating this...
     config["num_epochs"] = 50 
     config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [250, 500])
     config["earlystopping_patience"] = 8 

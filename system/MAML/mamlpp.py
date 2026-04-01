@@ -127,7 +127,7 @@ def inner_loop_mamlpp(
 ):
     """Runs the MAML++ inner loop, calculating MSL and derivatives.
 
-    MOE aux-loss placement is controlled by config["apply_aux_loss_inner_outer"]:
+    MOE aux-loss placement is controlled by config["apply_MOE_aux_loss_inner_outer"]:
       "inner"  (default) — aux loss is added to the support loss at each inner
                            step so the gate is regularised during fast adaptation.
       "outer"            — aux loss is added to the query loss so the meta-update
@@ -149,8 +149,8 @@ def inner_loop_mamlpp(
     # "inner"  — aux loss added to support loss during inner-loop adaptation steps
     # "outer"  — aux loss added to query loss so the meta-update shapes gate balance
     # "both"   — aux loss applied at both inner and outer levels
-    # default is "inner" (original behaviour)
-    aux_placement = config.get('apply_aux_loss_inner_outer', 'inner')
+    # default is "outer"
+    aux_placement = config.get('apply_MOE_aux_loss_inner_outer', 'outer')
 
     # MSL Logic
     msl_use = (config['use_maml_msl'] == True) or (config['use_maml_msl'] == "hybrid" and epoch <= config['maml_msl_num_epochs'])

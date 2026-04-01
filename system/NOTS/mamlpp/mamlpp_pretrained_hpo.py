@@ -301,8 +301,9 @@ def build_model_from_trial(trial, model_type, base_config=None):
         config["top_k"] = trial.suggest_int("top_k", 2, 4)
         config["gate_type"] = "context_feature_demo"
         config["expert_architecture"] = "MLP"
+        config["apply_MOE_aux_loss_inner_outer"] = "outer"  # trial.suggest_categorical("MOE_aux_loss_plcmt", ["outer", "inner", "both"])
 
-    config["use_label_shuf_meta_aug"] = True  
+    config["use_label_shuf_meta_aug"] = True   # TODO: Really ought to explore ablating this...
     config["num_epochs"] = 50 
     config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [100, 150, 200, 250, 400, 500, 750])
     config["label_smooth"] = trial.suggest_categorical("label_smooth", [0.0, 0.05, 0.1, 0.15, 0.2])
