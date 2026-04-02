@@ -14,8 +14,8 @@
 #SBATCH --time=02:00:00
 #SBATCH --gres=gpu:1
 #SBATCH --array=0-19
-#SBATCH --output=logs/pretrain_hpo_%A_%a.out
-#SBATCH --error=logs/pretrain_hpo_%A_%a.err
+# SBATCH --output=logs/pretrain_hpo_%A_%a.out
+# SBATCH --error=logs/pretrain_hpo_%A_%a.err
 
 mkdir -p logs
 
@@ -59,7 +59,7 @@ MODEL="${MODEL:-DeepCNNLSTM}"
 USE_MOE="${USE_MOE:-1}"
 
 # Trials per worker. 
-N_TRIALS_PER_WORKER="${N_TRIALS_PER_WORKER:-5}"
+N_TRIALS_PER_WORKER="${N_TRIALS_PER_WORKER:-20}"
 
 # ── Build study name + journal path ───────────────────────────────────────────
 if [ "$USE_MOE" = "1" ]; then

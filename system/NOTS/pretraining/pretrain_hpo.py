@@ -18,12 +18,12 @@ DeepCNNLSTM) or to ContrastiveNet.  top_k is fixed to None (dense / soft
 routing) throughout — gradients flow cleanly, MAML-compatible.
 MoE routing HPs (temperature, aux_coeff, ctx dims, placement) are searched
 alongside training HPs.  The trainers handle aux-loss and routing analysis
-every moe_log_every=5 epochs automatically.
+every MOE_log_every=5 epochs automatically.
 
 Collapse detection
 ------------------
 For CNN-LSTM: pretrain_trainer.py logs routing_reports to history every
-moe_log_every epochs. We read the last report and penalise trials where
+MOE_log_every epochs. We read the last report and penalise trials where
 max_expert_load > COLLAPSE_MAX_LOAD_THRESHOLD.
 For ContrastiveNet: same check on logs['routing_reports'] if present.
 
@@ -192,9 +192,15 @@ def _check_moe_collapse(history_or_logs: dict) -> float | None:
     for key in ("max_expert_load", "dominant_fraction", "max_load"):
         if key in last:
             return float(last[key])
-    for key in ("max_expert_load", "dominant_fraction", "max_load"):
-        if key in last.get("load_balance", {}):
-            return float(last["load_balance"][key])
+    lb = last.get("load_balance", {})
+    fracs = lb.get("expert_hard_fraction")
+    if fracs:
+        return float(max(fracs))   # max load across all experts
+    imbal = lb.get("hard_imbalance_ratio")
+    if imbal is not None:
+        # Convert imbalance ratio → approximate max fraction (ratio = max/min ≈ max * E)
+        # Better to use expert_hard_fraction directly, but this is a fallback
+        return float(imbal / (NUM_EXPERTS + imbal - 1))
     return None
 
 

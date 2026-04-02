@@ -12,6 +12,24 @@ Example usage:
  
     # Train with a specific config JSON (output from HPO)
     python run_pretrain.py --tensor_dict data/tensor_dict.pkl --model TST --config best_tst_config.json
+
+    # Train a MoE model and emit routing analysis every 5 epochs + after training
+    python run_pretrain.py --tensor_dict data/tensor_dict.pkl --model DeepCNNLSTM --config moe_config.json
+
+MoE notes:
+    When config["use_moe"] = True the following extra behaviour is activated:
+      - pretrain_trainer.py logs routing reports every moe_log_every epochs (already wired).
+      - After training, run_full_eval() calls run_moe_routing_eval() on both the train
+        and val DataLoaders using the *best* checkpoint weights.  Plots go to:
+            {save_dir}/eval/{model}/moe_routing/{train|val}/
+        and the raw RoutingRecord is saved as a .pt file for offline inspection.
+    Relevant config keys (all have sensible defaults):
+        use_moe        : bool  — master switch
+        num_experts    : int   — number of MoE experts (required)
+        moe_aux_coeff  : float — load-balancing loss coefficient (default 1e-2)
+        moe_log_every  : int   — epoch interval for in-training routing logs (default 5)
+        moe_plot_dir   : str   — overrides default plot dir for in-training plots
+        demo_dim_labels: list  — optional human-readable labels for demographics dims
 """
  
 import os
@@ -72,10 +90,15 @@ def train_one_model(
         {model_type}_{timestamp}_best.pt  — best validation loss (saved by trainer)
         {model_type}_{timestamp}_last.pt  — weights at the final epoch
 
+    Also builds and returns the DataLoaders so they can be forwarded to
+    run_full_eval() without being reconstructed a second time.
+
     Returns:
         model       : trained model (final-epoch state)
         history     : training history dict
         ckpt_paths  : dict with keys 'best' and 'last'
+        train_dl    : training DataLoader (reuse in eval to avoid rebuilding)
+        val_dl      : validation DataLoader (reuse in eval to avoid rebuilding)
     """
     os.makedirs(save_dir, exist_ok=True)
 
@@ -110,11 +133,20 @@ def train_one_model(
     hist_path = os.path.join(save_dir, f"{model_type}_{timestamp}_history.json")
     json.dump(
         {k: [float(v) for v in vals] if isinstance(vals, list) else float(vals)
-         for k, vals in history.items() if k != 'clf'},
+         for k, vals in history.items() if k not in ('clf', 'routing_reports')},
         open(hist_path, 'w'), indent=2
     )
     print(f"[train_one_model] History saved → {hist_path}")
-    return model, history, ckpt_paths
+
+    # ── Save routing_reports separately (not JSON-serialisable inline) ────────
+    if history.get('routing_reports'):
+        import pickle as _pkl
+        rr_path = os.path.join(save_dir, f"{model_type}_{timestamp}_routing_reports.pkl")
+        with open(rr_path, 'wb') as f:
+            _pkl.dump(history['routing_reports'], f)
+        print(f"[train_one_model] Routing reports saved → {rr_path}")
+
+    return model, history, ckpt_paths, train_dl, val_dl
  
  
 if __name__ == "__main__":
@@ -173,25 +205,46 @@ if __name__ == "__main__":
     all_results = {}
     for mtype in models_to_run:
         print(f"\n{'#'*70}\n# Training: {mtype}\n{'#'*70}\n")
- 
+
+        # ── Build config ──────────────────────────────────────────────────────
+        # Wire moe_plot_dir into config so the trainer knows where to write
+        # in-training routing plots.  The eval-time plots go to a sibling dir
+        # (handled inside run_full_eval → run_moe_routing_eval).
+        ckpt_dir  = os.path.join(args.save_dir, "checkpoints")
+        eval_dir  = os.path.join(args.save_dir, "eval", mtype)
+        moe_plot_dir = os.path.join(eval_dir, "MOE_routing_training") \
+            if config_overrides.get('use_MOE', PRETRAIN_CONFIG.get('use_MOE', False)) \
+               or MODEL_CONFIGS.get(mtype, {}).get('use_MOE', False) \
+            else None
+
         config = {
             **PRETRAIN_CONFIG,
             **MODEL_CONFIGS[mtype],
-            "model_type": mtype,
-            "device": "cuda" if torch.cuda.is_available() else "cpu",
+            "model_type":    mtype,
+            "device":        "cuda" if torch.cuda.is_available() else "cpu",
+            "MOE_plot_dir":  moe_plot_dir,   # None when use_moe=False → trainer skips plots
             **config_overrides,
         }
- 
-        model, history, ckpt_paths = train_one_model(
+
+        # ── Train ─────────────────────────────────────────────────────────────
+        # train_one_model now returns (model, history, ckpt_paths, train_dl, val_dl).
+        # We forward the DataLoaders directly into run_full_eval so they are not
+        # rebuilt a second time — particularly important for large datasets and
+        # MoE runs where routing eval needs a full loader pass.
+        model, history, ckpt_paths, train_dl, val_dl = train_one_model(
             mtype, tensor_dict, config,
-            save_dir = os.path.join(args.save_dir, "checkpoints"),
+            save_dir = ckpt_dir,
         )
- 
-        # tensor_dict already in memory — pass directly, no reload
+
+        # ── Eval ──────────────────────────────────────────────────────────────
+        # Pass the DataLoaders in so run_full_eval can use them for MoE routing
+        # analysis without needing to reconstruct them from tensor_dict.
         results = run_full_eval(
             model, tensor_dict, config,
-            save_dir = os.path.join(args.save_dir, "eval", mtype),
+            save_dir = eval_dir,
             method   = args.eval_method,
+            train_dl = train_dl,
+            val_dl   = val_dl,
         )
         all_results[mtype] = results
  

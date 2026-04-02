@@ -13,12 +13,23 @@ The linear probe is the most informative metric for MAML pretraining quality:
     it means the features are user-invariant and gesture-discriminative — exactly what
     MAML needs as an initialization.
   - Rule of thumb for 10-way classification: random = 10%. Good pretrain ≥ 50% on NEW users.
- 
+
+MoE routing analysis (when config["use_moe"] = True):
+  - run_full_eval() will call run_moe_routing_eval() on both the train and val dataloaders
+    after the standard probe/viz pipeline is complete.
+  - The analysis uses RoutingCollector + RoutingAnalyzer (same as pretrain_trainer.py and
+    mamlpp.py) to check for expert collapse, load imbalance, and gesture/user routing
+    specialisation at evaluation time — on the best checkpoint, not mid-training.
+  - Saves plots to {save_dir}/moe_routing/{split}/ and returns reports in the results dict.
+  - viz_from_checkpoint() also runs routing analysis when use_moe=True, so you can inspect
+    any saved checkpoint without re-running the full eval pipeline.
+
 Usage:
     from pretrain_eval import run_full_eval
     results = run_full_eval(model, tensor_dict, config)
 """
  
+import os
 import torch
 import torch.nn as nn
 import numpy as np
@@ -29,7 +40,12 @@ from sklearn.manifold import TSNE
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
- 
+
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from MOE.MOE_analysis import RoutingCollector, RoutingAnalyzer, save_routing_record
+
+
 def ensure_channel_first(x: torch.Tensor) -> torch.Tensor:
     """Helper from eval_knn_proto.py to ensure (N, C, T) shape."""
     if x is None or x.dim() != 3:
@@ -434,8 +450,155 @@ def plot_variance_explained(gesture_var, user_var, model_name="Model", save_path
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.show()
     return fig
- 
- 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MoE routing analysis
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_moe_routing_eval(
+    model,
+    dataloader,
+    config: dict,
+    split_label: str = "val",
+    save_dir: str = None,
+) -> dict:
+    """
+    Run a full-pass MoE routing analysis on a standard (non-episodic) pretrain dataloader.
+
+    This is the post-training counterpart to the epoch-level analysis already inside
+    pretrain_trainer.py. Call it after training on the *best* checkpoint to get the
+    cleanest picture of routing behaviour — not a mid-training snapshot.
+
+    The dataloader must yield dicts with at minimum:
+        "emg"    : (B, C, T)
+        "labels" : (B,)
+    Optionally:
+        "imu"          : (B, C, T)
+        "pid" / "pids" / "user_id" : list[str|int] length B
+        "demographics" : (B, D)
+
+    Args:
+        model       : trained model (must support forward(emg, imu, return_routing=True))
+        dataloader  : standard DataLoader built by get_pretrain_dataloaders()
+        config      : full config dict (needs use_moe, num_experts, use_imu, device,
+                      model_type, demo_dim_labels)
+        split_label : "train" or "val" — used for print tags and filenames
+        save_dir    : if not None, routing plots are saved here and the RoutingRecord
+                      is saved as a .pt file for later offline inspection
+
+    Returns:
+        dict with keys:
+            "report"  : full_report() dict from RoutingAnalyzer
+            "figures" : dict of matplotlib Figure objects from plot_all()
+            "record_path" : path to saved RoutingRecord .pt (or None)
+
+    What to look for:
+        - entropy['mean_entropy_normalised'] near 1.0 → all experts equally used
+          (probably no specialisation, or no collapse yet)
+        - entropy['mean_entropy_normalised'] near 0.0 → hard routing / collapse
+        - load_balance['hard_imbalance_ratio'] >> 1 → one expert dominates
+        - routing_by_gesture shows same dominant expert for every gesture → gesture
+          specialisation has collapsed (or never developed)
+        - routing_by_pid shows same expert for every user → user-agnostic routing
+    """
+    device      = config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
+    num_experts = int(config.get('num_experts', 4))
+    use_imu     = config.get('use_imu', False)
+    model_name  = config.get('model_type', 'Model')
+    demo_labels = config.get('demo_dim_labels', None)
+
+    collector = RoutingCollector(
+        num_experts=num_experts,
+        model_name=f"{model_name}_{split_label}",
+    )
+
+    model.eval()
+    model.to(device)
+
+    n_batches_collected = 0
+    with torch.no_grad():
+        for batch in dataloader:
+            emg    = batch['emg'].to(device)
+            labels = batch['labels'].cpu()
+            imu    = batch.get('imu')
+            if use_imu and imu is not None:
+                imu = imu.to(device)
+            else:
+                imu = None
+
+            # Support both key conventions used across the codebase
+            pids = batch.get('user_id',
+                   batch.get('pid',
+                   batch.get('pids', [f'user_{i}' for i in range(emg.size(0))])))
+            if isinstance(pids, str):
+                pids = [pids] * emg.size(0)
+            # Handle tensor pid (integer user indices from some dataloaders)
+            if isinstance(pids, torch.Tensor):
+                pids = [str(p.item()) for p in pids]
+
+            demo = batch.get('demographics')
+
+            # Forward with routing info requested
+            try:
+                out = model(emg, imu, return_routing=True)
+            except TypeError:
+                # Model forward doesn't accept imu as positional — try keyword
+                out = model(emg, return_routing=True)
+
+            if isinstance(out, tuple) and len(out) == 2 and isinstance(out[1], dict):
+                _logits, routing_info = out
+                gate_w = routing_info.get('gate_weights')
+                if gate_w is None:
+                    print(f"[MoE eval:{split_label}] Warning: routing_info missing "
+                          "'gate_weights' key. Skipping batch.")
+                    continue
+                collector.add(
+                    gate_weights   = gate_w.detach().cpu(),
+                    gesture_labels = labels,
+                    pids           = pids,
+                    demographics   = demo.cpu() if demo is not None else None,
+                )
+                n_batches_collected += 1
+            else:
+                print(f"[MoE eval:{split_label}] Warning: model did not return "
+                      "(logits, routing_info) tuple. Is use_moe=True and does the "
+                      "model support return_routing=True? Aborting routing analysis.")
+                return {}
+
+    if n_batches_collected == 0:
+        print(f"[MoE eval:{split_label}] No routing data collected — returning empty results.")
+        return {}
+
+    print(f"\n[MoE eval:{split_label}] Collected {n_batches_collected} batches. "
+          f"Running analysis...")
+
+    record   = collector.finalize()
+    analyzer = RoutingAnalyzer(record)
+    report   = analyzer.full_report(print_report=True, demo_dim_labels=demo_labels)
+    report['split'] = split_label
+
+    # ── Plots ─────────────────────────────────────────────────────────────────
+    figures = {}
+    record_path = None
+    if save_dir is not None:
+        routing_plot_dir = os.path.join(save_dir, "moe_routing", split_label)
+        os.makedirs(routing_plot_dir, exist_ok=True)
+        figures = analyzer.plot_all(save_dir=routing_plot_dir)
+        print(f"[MoE eval:{split_label}] Routing plots saved → {routing_plot_dir}")
+
+        # Save the raw RoutingRecord so the user can reload it offline
+        record_path = os.path.join(routing_plot_dir, "routing_record.pt")
+        save_routing_record(record, record_path)
+        print(f"[MoE eval:{split_label}] RoutingRecord saved → {record_path}")
+
+    return {
+        "report":      report,
+        "figures":     figures,
+        "record_path": record_path,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Checkpoint loader + standalone viz
 # ─────────────────────────────────────────────────────────────────────────────
@@ -469,7 +632,8 @@ def viz_from_checkpoint(
  
     Returns:
         dict with keys 'train' and/or 'val' mapping to matplotlib Figure objects.
- 
+        If use_moe=True, also keys 'moe_train' and/or 'moe_val' with routing results.
+
     Example:
         from pretrain_eval import viz_from_checkpoint
         from pretrain_configs import PRETRAIN_CONFIG, MODEL_CONFIGS
@@ -489,7 +653,6 @@ def viz_from_checkpoint(
             td, config, save_dir='pretrain_outputs/eval/TST',
         )
     """
-    import os
     from pretrain_models import build_model
  
     os.makedirs(save_dir, exist_ok=True)
@@ -499,6 +662,7 @@ def viz_from_checkpoint(
     val_reps   = config['val_reps']
     use_imu    = config.get('use_imu', False)
     mname      = config.get('model_type', 'Model')
+    use_moe    = config.get('use_moe', False)
  
     train_pids = config['train_PIDs']
     val_pids   = config['val_PIDs']
@@ -541,6 +705,31 @@ def viz_from_checkpoint(
             split_label = "val",
         )
         results['val'] = fig_val
+
+    # ── MoE routing analysis (if applicable) ─────────────────────────────────
+    # We rebuild dataloaders here so viz_from_checkpoint is self-contained and
+    # doesn't require the caller to hold onto dataloader objects.
+    if use_moe:
+        print(f"\n[viz_from_checkpoint] use_moe=True — running post-hoc routing analysis...")
+        try:
+            from pretrain_data_pipeline import get_pretrain_dataloaders
+            train_dl, val_dl, _ = get_pretrain_dataloaders(config, tensor_dict)
+
+            if split in ('train', 'both'):
+                results['moe_train'] = run_moe_routing_eval(
+                    model, train_dl, config,
+                    split_label = "train",
+                    save_dir    = save_dir,
+                )
+
+            if split in ('val', 'both'):
+                results['moe_val'] = run_moe_routing_eval(
+                    model, val_dl, config,
+                    split_label = "val",
+                    save_dir    = save_dir,
+                )
+        except Exception as e:
+            print(f"[viz_from_checkpoint] MoE routing analysis failed: {e}")
  
     return results
  
@@ -555,24 +744,35 @@ def run_full_eval(
     config: dict,
     save_dir: str = ".",
     method: str = 'pca',
+    train_dl=None,
+    val_dl=None,
 ):
     """
-    Run all three evaluation modes:
+    Run all evaluation modes:
       1. Linear probe on an in-distribution train user
       2. Linear probe on out-of-distribution val users
       3. PCA/tSNE visualization of all val users
- 
+      4. [MoE only] Routing analysis on train + val dataloaders
+
     config keys:
       train_PIDs, val_PIDs, train_reps, val_reps,
       use_imu, n_way, model_type, device
- 
+      use_moe        : bool  — activates MoE routing eval (step 4)
+      num_experts    : int   — required when use_moe=True
+      demo_dim_labels: list  — optional labels for demographics dimensions
+
+    Args:
+        train_dl, val_dl : optional pre-built DataLoaders. If not provided and
+                           use_moe=True, they will be constructed internally via
+                           get_pretrain_dataloaders(). Pass them in from run_pretrain.py
+                           to avoid loading/batching data twice.
+
     Note on train_reps vs val_reps:
       These are 1-based repetition indices, not gesture class names.
       The gesture class set is inferred from tensor_dict keys inside extract_features.
       train_reps: reps used to fit the probe classifier (e.g. [1,2,3,4,5])
       val_reps:   reps used to evaluate / visualize (e.g. [6,7,8])
     """
-    import os
     os.makedirs(save_dir, exist_ok=True)
  
     device     = config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
@@ -581,6 +781,7 @@ def run_full_eval(
     use_imu    = config.get('use_imu', False)
     n_way      = config.get('n_way', 10)
     mname      = config.get('model_type', 'Model')
+    use_moe    = config.get('use_moe', False)
  
     train_pids = config['train_PIDs']
     val_pids   = config['val_PIDs']
@@ -668,7 +869,52 @@ def run_full_eval(
         save_path  = f"{save_dir}/{mname}_variance_explained.png",
     )
     results['variance_explained'] = {'gesture': g_var, 'user': u_var}
- 
+
+    # ── 4. MoE routing analysis ───────────────────────────────────────────────
+    # Only runs when use_moe=True.  We need DataLoaders (not just tensor_dict)
+    # because the routing collector must receive batched (emg, labels, pid) tuples.
+    # Dataloaders passed in from run_pretrain.py are preferred; if not provided
+    # we reconstruct them here — slightly redundant but keeps eval self-contained.
+    if use_moe:
+        print(f"\n{'='*60}")
+        print(f"[MoE Routing Eval] Running post-training routing analysis for {mname}...")
+        print(f"{'='*60}")
+
+        _train_dl = train_dl
+        _val_dl   = val_dl
+
+        if _train_dl is None or _val_dl is None:
+            try:
+                from pretrain_data_pipeline import get_pretrain_dataloaders
+                _train_dl, _val_dl, _ = get_pretrain_dataloaders(config, tensor_dict)
+                print("[MoE Routing Eval] DataLoaders reconstructed from tensor_dict.")
+            except Exception as e:
+                print(f"[MoE Routing Eval] Could not build DataLoaders: {e}. "
+                      "Pass train_dl and val_dl to run_full_eval() to avoid this.")
+                _train_dl = _val_dl = None
+
+        moe_save_dir = os.path.join(save_dir, "moe_routing")
+
+        if _train_dl is not None:
+            print(f"\n[MoE Routing Eval] --- TRAIN split ---")
+            results['moe_train'] = run_moe_routing_eval(
+                model, _train_dl, config,
+                split_label = "train",
+                save_dir    = save_dir,
+            )
+
+        if _val_dl is not None:
+            print(f"\n[MoE Routing Eval] --- VAL split ---")
+            results['moe_val'] = run_moe_routing_eval(
+                model, _val_dl, config,
+                split_label = "val",
+                save_dir    = save_dir,
+            )
+
+        # ── Collapse summary ──────────────────────────────────────────────────
+        # Print a concise MoE health summary so collapse is obvious at a glance.
+        _print_moe_health_summary(results, mname)
+
     # ── Summary print ─────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print(f"EVAL SUMMARY — {mname}")
@@ -683,3 +929,66 @@ def run_full_eval(
     print(f"{'='*60}\n")
  
     return results
+
+
+def _print_moe_health_summary(results: dict, mname: str) -> None:
+    """
+    Print a concise MoE routing health summary to stdout after run_full_eval().
+
+    Interprets the val routing report (falls back to train if val is absent) and
+    flags potential collapse / load-imbalance in plain language.
+
+    Collapse indicators surfaced here:
+      - Normalised entropy < 0.1 → near-hard routing, high specialisation or collapse
+      - Normalised entropy > 0.9 → near-uniform routing, experts not differentiating
+      - Hard imbalance ratio > 5  → one expert handling most samples
+      - All gestures route to same dominant expert → gesture specialisation absent
+    """
+    moe_result = results.get('moe_val') or results.get('moe_train')
+    if not moe_result or 'report' not in moe_result:
+        return
+
+    report = moe_result['report']
+    split  = moe_result['report'].get('split', '?')
+
+    ent  = report.get('entropy', {})
+    lb   = report.get('load_balance', {})
+    rg   = report.get('routing_by_gesture', {})
+
+    norm_ent   = ent.get('mean_entropy_normalised', float('nan'))
+    imbal_hard = lb.get('hard_imbalance_ratio', float('nan'))
+
+    print(f"\n{'─'*60}")
+    print(f"  MoE HEALTH SUMMARY — {mname} ({split} split)")
+    print(f"{'─'*60}")
+    print(f"  Normalised routing entropy : {norm_ent:.3f}  "
+          f"(0=hard/collapsed, 1=uniform/soft)")
+    print(f"  Load imbalance (hard)      : {imbal_hard:.1f}x  (ideal = 1.0x)")
+
+    # Expert load fractions
+    fracs = lb.get('expert_hard_fraction', [])
+    if fracs:
+        frac_strs = "  |  ".join([f"E{i}: {f:.2f}" for i, f in enumerate(fracs)])
+        print(f"  Expert dom-freq fractions  : {frac_strs}")
+
+    # Gesture routing collapse check
+    dom_freq_mat = rg.get('dominant_freq_matrix')
+    if dom_freq_mat is not None:
+        import numpy as np
+        mat = np.array(dom_freq_mat)
+        dominant_experts = mat.argmax(axis=1).tolist()
+        all_same = len(set(dominant_experts)) == 1
+        if all_same:
+            print(f"  ⚠ COLLAPSE DETECTED: all gestures route to Expert {dominant_experts[0]}")
+        else:
+            print(f"  ✓ Gestures route to different experts: {dominant_experts}")
+
+    # Plain-language verdict
+    if norm_ent < 0.1:
+        print("  → Very sharp routing. Check for collapse (imbalance ratio, gesture routing).")
+    elif norm_ent > 0.9:
+        print("  → Near-uniform routing. Experts may not be specialising.")
+    else:
+        print("  → Routing entropy looks reasonable.")
+
+    print(f"{'─'*60}\n")

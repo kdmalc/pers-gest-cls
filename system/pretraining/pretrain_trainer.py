@@ -380,12 +380,35 @@ def pretrain(model, train_dl, val_dl, config: dict, save_path: str = None):
             break
 
     # ── Final routing analysis ────────────────────────────────────────────────
-    if use_moe and moe_log_every > 0:
+    # Always run when use_moe=True, regardless of moe_log_every.
+    # moe_log_every=0 disables *periodic* mid-training logs but should never
+    # suppress the end-of-training summary — that's the most important snapshot.
+    if use_moe:
         print("\n[MoE] Running final routing analysis on val set...")
         _run_routing_analysis_epoch(
             epoch, val_routing_collector, train_routing_collector,
             config, moe_plot_dir, history,
         )
+        # Save the raw final RoutingRecord so it can be reloaded offline
+        # (e.g. to re-run RoutingAnalyzer with different settings, or to compare
+        # across HPO runs).  Skipped silently if moe_plot_dir is None.
+        if moe_plot_dir is not None:
+            from MOE.MOE_analysis import save_routing_record
+            final_record_dir = os.path.join(moe_plot_dir, f"epoch_{epoch:03d}_final")
+            os.makedirs(final_record_dir, exist_ok=True)
+            for collector, tag in [
+                (val_routing_collector, 'val'),
+                (train_routing_collector, 'train'),
+            ]:
+                if collector is None:
+                    continue
+                try:
+                    record = collector.finalize()
+                    rpath  = os.path.join(final_record_dir, f"routing_record_{tag}.pt")
+                    save_routing_record(record, rpath)
+                    print(f"[MoE] Final {tag} RoutingRecord saved → {rpath}")
+                except Exception as e:
+                    print(f"[MoE] Warning: could not save final {tag} RoutingRecord: {e}")
 
     if best_state is not None:
         model.load_state_dict(best_state)
