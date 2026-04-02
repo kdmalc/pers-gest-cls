@@ -134,32 +134,32 @@ MODEL_CONFIGS = {
 
 MOE_CONFIG_DEFAULTS = {
     # ── Placement ─────────────────────────────────────────────────────────────
-    "use_moe":              True,          # Set True to activate MoE
-    "moe_placement":        "encoder",       # "encoder" | "middle"
+    "use_MOE":              True,          # Set True to activate MoE
+    "MOE_placement":        "encoder",       # "encoder" | "middle"
 
     # ── Expert count and routing ──────────────────────────────────────────────
     "num_experts":          4,              # Number of expert modules
-    "moe_top_k":            None,           # None=dense (recommended), int=sparse top-k
+    "MOE_top_k":            None,           # None=dense (recommended), int=sparse top-k
 
     # ── Context projector (produces routing signal r) ─────────────────────────
-    "moe_ctx_hidden_dim":   64,             # Context projector hidden layer size
-    "moe_ctx_out_dim":      32,             # Routing vector dimension
+    "MOE_ctx_hidden_dim":   64,             # Context projector hidden layer size
+    "MOE_ctx_out_dim":      32,             # Routing vector dimension
 
     # ── Gate ──────────────────────────────────────────────────────────────────
-    "moe_gate_temperature": 1.0,            # Softmax temp: >1 flatter, <1 sharper
+    "MOE_gate_temperature": 1.0,            # Softmax temp: >1 flatter, <1 sharper
 
     # ── Expert width (encoder placement only) ─────────────────────────────────
-    "moe_expert_expand":    0.75,           # Each expert CNN is this fraction of baseline width
+    "MOE_expert_expand":    0.75,           # Each expert CNN is this fraction of baseline width
     #                                       # 1.0 = same width; 0.5 = half; saves params
 
     # ── Expert MLP width (middle placement only) ──────────────────────────────
-    "moe_mlp_hidden_mult":  1.0,            # MLP hidden = CNN_out_ch * this
+    "MOE_mlp_hidden_mult":  1.0,            # MLP hidden = CNN_out_ch * this
 
     # ── Dropout inside MoE modules ────────────────────────────────────────────
-    "moe_dropout":          0.1,
+    "MOE_dropout":          0.1,
 
     # ── Auxiliary load-balancing loss ─────────────────────────────────────────
-    "moe_aux_coeff":        1e-2,           # Scale for Switch Transformer aux loss
+    "MOE_aux_coeff":        1e-2,           # Scale for Switch Transformer aux loss
     #                                       # Set to 0 to disable
 }
 
@@ -167,8 +167,8 @@ MOE_CONFIG_DEFAULTS = {
 MOE_META_MIDDLE = {
     **MODEL_CONFIGS["MetaCNNLSTM"],
     **MOE_CONFIG_DEFAULTS,
-    "use_moe":       True,
-    "moe_placement": "middle",
+    "use_MOE":       True,
+    "MOE_placement": "middle",
     "num_experts":   4,
 }
 
@@ -176,10 +176,10 @@ MOE_META_MIDDLE = {
 MOE_DEEP_ENCODER = {
     **MODEL_CONFIGS["DeepCNNLSTM"],
     **MOE_CONFIG_DEFAULTS,
-    "use_moe":              True,
-    "moe_placement":        "encoder",
+    "use_MOE":              True,
+    "MOE_placement":        "encoder",
     "num_experts":          4,
-    "moe_expert_expand":    0.75,   # 4 experts × 0.75 width ≈ 3× baseline params
+    "MOE_expert_expand":    0.75,   # 4 experts × 0.75 width ≈ 3× baseline params
 }
 
 
@@ -196,10 +196,10 @@ HPO_CONFIG = {
     "bidirectional_choices":     [True, False],
     "head_type_choices":         ["linear", "mlp"],
     # MoE-specific HPO ranges (used when use_moe=True)
-    "moe_num_experts_choices":   [2, 4, 6, 8],
-    "moe_placement_choices":     ["middle", "encoder"],
-    "moe_ctx_out_dim_choices":   [16, 32, 64],
-    "moe_gate_temp_range":       [0.5, 2.0],
-    "moe_expert_expand_range":   [0.5, 1.5],
-    "moe_aux_coeff_range":       [1e-3, 1e-1],
+    "MOE_num_experts_choices":   [2, 4, 6, 8],
+    "MOE_placement_choices":     ["middle", "encoder"],
+    "MOE_ctx_out_dim_choices":   [16, 32, 64],
+    "MOE_gate_temp_range":       [0.5, 2.0],
+    "MOE_expert_expand_range":   [0.5, 1.5],
+    "MOE_aux_coeff_range":       [1e-3, 1e-1],
 }

@@ -11,8 +11,8 @@ Features:
   - Per-epoch metrics (loss, top-1 accuracy)
   - Gradient clipping (important for LSTMs)
   - Mixed precision (optional, via torch.amp)
-  - MoE auxiliary load-balancing loss (when config["use_moe"]=True)
-  - Periodic routing analysis dumps (when config["use_moe"]=True)
+  - MoE auxiliary load-balancing loss (when config["use_MOE"]=True)
+  - Periodic routing analysis dumps (when config["use_MOE"]=True)
 
 Usage:
     from pretrain_trainer import pretrain
@@ -111,7 +111,7 @@ def _run_epoch(model, loader, optimizer, criterion, device, config, scaler=None,
                 print(f"Labels - First 5: {labels[:5].tolist()}")
                 print(f"Labels - Min: {labels.min().item()} | Max: {labels.max().item()} (Ensure these are 0-indexed!)")
                 if use_moe:
-                    print(f"MoE - aux_coeff={aux_coeff:.4f}  num_experts={config.get('num_experts', '?')}"
+                    print(f"MOE - aux_coeff={aux_coeff:.4f}  num_experts={config.get('num_experts', '?')}"
                           f"  placement={config.get('moe_placement', '?')}")
                 print(f"{'='*40}\n")
 

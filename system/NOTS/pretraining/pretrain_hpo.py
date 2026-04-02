@@ -126,29 +126,28 @@ def _suggest_moe_hps(trial: optuna.Trial) -> dict:
     use different conventions (MOE_encoder.py uses UPPER, pretrain_trainer.py
     uses lower, and one line reads the bare 'top_k' key).
     """
-    placement   = trial.suggest_categorical("moe_placement",      ["encoder", "middle"])
-    gate_temp   = trial.suggest_float("moe_gate_temperature",     0.5, 8.0, log=True)
-    aux_coeff   = trial.suggest_float("moe_aux_coeff",            1e-4, 1.0, log=True)
-    ctx_out_dim = trial.suggest_categorical("moe_ctx_out_dim",    [16, 32, 64, 128])
-    ctx_hidden  = trial.suggest_categorical("moe_ctx_hidden_dim", [32, 64, 128])
-    moe_dropout = trial.suggest_float("moe_dropout",              0.0, 0.3)
-    expert_exp  = trial.suggest_float("moe_expert_expand",        0.5, 1.5)
-    mlp_mult    = trial.suggest_float("moe_mlp_hidden_mult",      0.5, 2.0)
+    placement   = trial.suggest_categorical("MOE_placement",      ["encoder", "middle"])
+    gate_temp   = trial.suggest_float("MOE_gate_temperature",     0.5, 8.0, log=True)
+    aux_coeff   = trial.suggest_float("MOE_aux_coeff",            1e-4, 1.0, log=True)
+    ctx_out_dim = trial.suggest_categorical("MOE_ctx_out_dim",    [16, 32, 64, 128])
+    ctx_hidden  = trial.suggest_categorical("MOE_ctx_hidden_dim", [32, 64, 128])
+    moe_dropout = trial.suggest_float("MOE_dropout",              0.0, 0.3)
+    expert_exp  = trial.suggest_float("MOE_expert_expand",        0.5, 1.5)
+    mlp_mult    = trial.suggest_float("MOE_mlp_hidden_mult",      0.5, 2.0)
 
-    # TODO: Am I gonna get errors because moe vs MOE in the config............... I think so.....
     return {
-        "use_moe":              True,
+        "use_MOE":              True,
         "num_experts":          NUM_EXPERTS,
         # snake_case (pretrain_configs / pretrain_trainer)
-        "moe_placement":        placement,
-        "moe_gate_temperature": gate_temp,
-        "moe_aux_coeff":        aux_coeff,
-        "moe_ctx_out_dim":      ctx_out_dim,
-        "moe_ctx_hidden_dim":   ctx_hidden,
-        "moe_dropout":          moe_dropout,
-        "moe_expert_expand":    expert_exp,
-        "moe_mlp_hidden_mult":  mlp_mult,
-        "moe_top_k":            None,   # dense routing, fixed
+        "MOE_placement":        placement,
+        "MOE_gate_temperature": gate_temp,
+        "MOE_aux_coeff":        aux_coeff,
+        "MOE_ctx_out_dim":      ctx_out_dim,
+        "MOE_ctx_hidden_dim":   ctx_hidden,
+        "MOE_dropout":          moe_dropout,
+        "MOE_expert_expand":    expert_exp,
+        "MOE_mlp_hidden_mult":  mlp_mult,
+        "MOE_top_k":            None,   # dense routing, fixed
         "top_k":                None,   # pretrain_trainer.py line 144 reads this key
         # UPPER_case (MOE_encoder.py)
         "MOE_placement":        placement,
@@ -161,8 +160,8 @@ def _suggest_moe_hps(trial: optuna.Trial) -> dict:
         "MOE_mlp_hidden_mult":  mlp_mult,
         "MOE_top_k":            None,   # dense routing, fixed
         # Routing analysis (RoutingCollector already in pretrain_trainer.py)
-        "moe_log_every":        5,
-        "moe_plot_dir":         None,
+        "MOE_log_every":        5,
+        "MOE_plot_dir":         None,
     }
 
 
@@ -217,7 +216,7 @@ def objective_metacnnlstm(trial: optuna.Trial, tensor_dict: dict,
         "cnn_filters":   trial.suggest_categorical("cnn_filters",   [32, 64, 128]),
         "bidirectional": trial.suggest_categorical("bidirectional", [True, False]),
         "head_type":     "linear",
-        "use_moe":       False,
+        "use_MOE":       False,
     }
     if use_moe:
         config.update(_suggest_moe_hps(trial))
@@ -258,7 +257,7 @@ def objective_deepcnnlstm(trial: optuna.Trial, tensor_dict: dict,
         "lstm_hidden":      trial.suggest_categorical("lstm_hidden",      [64, 128, 256]),
         "bidirectional":    trial.suggest_categorical("bidirectional",    [True, False]),
         "head_type":        trial.suggest_categorical("head_type",        ["linear", "mlp"]),
-        "use_moe":          False,
+        "use_MOE":          False,
     }
     if use_moe:
         config.update(_suggest_moe_hps(trial))
@@ -289,7 +288,7 @@ def objective_tst(trial: optuna.Trial, tensor_dict: dict,
                   tensor_dict_path: str, user_split: dict,
                   device: str, use_moe: bool) -> float:
     if use_moe:
-        raise ValueError("MoE is not supported for TST — no CNN encoder to attach experts to.")
+        raise ValueError("MOE is not supported for TST — no CNN encoder to attach experts to.")
 
     d_model = trial.suggest_categorical("d_model", [32, 64, 128])
     n_heads = trial.suggest_categorical("n_heads", {32: [2, 4], 64: [4, 8], 128: [4, 8]}[d_model])
@@ -308,7 +307,7 @@ def objective_tst(trial: optuna.Trial, tensor_dict: dict,
         "patch_len":     trial.suggest_categorical("patch_len", [4, 8, 16]),
         "warmup_epochs": trial.suggest_int("warmup_epochs", 3, 15),
         "head_type":     trial.suggest_categorical("head_type", ["linear", "mlp"]),
-        "use_moe":       False,
+        "use_MOE":       False,
     }
 
     train_dl, val_dl, _ = get_pretrain_dataloaders(config, tensor_dict)
@@ -429,7 +428,7 @@ def objective_contrastivenet(trial: optuna.Trial, tensor_dict: dict,
         "linprob_epochs":          30,
         "linprob_lr":              1e-2,
         "seed":                    FIXED_SEED,
-        "use_moe":                 False,
+        "use_MOE":                 False,
     })
 
     # ── MoE (optional) ───────────────────────────────────────────────────────
