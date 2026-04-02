@@ -87,8 +87,8 @@ def _run_epoch(model, loader, optimizer, criterion, device, config, scaler=None,
     use_imu     = config.get('use_imu', False)
     clip_val    = float(config.get('grad_clip', 1.0))
     use_amp     = config.get('use_amp', False) and torch.cuda.is_available()
-    use_moe     = config.get('use_moe', False)
-    aux_coeff   = float(config.get('moe_aux_coeff', 1e-2))
+    use_moe     = config.get('use_MOE', False)
+    aux_coeff   = float(config.get('MOE_aux_coeff', 1e-2))
 
     ctx = torch.enable_grad() if is_train else torch.no_grad()
 
@@ -112,7 +112,7 @@ def _run_epoch(model, loader, optimizer, criterion, device, config, scaler=None,
                 print(f"Labels - Min: {labels.min().item()} | Max: {labels.max().item()} (Ensure these are 0-indexed!)")
                 if use_moe:
                     print(f"MOE - aux_coeff={aux_coeff:.4f}  num_experts={config.get('num_experts', '?')}"
-                          f"  placement={config.get('moe_placement', '?')}")
+                          f"  placement={config.get('MOE_placement', '?')}")
                 print(f"{'='*40}\n")
 
             if is_train:
@@ -227,9 +227,9 @@ def pretrain(model, train_dl, val_dl, config: dict, save_path: str = None):
     device = config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
     model  = model.to(device)
 
-    use_moe   = config.get('use_moe', False)
-    moe_log_every = int(config.get('moe_log_every', 5))    # 0 = never
-    moe_plot_dir  = config.get('moe_plot_dir', None)
+    use_moe   = config.get('use_MOE', False)
+    moe_log_every = int(config.get('MOE_log_every', 5))    # 0 = never
+    moe_plot_dir  = config.get('MOE_plot_dir', None)
     num_experts   = int(config.get('num_experts', 4))
 
     # ── Loss ────────────────────────────────────────────────────────────────
@@ -304,8 +304,8 @@ def pretrain(model, train_dl, val_dl, config: dict, save_path: str = None):
     print(f"  Optimizer={opt_name} | WD={wd} | LabelSmooth={label_smooth}")
     print(f"  GradClip={config.get('grad_clip',1.0)} | AMP={use_amp}")
     if use_moe:
-        print(f"  MoE: placement={config.get('moe_placement','?')} | "
-              f"E={num_experts} | aux_coeff={config.get('moe_aux_coeff',1e-2):.4f} | "
+        print(f"  MoE: placement={config.get('MOE_placement','?')} | "
+              f"E={num_experts} | aux_coeff={config.get('MOE_aux_coeff',1e-2):.4f} | "
               f"log_every={moe_log_every}")
     print(f"{'='*60}\n")
 
