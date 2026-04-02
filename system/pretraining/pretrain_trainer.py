@@ -168,7 +168,7 @@ def _run_epoch(model, loader, optimizer, criterion, device, config, scaler=None,
                     )
 
             # ── Latent feature diagnostics (first few epochs, first batch) ──
-            if is_train and batch_idx == 0 and epoch <= 3:
+            if is_train and batch_idx == 0 and epoch <= 1:
                 with torch.no_grad():
                     feat_debug, _ = model.backbone(emg, imu)
                     print("------ LATENT FEATURES CHECK ------")
