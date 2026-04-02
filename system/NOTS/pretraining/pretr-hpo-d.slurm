@@ -59,10 +59,11 @@ export PYTHONPATH="$CODE_DIR:$PRETRAIN_DIR:$MOE_DIR:$MAML_DIR:$PYTHONPATH"
 
 # ── Study config ───────────────────────────────────────────────────────────────
 MODEL="${MODEL:-DeepCNNLSTM}"
-USE_MOE="${USE_MOE:1}"
+# USE_MOE: Defaulted to 1 (True). To turn off, use --export=ALL,USE_MOE=0. 
+USE_MOE="${USE_MOE:-1}"
 
-# Debug: only 2 trials
-N_TRIALS_PER_WORKER=2
+# Trials per worker. Default is 2 for debugging.
+N_TRIALS_PER_WORKER="${N_TRIALS_PER_WORKER:-2}"
 
 # ── Build study name + journal path ───────────────────────────────────────────
 if [ "$USE_MOE" = "1" ]; then
