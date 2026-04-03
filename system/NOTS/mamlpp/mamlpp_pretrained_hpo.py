@@ -77,12 +77,24 @@ print(f"The current working directory is: {current_directory}")
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 
+# ── Collapse detection constants (MoE only) ──────────────────────────────────
+COLLAPSE_MAX_LOAD_THRESHOLD = 0.80
+COLLAPSE_PENALTY            = 0.0
+
 #############################################################
 
-def inject_model_config(config: dict, model_type: str):
+def inject_model_config(config: dict, model_type: str,
+                        cnn_base_filters: int = None,
+                        lstm_hidden: int = None):
     """
     Injects the exact architecture parameters used during pretraining.
     These MUST match pretrain_configs.py or the weights will fail to load.
+
+    cnn_base_filters / lstm_hidden:
+        When pretrain_approach == 'None' (no pretrained weights), these can be
+        freely HPO'd and should be passed in from the trial suggestion.
+        When loading pretrained weights they MUST match the checkpoint, so leave
+        them as None and the hardcoded defaults below will be used instead.
     """
     config["model_type"] = model_type
     config["sequence_length"] = 64
@@ -104,13 +116,17 @@ def inject_model_config(config: dict, model_type: str):
             "head_type": 'linear',
         })
     elif model_type == "DeepCNNLSTM":
+        # Use HPO'd values when provided (pretrain_approach == 'None'),
+        # otherwise fall back to hardcoded defaults that match the checkpoint.
+        _cnn_base_filters = cnn_base_filters if cnn_base_filters is not None else 32
+        _lstm_hidden      = lstm_hidden      if lstm_hidden      is not None else 64
         config.update({
             #"emg_base_cnn_filters": 32, "emg_cnn_layers": 3,
             #"imu_base_cnn_filters": 32, "imu_cnn_layers": 3,\
-            "cnn_base_filters": 32, "cnn_layers": 3,
+            "cnn_base_filters": _cnn_base_filters, "cnn_layers": 3,
             #"cnn_kernel_size": 5, "groupnorm_num_groups": 8,
             "cnn_kernel": 5, "gn_groups": 8,
-            "lstm_hidden": 64, "lstm_layers": 3, "bidirectional": True,
+            "lstm_hidden": _lstm_hidden, "lstm_layers": 3, "bidirectional": True,
             'head_type': 'mlp',
         })
     elif model_type == "TST":
@@ -188,16 +204,79 @@ def inject_model_config(config: dict, model_type: str):
         config["use_lstm"] = True 
         config["lstm_hidden"] = 128
         config["lstm_layers"] = 2
+
+        config["context_emb_dim"] = 32  #trial.suggest_categorical("context_emb_dim", [16, 24, 32, 64])
+        config["demo_emb_dim"] = 16  #trial.suggest_categorical("demo_emb_dim", [8, 16, 32, 64])
+        config["context_pool_type"] = 'mean'  #trial.suggest_categorical("context_pool_type", ['mean', 'attn']) 
     
     return config
+
+
+def _check_moe_collapse(history_or_logs: dict, num_experts: int) -> float | None:
+    """
+    Read max_expert_load from the last routing_report in a history/logs dict.
+    Tries several plausible key paths to be robust to RoutingAnalyzer changes.
+    Returns the max_load (0-1) if found, else None.
+
+    Args:
+        history_or_logs: history / logs dict returned by the trainer
+                         (e.g. pretrain_res_dict from mamlpp_pretrain).
+        num_experts: the number of experts used in this trial.
+    """
+    reports = history_or_logs.get("routing_reports", [])
+    if not reports:
+        return None
+    last = reports[-1]
+    for key in ("max_expert_load", "dominant_fraction", "max_load"):
+        if key in last:
+            return float(last[key])
+    lb = last.get("load_balance", {})
+    fracs = lb.get("expert_hard_fraction")
+    if fracs:
+        return float(max(fracs))   # max load across all experts
+    imbal = lb.get("hard_imbalance_ratio")
+    if imbal is not None:
+        # Convert imbalance ratio → approximate max fraction (ratio = max/min ≈ max * E)
+        # Better to use expert_hard_fraction directly, but this is a fallback
+        return float(imbal / (num_experts + imbal - 1))
+    return None
+
 
 # ===================== OPTUNA TUNING SCRIPT =====================
 # NOTE: This now takes model_type as a required input...
 def build_model_from_trial(trial, model_type, base_config=None):
     config = copy.deepcopy(base_config) if base_config else {}
 
+    # === MOE (Mixture of Experts) ===
+    # Set use_MOE to True to enable MoE routing on the backbone.
+    # Set use_MOE to False (or trial.suggest_categorical) to disable / sweep it.
+    config["use_MOE"] = True
+
+    # === Finetuning / Transfer Learning Strategy ===
+    # pretrain_approach unifies use_pretrained + best_or_last_pretr + finetuning_approach
+    # into a single axis. "None" skips weight loading entirely.
+    # "frozen_enc_*" variants raise NotImplementedError (require inner-loop plumbing).
+    config["pretrain_approach"] = "None"
+    # pretrained_model_filename: None = use per-model-type default checkpoint stem.
+    # Set to a string (e.g. "MetaCNNLSTM_03232026_170503") to load a specific run,
+    # e.g. a non-MOE checkpoint into a MOE model or vice-versa.
+    config["pretrained_model_filename"] = None  # override manually if needed
+
     # 1. Inject Architecture Constants
-    config = inject_model_config(config, model_type)
+    # When pretrain_approach == 'None' we can freely HPO arch params for DeepCNNLSTM.
+    # For all other pretrain_approach values, arch params must match the checkpoint
+    # so we pass None and let inject_model_config use the hardcoded defaults.
+    _using_pretrained = config["pretrain_approach"] != "None"
+    if model_type == "DeepCNNLSTM" and not _using_pretrained:
+        _cnn_base_filters = trial.suggest_categorical("cnn_base_filters", [32, 64, 96, 128])
+        _lstm_hidden      = trial.suggest_categorical("lstm_hidden",      [64, 128, 256, 512])
+    else:
+        # Cannot HPO arch params — must match the pretrained checkpoint
+        _cnn_base_filters = None
+        _lstm_hidden      = None
+    config = inject_model_config(config, model_type,
+                                 cnn_base_filters=_cnn_base_filters,
+                                 lstm_hidden=_lstm_hidden)
 
     # === Task Setup ===
     # NOTE: Running 1-shot 3-way for now. Final will be 1-shot 10-way... (harder...)
@@ -268,53 +347,47 @@ def build_model_from_trial(trial, model_type, base_config=None):
     # TODO: Is this GAP after the CNN or after the LSTM...
     config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
 
-    # === Finetuning / Transfer Learning Strategy ===
-    # pretrain_approach unifies use_pretrained + best_or_last_pretr + finetuning_approach
-    # into a single axis. "None" skips weight loading entirely.
-    # "frozen_enc_*" variants raise NotImplementedError (require inner-loop plumbing).
-    config["pretrain_approach"] = trial.suggest_categorical(
-        "pretrain_approach",
-        ["full_best", "full_last", "None", "enc_best", "enc_last"]
-        # "frozen_enc_best" and "frozen_enc_last" are not yet implemented — add when ready
-    )
-    # pretrained_model_filename: None = use per-model-type default checkpoint stem.
-    # Set to a string (e.g. "MetaCNNLSTM_03232026_170503") to load a specific run,
-    # e.g. a non-MOE checkpoint into a MOE model or vice-versa.
-    config["pretrained_model_filename"] = None  # override manually if needed
-
     # === Multimodal & Conditioning (Keeping these if you still use FiLM/Demo heads) ===
     # NOTE: Turning demographics off (wasnt used in pretraining)
     config["multimodal"] = True  # TODO: I dont know if this gets used at all anymore...
     config["use_imu"] = True 
     config["use_demographics"] = False
     config["use_film_x_demo"] = False  #trial.suggest_categorical("use_film_x_demo", [True, False])
-    config["FILM_on_context_or_demo"] = 'context'  # TODO: Is this currently used...
-    config["context_emb_dim"] = trial.suggest_categorical("context_emb_dim", [16, 24, 32, 64])
-    #config["demo_emb_dim"] = trial.suggest_categorical("demo_emb_dim", [8, 16, 32, 64])
-    config["context_pool_type"] = trial.suggest_categorical("context_pool_type", ['mean', 'attn'])  
+    config["FILM_on_context_or_demo"] = 'context'  # TODO: Is this currently used... 
 
     # === MOE (Mixture of Experts) ===
-    # Set use_MOE to trial.suggest_categorical if you want Optuna to decide
-    config["use_MOE"] = False 
     if config["use_MOE"]:
-        config["num_experts"] = trial.suggest_int("num_experts", 4, 8)
-        config["top_k"] = trial.suggest_int("top_k", 2, 4)
+        config["num_experts"]          = trial.suggest_int("num_experts", [10, 40])
+        # TODO: Should this be switched to dense? Outer/inner structure of MAML may break this if it isnt dense...
+        config["MOE_top_k"]            = trial.suggest_int("MOE_top_k", [1, 10])
+        config["top_k"]                = config["MOE_top_k"]  # Some modules read bare 'top_k'
+        config["MOE_placement"]        = trial.suggest_categorical("MOE_placement", ["encoder"])  # , "middle"
+        config["MOE_gate_temperature"] = trial.suggest_float("MOE_gate_temperature", 0.5, 10, log=True)
+        config["MOE_aux_coeff"]        = trial.suggest_float("MOE_aux_coeff", 0.01, 1.0, log=True)
+        config["MOE_ctx_out_dim"]      = trial.suggest_categorical("MOE_ctx_out_dim", [16, 32, 64, 128])
+        config["MOE_ctx_hidden_dim"]   = trial.suggest_categorical("MOE_ctx_hidden_dim", [32, 64, 128])
+        config["MOE_dropout"]          = trial.suggest_float("MOE_dropout", 0.0, 0.2)
+        config["MOE_expert_expand"]    = 1.0  #trial.suggest_float("MOE_expert_expand", 0.5, 1.5)  # Encoder MOE Only: expand the expert CNNs
+        config["MOE_mlp_hidden_mult"]  = 1.0 #trial.suggest_float("MOE_mlp_hidden_mult", 0.5, 2.0)  # Middle MOE Only: expand the expert MLPs
+        config["MOE_log_every"]        = 5
+        config["MOE_plot_dir"]         = None
+        # Legacy keys kept for compatibility with older modules
         config["gate_type"] = "context_feature_demo"
         config["expert_architecture"] = "MLP"
-        config["apply_MOE_aux_loss_inner_outer"] = "outer"  # trial.suggest_categorical("MOE_aux_loss_plcmt", ["outer", "inner", "both"])
+        config["apply_MOE_aux_loss_inner_outer"] = trial.suggest_categorical("MOE_aux_loss_plcmt", ["outer", "inner", "both"])
 
     config["use_label_shuf_meta_aug"] = True   # TODO: Really ought to explore ablating this...
     config["num_epochs"] = 50 
     config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [100, 150, 200, 250, 400, 500, 750])
     config["label_smooth"] = trial.suggest_categorical("label_smooth", [0.0, 0.05, 0.1, 0.15, 0.2])
 
-    config["num_total_users"] = 32  # TODO: Not sure if this is still used
+    #config["num_total_users"] = 32  # TODO: Not sure if this is still used
 
-    config["maml_gesture_classes"] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # NOTE: THIS IS GESTURE CLASS
-    config["target_trial_indices"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # NOTE: THIS IS GESTURE TRIAL/REPETITION NUM
+    config["maml_gesture_classes"] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # NOTE: THIS IS GESTURE CLASS (LABEL IDs)
+    config["target_trial_indices"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # NOTE: THIS IS GESTURE TRIAL/REPETITION NUM (These are not zero-based indices FYI... bad naming...)
 
     # Pretraining optim
-    config["optimizer"]          = trial.suggest_categorical("optimizer", ["adamw", "adam"])
+    config["optimizer"]          = "adam"  #trial.suggest_categorical("optimizer", ["adamw", "adam"])
     config["use_earlystopping"] = True
     config["earlystopping_patience"]= 8 #trial.suggest_int("pre_es_pat", 6, 14)
     config["earlystopping_min_delta"]= 0.005 #trial.suggest_float("pre_es_delta", 0.001, 0.01)
@@ -358,7 +431,11 @@ def build_model_from_trial(trial, model_type, base_config=None):
     # MODEL INITIALIZATION
     # =========================================================================
     if model_type in ["MetaCNNLSTM", "DeepCNNLSTM", "TST"]:
-        model = build_model(config)
+        if config["use_MOE"]:
+            from MOE.MOE_encoder import build_MOE_model
+            model = build_MOE_model(config)
+        else:
+            model = build_model(config)
     #elif model_type == "CNNLSTM":
     #    model = MultimodalCNNLSTMMOE(config)
     elif model_type == "ContrastiveNet": 
@@ -392,13 +469,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
         print(f"--> Loading pretrained weights for {model_type} "
               f"(approach={pretrain_approach}, model_filename={model_filename})...")
 
-        # TODO: This should pull it from the config....
-        #if config["NOTS"]:
-        #    pretrain_dir = Path(r"/projects/my13/kai/meta-pers-gest/pers-gest-cls/pretrain_outputs/checkpoints/")
-        #else:
-        #    pretrain_dir = Path(r"C:\Users\kdmen\Repos\pers-gest-cls\pretrain_outputs\checkpoints")
         pretrain_dir = config['pretrain_dir']
-
         # Build the checkpoint path (use model_filename override if provided)
         if model_filename is not None:
             load_path = str(Path(pretrain_dir) / f"{model_filename}_{best_or_last}.pt")
@@ -514,6 +585,16 @@ def objective(trial, model_type):
 
         print(f"[Trial {trial.number} | Fold {fold_idx}] Pretraining done. Best val acc = {best_val_acc:.4f}")
 
+        # ---- MoE collapse detection ----
+        if config.get("use_MOE", False):
+            max_load = _check_moe_collapse(pretrain_res_dict, num_experts=config["num_experts"])
+            trial.set_user_attr("final_max_expert_load",
+                                max_load if max_load is not None else -1.0)
+            if max_load is not None and max_load > COLLAPSE_MAX_LOAD_THRESHOLD:
+                print(f"  [Trial {trial.number} | Fold {fold_idx}] MoE COLLAPSED "
+                      f"(max_load={max_load:.2f}). Penalising.")
+                return COLLAPSE_PENALTY
+
         model_filename = f"trial_{trial.number}_fold_{fold_idx}_best.pt"
         save_path = os.path.join(models_save_dir, model_filename)
         torch.save({
@@ -597,7 +678,7 @@ def run_study(study_name, storage_path, model_type, n_trials=1):
 if __name__ == "__main__":
     # --- Parse Command Line Args ---
     parser = argparse.ArgumentParser(description="Run MAML++ HPO for a specific model architecture.")
-    parser.add_argument("--model_type", type=str, default="TST", 
+    parser.add_argument("--model_type", type=str, default="DeepCNNLSTM", 
                         choices=["MetaCNNLSTM", "DeepCNNLSTM", "TST", "ContrastiveNet", "MOE"],
                         help="Which model architecture to optimize hyperparameters for.")
     parser.add_argument("--data_dir", type=str)
@@ -614,7 +695,7 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(FIXED_SEED)
     
     # Create a unique database and study name per model architecture!
-    study_name = f"mamlpp_pretr_{args.model_type}_2fcv_hpo"
+    study_name = f"mamlpp_MOE_NumExp_{args.model_type}_2fcv_hpo"
     journal_path = os.path.join(db_dir, f"{study_name}.log")
 
     print(f"Starting HPO Study: {study_name}")

@@ -97,8 +97,8 @@ DEFAULT_USER_SPLIT = {
 
 HPO_AUG_DEFAULTS = {
     "augment":       True,
-    "aug_noise_std": 0.05,  # TODO: ... is this fine for EMG? We are mean=0 std=1 so maybe this doesnt need to be tuned to the signal? Not sure...
-    "aug_max_shift": 4,  # TODO: I have no idea what this is doing
+    "aug_noise_std": 0.05,  # This is fine for EMG since we normalized already
+    "aug_max_shift": 4,  # ie ring buffer up to 4 indices
     "aug_ch_drop":   0.05,
 }
 
