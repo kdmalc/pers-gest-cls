@@ -70,7 +70,7 @@ else
     MOE_FLAG=""
 fi
 
-STUDY_NAME="pretrain_hpo_${MODEL}${MOE_SUFFIX}"
+STUDY_NAME="pretr_hpo_NumExpSweep_${MODEL}${MOE_SUFFIX}"
 JOURNAL_PATH="${OPTUNA_DB_DIR}/${STUDY_NAME}.log"
 TENSOR_DICT="${DATA_DIR}/segfilt_rts_tensor_dict.pkl" 
 

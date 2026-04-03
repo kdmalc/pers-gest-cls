@@ -80,7 +80,7 @@ COLLAPSE_PENALTY            = 0.0
 
 # ── Fixed study constants ─────────────────────────────────────────────────────
 FIXED_SEED  = 42
-NUM_EXPERTS = 4
+#NUM_EXPERTS = 4
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Default user / rep split (fold 0)
@@ -97,8 +97,8 @@ DEFAULT_USER_SPLIT = {
 
 HPO_AUG_DEFAULTS = {
     "augment":       True,
-    "aug_noise_std": 0.05,
-    "aug_max_shift": 4,
+    "aug_noise_std": 0.05,  # TODO: ... is this fine for EMG? We are mean=0 std=1 so maybe this doesnt need to be tuned to the signal? Not sure...
+    "aug_max_shift": 4,  # TODO: I have no idea what this is doing
     "aug_ch_drop":   0.05,
 }
 
@@ -109,10 +109,10 @@ HPO_AUG_DEFAULTS = {
 def _suggest_training_hps(trial: optuna.Trial) -> dict:
     """HPs common to CNN-LSTM models: lr, wd, dropout, label smooth, batch size."""
     return {
-        "learning_rate": trial.suggest_float("learning_rate", 1e-4, 5e-3, log=True),
+        "learning_rate": trial.suggest_float("learning_rate", 1e-4, 1e-3, log=True),
         "weight_decay":  trial.suggest_float("weight_decay",  1e-5, 1e-2, log=True),
-        "dropout":       trial.suggest_float("dropout",       0.0,  0.4,  step=0.05),
-        "label_smooth":  trial.suggest_float("label_smooth",  0.0,  0.2,  step=0.05),
+        "dropout":       trial.suggest_float("dropout",       0.0,  0.3,  step=0.05),
+        "label_smooth":  trial.suggest_float("label_smooth",  0.0,  0.2),  #,  step=0.05),
         "batch_size":    trial.suggest_categorical("batch_size", [32, 64, 128]),
         "optimizer":     trial.suggest_categorical("optimizer",  ["adamw", "adam"]),
     }
@@ -126,19 +126,22 @@ def _suggest_moe_hps(trial: optuna.Trial) -> dict:
     use different conventions (MOE_encoder.py uses UPPER, pretrain_trainer.py
     uses lower, and one line reads the bare 'top_k' key).
     """
-    placement   = trial.suggest_categorical("MOE_placement",      ["encoder", "middle"])
-    gate_temp   = trial.suggest_float("MOE_gate_temperature",     0.5, 8.0, log=True)
-    aux_coeff   = trial.suggest_float("MOE_aux_coeff",            1e-4, 1.0, log=True)
+    placement   = trial.suggest_categorical("MOE_placement",      ["encoder"])  # , "middle" --> Encoder mogs thankfully
+    gate_temp   = trial.suggest_float("MOE_gate_temperature",     0.5, 50, log=True)
+    aux_coeff   = trial.suggest_float("MOE_aux_coeff",            0.01, 1.0, log=True)
     ctx_out_dim = trial.suggest_categorical("MOE_ctx_out_dim",    [16, 32, 64, 128])
     ctx_hidden  = trial.suggest_categorical("MOE_ctx_hidden_dim", [32, 64, 128])
-    moe_dropout = trial.suggest_float("MOE_dropout",              0.0, 0.3)
+    moe_dropout = trial.suggest_float("MOE_dropout",              0.0, 0.2)
     expert_exp  = trial.suggest_float("MOE_expert_expand",        0.5, 1.5)
     mlp_mult    = trial.suggest_float("MOE_mlp_hidden_mult",      0.5, 2.0)
+    moe_top_k   = trial.suggest_categorical("MOE_top_k", [1, 2, 3, 5, 8, 10])  # TODO: is Nonetype an acceptable HPO input... I feel like probably not...
+    # NOTE: Also, if we were to use Nonetype, we might train through up to 120 experts which seems suboptimal
+
+    num_experts = trial.suggest_categorical("num_experts", [10, 16, 20, 24, 32, 40, 50, 60, 75, 90, 100, 120])
 
     return {
         "use_MOE":              True,
-        "num_experts":          NUM_EXPERTS,
-        # snake_case (pretrain_configs / pretrain_trainer)
+        "num_experts":          num_experts,
         "MOE_placement":        placement,
         "MOE_gate_temperature": gate_temp,
         "MOE_aux_coeff":        aux_coeff,
@@ -147,18 +150,10 @@ def _suggest_moe_hps(trial: optuna.Trial) -> dict:
         "MOE_dropout":          moe_dropout,
         "MOE_expert_expand":    expert_exp,
         "MOE_mlp_hidden_mult":  mlp_mult,
-        "MOE_top_k":            None,   # dense routing, fixed
-        "top_k":                None,   # pretrain_trainer.py line 144 reads this key
-        # UPPER_case (MOE_encoder.py)
-        "MOE_placement":        placement,
-        "MOE_gate_temperature": gate_temp,
-        "MOE_aux_coeff":        aux_coeff,
-        "MOE_ctx_out_dim":      ctx_out_dim,
-        "MOE_ctx_hidden_dim":   ctx_hidden,
-        "MOE_dropout":          moe_dropout,
-        "MOE_expert_expand":    expert_exp,
-        "MOE_mlp_hidden_mult":  mlp_mult,
-        "MOE_top_k":            None,   # dense routing, fixed
+        # TODO: Unify to a single top_k var...
+        # TODO: We should tune over top_k...
+        "MOE_top_k":            moe_top_k,   # dense routing, fixed
+        "top_k":                moe_top_k,   # pretrain_trainer.py line 144 reads this key
         # Routing analysis (RoutingCollector already in pretrain_trainer.py)
         "MOE_log_every":        5,
         "MOE_plot_dir":         None,
@@ -179,11 +174,15 @@ def _fixed_training_schedule() -> dict:
     }
 
 
-def _check_moe_collapse(history_or_logs: dict) -> float | None:
+def _check_moe_collapse(history_or_logs: dict, num_experts: int) -> float | None:
     """
     Read max_expert_load from the last routing_report in a history/logs dict.
     Tries several plausible key paths to be robust to RoutingAnalyzer changes.
     Returns the max_load (0-1) if found, else None.
+
+    Args:
+        history_or_logs: history dict from pretrain() or logs dict from contrastive_train().
+        num_experts: the number of experts used in this trial (formerly the NUM_EXPERTS global).
     """
     reports = history_or_logs.get("routing_reports", [])
     if not reports:
@@ -200,7 +199,7 @@ def _check_moe_collapse(history_or_logs: dict) -> float | None:
     if imbal is not None:
         # Convert imbalance ratio → approximate max fraction (ratio = max/min ≈ max * E)
         # Better to use expert_hard_fraction directly, but this is a fallback
-        return float(imbal / (NUM_EXPERTS + imbal - 1))
+        return float(imbal / (num_experts + imbal - 1))
     return None
 
 
@@ -220,7 +219,7 @@ def objective_metacnnlstm(trial: optuna.Trial, tensor_dict: dict,
         "device":        device,
         "lstm_hidden":   trial.suggest_categorical("lstm_hidden",   [64, 128, 256]),
         "cnn_filters":   trial.suggest_categorical("cnn_filters",   [32, 64, 128]),
-        "bidirectional": trial.suggest_categorical("bidirectional", [True, False]),
+        "bidirectional": False,  #trial.suggest_categorical("bidirectional", [True, False]),
         "head_type":     "linear",
         "use_MOE":       False,
     }
@@ -236,7 +235,7 @@ def objective_metacnnlstm(trial: optuna.Trial, tensor_dict: dict,
     val_acc = float(history.get("best_val_acc", 0.0))
 
     if use_moe:
-        max_load = _check_moe_collapse(history)
+        max_load = _check_moe_collapse(history, num_experts=config["num_experts"])
         trial.set_user_attr("final_max_expert_load", max_load if max_load is not None else -1.0)
         if max_load is not None and max_load > COLLAPSE_MAX_LOAD_THRESHOLD:
             print(f"  [Trial {trial.number}] MoE COLLAPSED (max_load={max_load:.2f}). Penalising.")
@@ -259,9 +258,9 @@ def objective_deepcnnlstm(trial: optuna.Trial, tensor_dict: dict,
         **_suggest_training_hps(trial),
         **_fixed_training_schedule(),
         "device":           device,
-        "cnn_base_filters": trial.suggest_categorical("cnn_base_filters", [32, 64]),
-        "lstm_hidden":      trial.suggest_categorical("lstm_hidden",      [64, 128, 256]),
-        "bidirectional":    trial.suggest_categorical("bidirectional",    [True, False]),
+        "cnn_base_filters": trial.suggest_categorical("cnn_base_filters", [32, 64, 96, 128]),
+        "lstm_hidden":      trial.suggest_categorical("lstm_hidden",      [64, 128, 256, 512]),
+        "bidirectional":    True,  #trial.suggest_categorical("bidirectional",    [True, False]),
         "head_type":        trial.suggest_categorical("head_type",        ["linear", "mlp"]),
         "use_MOE":          False,
     }
@@ -277,7 +276,7 @@ def objective_deepcnnlstm(trial: optuna.Trial, tensor_dict: dict,
     val_acc = float(history.get("best_val_acc", 0.0))
 
     if use_moe:
-        max_load = _check_moe_collapse(history)
+        max_load = _check_moe_collapse(history, num_experts=config["num_experts"])
         trial.set_user_attr("final_max_expert_load", max_load if max_load is not None else -1.0)
         if max_load is not None and max_load > COLLAPSE_MAX_LOAD_THRESHOLD:
             print(f"  [Trial {trial.number}] MoE COLLAPSED (max_load={max_load:.2f}). Penalising.")
@@ -403,9 +402,11 @@ def objective_contrastivenet(trial: optuna.Trial, tensor_dict: dict,
     config.update({
         "learning_rate":     trial.suggest_float("learning_rate", 1e-4, 5e-3, log=True),
         "weight_decay":      trial.suggest_float("weight_decay",  1e-5, 1e-2, log=True),
-        "dropout":           trial.suggest_float("dropout",        0.0,  0.4,  step=0.05),
+        "dropout":           trial.suggest_float("dropout",        0.0,  0.3,  step=0.05),
         "optimizer":         trial.suggest_categorical("optimizer", ["adamw", "adam"]),
         "batch_construction": "balanced",
+        # TODO: What is samples_per_class? I remember it is different from n_way... I think
+        # I couldnt even find where these are called --> They should be in contrastive, not generic pretraining...
         "samples_per_class": trial.suggest_categorical("samples_per_class", [4, 6, 8]),
         "classes_per_batch": trial.suggest_categorical("classes_per_batch", [6, 8, 10]),
     })
@@ -462,7 +463,7 @@ def objective_contrastivenet(trial: optuna.Trial, tensor_dict: dict,
     trial.set_user_attr("best_val_1nn_acc", val_acc)
 
     if use_moe:
-        max_load = _check_moe_collapse(logs)
+        max_load = _check_moe_collapse(logs, num_experts=config["num_experts"])
         trial.set_user_attr("final_max_expert_load",
                             max_load if max_load is not None else -1.0)
         if max_load is not None and max_load > COLLAPSE_MAX_LOAD_THRESHOLD:
@@ -604,7 +605,7 @@ if __name__ == "__main__":
     print(f"Trials  : {args.n_trials} (this worker)")
     print(f"Device  : {device}")
     if args.use_moe:
-        print(f"Experts : {NUM_EXPERTS} (fixed, dense routing, top_k=None)")
+        print(f"Experts : tuned via Optuna (dense routing, top_k=None)")
         print(f"Collapse: >{COLLAPSE_MAX_LOAD_THRESHOLD:.0%} max expert load → penalised")
     print(f"{'='*65}\n")
 
