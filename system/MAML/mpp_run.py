@@ -419,6 +419,7 @@ def build_model(config: dict) -> nn.Module:
                         verbose               = True,
                     )
                 else:
+                    # TODO: Need to edit this to make full and encoder are not the same...
                     # Standard transfer.
                     # Always strip the classification/projection head regardless of scope,
                     # since the MAML head is freshly initialised for N-way classification.

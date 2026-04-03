@@ -426,6 +426,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
                 else:
                     state_dict = checkpoint
 
+                # TODO: Need to edit this to make full and encoder are not the same...
                 def _keep_key(k: str, enc_only: bool) -> bool:
                     if "head" in k or "projector" in k:
                         return False  # always drop classification/projection head
