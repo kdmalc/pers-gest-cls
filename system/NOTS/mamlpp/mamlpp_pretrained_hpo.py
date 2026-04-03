@@ -357,9 +357,9 @@ def build_model_from_trial(trial, model_type, base_config=None):
 
     # === MOE (Mixture of Experts) ===
     if config["use_MOE"]:
-        config["num_experts"]          = trial.suggest_int("num_experts", [10, 40])
+        config["num_experts"]          = trial.suggest_int("num_experts", 10, 40)
         # TODO: Should this be switched to dense? Outer/inner structure of MAML may break this if it isnt dense...
-        config["MOE_top_k"]            = trial.suggest_int("MOE_top_k", [1, 10])
+        config["MOE_top_k"]            = trial.suggest_int("MOE_top_k", 1, 10)
         config["top_k"]                = config["MOE_top_k"]  # Some modules read bare 'top_k'
         config["MOE_placement"]        = trial.suggest_categorical("MOE_placement", ["encoder"])  # , "middle"
         config["MOE_gate_temperature"] = trial.suggest_float("MOE_gate_temperature", 0.5, 10, log=True)
