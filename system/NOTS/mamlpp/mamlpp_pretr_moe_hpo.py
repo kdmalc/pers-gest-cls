@@ -36,7 +36,7 @@ Environment variables (same as all other scripts)
 N_TRIALS   = 15
 FIXED_SEED = 42
 
-import os, sys, copy, json, time, random, warnings
+import os, sys, copy, json, time, random, warnings, pickle
 import argparse
 from collections import defaultdict
 from datetime import datetime
@@ -68,6 +68,11 @@ if torch.cuda.is_available():
     print(f"GPU      : {torch.cuda.get_device_name(0)}")
 
 RUN_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── Tensor dict path (pretraining data) ───────────────────────────────────────
+TENSOR_DICT_PATH = (
+    CODE_DIR / "dataset" / "meta-learning-sup-que-ds" / "segfilt_rts_tensor_dict.pkl"
+)
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 
@@ -374,7 +379,13 @@ def run_pretraining(model_type: str) -> Path:
     from system.pretraining.pretrain_data_pipeline import get_pretrain_dataloaders
     from system.pretraining.pretrain_trainer import pretrain
 
-    train_dl, val_dl, n_classes = get_pretrain_dataloaders(cfg, tensor_dict=None)
+    print(f"[Phase 1] Loading tensor dict from: {TENSOR_DICT_PATH}")
+    with open(TENSOR_DICT_PATH, "rb") as _f:
+        _raw = pickle.load(_f)
+    tensor_dict = _raw["data"] if "data" in _raw else _raw
+    print(f"[Phase 1] Tensor dict loaded — {len(tensor_dict)} subjects.")
+
+    train_dl, val_dl, n_classes = get_pretrain_dataloaders(cfg, tensor_dict=tensor_dict)
     print(f"[Phase 1] DataLoaders ready | n_classes={n_classes}")
 
     # pretrain() returns (model_with_best_weights_loaded, history_dict).
