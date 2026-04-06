@@ -50,7 +50,7 @@ echo "  model_type : DeepCNNLSTM  (DeepCNNLSTM + MoE encoder)"
 echo "  RUN_DIR    : $RUN_DIR"
 echo "──────────────────────────────────────────────"
 
-python -u "$CODE_DIR/NOTS/mamlpp/mamlpp_pretr_moe_hpo.py" \
+python -u "$CODE_DIR/system/NOTS/mamlpp/mamlpp_pretr_moe_hpo.py" \
     --model_type DeepCNNLSTM
 
 echo "JOB_END date=$(date)"
