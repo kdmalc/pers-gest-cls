@@ -345,12 +345,45 @@ def run_pretraining(model_type: str) -> Path:
     print()
 
     # ── Run pretraining loop ──────────────────────────────────────────────────
-    # Calls the same pretraining function used in the standalone pretrain scripts.
-    from system.pretraining import pretrain_model
-    pretrain_res = pretrain_model(model, cfg)
+    # pretrain_trainer.pretrain() expects: (model, train_dl, val_dl, config, save_path).
+    # get_pretrain_dataloaders() expects the config dict to contain the split PIDs
+    # (train_PIDs / val_PIDs) and standard training keys (batch_size, num_workers, …).
+    #
+    # Early-stopping keys used by pretrain_trainer.py:
+    #   use_early_stopping  (bool)
+    #   es_patience         (int)
+    #   es_min_delta        (float)
+    # The PRETRAIN_HPS dict uses different names, so we map them here explicitly
+    # rather than touching PRETRAIN_HPS (which would change the HPO interface).
+    cfg["use_early_stopping"] = cfg.pop("use_earlystopping",       True)
+    cfg["es_patience"]        = cfg.pop("earlystopping_patience",  PRETRAIN_HPS["pretrain_es_patience"])
+    cfg["es_min_delta"]       = cfg.pop("earlystopping_min_delta", PRETRAIN_HPS["pretrain_es_min_delta"])
 
-    best_state   = pretrain_res["best_state"]
-    best_val_acc = pretrain_res["best_val_acc"]
+    # pretrain_trainer also reads 'grad_clip', 'use_scheduler', 'warmup_epochs'.
+    # Provide sensible defaults if not already present.
+    cfg.setdefault("grad_clip",      5.0)
+    cfg.setdefault("use_scheduler",  True)
+    cfg.setdefault("warmup_epochs",  5)
+    cfg.setdefault("use_amp",        False)
+
+    from system.pretraining.pretrain_data_pipeline import get_pretrain_dataloaders
+    from system.pretraining.pretrain_trainer import pretrain
+
+    train_dl, val_dl, n_classes = get_pretrain_dataloaders(cfg, tensor_dict=None)
+    print(f"[Phase 1] DataLoaders ready | n_classes={n_classes}")
+
+    # pretrain() returns (model_with_best_weights_loaded, history_dict).
+    # 'history' contains: train_loss, val_loss, val_acc, best_val_loss,
+    #                      best_val_acc, best_epoch, routing_reports.
+    # The model is already restored to its best state before pretrain() returns,
+    # so best_state == model.state_dict() at this point.
+    model, history = pretrain(model, train_dl, val_dl, cfg, save_path=None)
+
+    best_state   = copy.deepcopy(model.state_dict())
+    best_val_acc = float(history.get("best_val_acc", 0.0))
+
+    # Expose the same keys the collapse-checker and checkpoint code expect
+    pretrain_res = history          # history IS the logs dict for _check_moe_collapse
 
     # ── MoE collapse check (exits immediately if collapsed) ───────────────────
     max_load = _check_moe_collapse(pretrain_res, num_experts=cfg["num_experts"])
@@ -367,9 +400,10 @@ def run_pretraining(model_type: str) -> Path:
         "model_state_dict": best_state,
         "config":           cfg,
         "best_val_acc":     best_val_acc,
-        "train_loss_log":   pretrain_res.get("train_loss_log", []),
-        "val_loss_log":     pretrain_res.get("val_loss_log", []),
-        "val_acc_log":      pretrain_res.get("val_acc_log", []),
+        # pretrain_trainer.py stores these under 'train_loss'/'val_loss'/'val_acc'
+        "train_loss_log":   pretrain_res.get("train_loss", pretrain_res.get("train_loss_log", [])),
+        "val_loss_log":     pretrain_res.get("val_loss",   pretrain_res.get("val_loss_log",   [])),
+        "val_acc_log":      pretrain_res.get("val_acc",    pretrain_res.get("val_acc_log",    [])),
         "routing_reports":  pretrain_res.get("routing_reports", []),
     }, ckpt_best)
 
