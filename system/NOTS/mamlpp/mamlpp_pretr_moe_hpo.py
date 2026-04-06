@@ -90,9 +90,6 @@ with open(USER_SPLIT_JSON, "r") as _f:
 
 NUM_FOLDS = 1   # single fold for this experiment
 
-# =============================================================================
-# ██╗  ██╗██████╗     ██████╗ ██╗ ██████╗████████╗██╗ ██████╗ ███╗   ██╗ █████╗ ██████╗ ██╗   ██╗
-# =============================================================================
 #
 # All HPs are fixed from prior HPO studies.  Rationale for each value is given
 # inline.  Architecture params marked ★ MUST MATCH THE PRETRAINED CHECKPOINT ★
