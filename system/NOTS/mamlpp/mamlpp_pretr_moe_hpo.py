@@ -105,7 +105,9 @@ ARCH = dict(
     cnn_base_filters  = 128,    # pretraining HPO: 128 best
     cnn_layers        = 3,
     cnn_kernel        = 5,
-    gn_groups         = 4,      # MAML HPO: 4 used more; 8 is fine too
+    # TODO: should this be groupnorm_num_groups or gn_groups???
+    #gn_groups         = 4,      # MAML HPO: 4 used more; 8 is fine too
+    groupnorm_num_groups = 4, 
     lstm_hidden       = 128,    # pretraining & MAML HPO: 128 best; 64/512 bad
     lstm_layers       = 3,
     bidirectional     = True,
@@ -312,6 +314,11 @@ def run_pretraining(model_type: str) -> Path:
     cfg = _make_base_config()
     _inject_arch(cfg)
 
+    # NOTE: Otherwise missing?
+    cfg['train_reps']             = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # INTRA: [1, 2, 3, 4, 5, 6, 7, 8],
+    cfg['val_reps']               = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # INTRA: [9, 10],
+    cfg['num_val_episodes']       = 10  # This is MAML only I think
+
     # Pretraining-specific HPs
     cfg["learning_rate"]           = PRETRAIN_HPS["pretrain_lr"]
     cfg["weight_decay"]            = PRETRAIN_HPS["pretrain_weight_decay"]
@@ -400,8 +407,8 @@ def run_pretraining(model_type: str) -> Path:
         "model_state_dict": best_state,
         "config":           cfg,
         "best_val_acc":     best_val_acc,
-        # pretrain_trainer.py stores these under 'train_loss'/'val_loss'/'val_acc'
         "train_loss_log":   pretrain_res.get("train_loss", pretrain_res.get("train_loss_log", [])),
+        "train_acc_log":   pretrain_res.get("train_acc", pretrain_res.get("train_acc_log", [])),
         "val_loss_log":     pretrain_res.get("val_loss",   pretrain_res.get("val_loss_log",   [])),
         "val_acc_log":      pretrain_res.get("val_acc",    pretrain_res.get("val_acc_log",    [])),
         "routing_reports":  pretrain_res.get("routing_reports", []),
