@@ -111,7 +111,7 @@ def inject_model_config(config: dict, model_type: str,
             # emg_base_cnn_filters, imu_base_cnn_filters
             # cnn_kernel_size, groupnorm_num_groups
             "cnn_filters": 32, "emg_cnn_layers": 1, "imu_cnn_layers": 1,
-            "cnn_kernel": 5, "gn_groups": 8,
+            "cnn_kernel": 5, "groupnorm_num_groups": 8,
             "lstm_hidden": 32, "lstm_layers": 1, "bidirectional": False,
             "head_type": 'linear',
         })
@@ -125,7 +125,7 @@ def inject_model_config(config: dict, model_type: str,
             #"imu_base_cnn_filters": 32, "imu_cnn_layers": 3,\
             "cnn_base_filters": _cnn_base_filters, "cnn_layers": 3,
             #"cnn_kernel_size": 5, "groupnorm_num_groups": 8,
-            "cnn_kernel": 5, "gn_groups": 8,
+            "cnn_kernel": 5, "groupnorm_num_groups": 8,
             "lstm_hidden": _lstm_hidden, "lstm_layers": 3, "bidirectional": True,
             'head_type': 'mlp',
         })

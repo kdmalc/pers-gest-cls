@@ -105,9 +105,7 @@ ARCH = dict(
     cnn_base_filters  = 128,    # pretraining HPO: 128 best
     cnn_layers        = 3,
     cnn_kernel        = 5,
-    # TODO: should this be groupnorm_num_groups or gn_groups???
-    #gn_groups         = 4,      # MAML HPO: 4 used more; 8 is fine too
-    groupnorm_num_groups = 4, 
+    groupnorm_num_groups = 4,   # MAML HPO: 4 used more; 8 is fine too
     lstm_hidden       = 128,    # pretraining & MAML HPO: 128 best; 64/512 bad
     lstm_layers       = 3,
     bidirectional     = True,

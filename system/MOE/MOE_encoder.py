@@ -296,7 +296,7 @@ class MetaCNNLSTM_EncoderMOE(nn.Module):
         use_imu  = config.get("use_imu", False)
         n_filt   = config["cnn_filters"]
         k        = config["cnn_kernel"]
-        gn_grps  = config.get("gn_groups", 8)
+        gn_grps  = config.get("groupnorm_num_groups", 8)
         lstm_h   = config["lstm_hidden"]
         n_way    = config["n_way"]
         drop     = config.get("dropout", 0.0)
@@ -454,7 +454,7 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         base_f   = config["cnn_base_filters"]
         n_layers = config.get("cnn_layers", 3)
         k        = config["cnn_kernel"]
-        gn_grps  = config["gn_groups"]
+        gn_grps  = config["groupnorm_num_groups"]
         lstm_h   = config["lstm_hidden"]
         n_way    = config["n_way"]
         drop     = config.get("dropout", 0.2)
@@ -590,7 +590,7 @@ class MetaCNNLSTM_MiddleMOE(nn.Module):
         use_imu  = config.get("use_imu", False)
         n_filt   = config["cnn_filters"]
         k        = config["cnn_kernel"]
-        gn_grps  = config.get("gn_groups", 8)
+        gn_grps  = config.get("groupnorm_num_groups", 8)
         lstm_h   = config["lstm_hidden"]
         n_way    = config["n_way"]
         drop     = config.get("dropout", 0.0)
@@ -735,7 +735,7 @@ class DeepCNNLSTM_MiddleMOE(nn.Module):
         base_f   = config["cnn_base_filters"]
         n_layers = config.get("cnn_layers", 3)
         k        = config["cnn_kernel"]
-        gn_grps  = config["gn_groups"]
+        gn_grps  = config["groupnorm_num_groups"]
         lstm_h   = config["lstm_hidden"]
         n_way    = config["n_way"]
         drop     = config.get("dropout", 0.2)
