@@ -318,12 +318,12 @@ def run_pretraining(model_type: str) -> Path:
     _inject_arch(cfg)
 
     # ── CRITICAL: pretraining head must cover ALL classes, not MAML n_way ──
+    # NOTE: For pretraining, we do NOT want to pretrain 3-way, we want to overwrite and pretrain 10-way
     cfg["n_way"] = cfg["num_classes"]   # = 10, overrides the MAML task n_way=3
 
     # NOTE: Otherwise missing?
     cfg['train_reps']             = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # INTRA: [1, 2, 3, 4, 5, 6, 7, 8],
     cfg['val_reps']               = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # INTRA: [9, 10],
-    #cfg['num_val_episodes']       = 10  # This is MAML only I think
 
     # Pretraining-specific HPs
     cfg["learning_rate"]           = PRETRAIN_HPS["pretrain_lr"]
