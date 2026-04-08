@@ -1,43 +1,5 @@
 #!/bin/bash
-# ==============================================================================
-# Unified HPO launcher — works for any mamlpp/*_hpo.py script.
-#
-# USAGE (single job / debug):
-#   sbatch --job-name=mpp-pr-d \
-#          --partition=debug \
-#          --time=00:15:00 \
-#          --mem=30G \
-#          --export=ALL,HPO_SCRIPT=mamlpp/mamlpp_pretrained_hpo.py,SCRIPT_ARGS="--model_type TST" \
-#          mpp-hpo.slurm
-#
-# USAGE (production array, e.g. 10 trials):
-#   sbatch --job-name=mpp-pr-hpo \
-#          --partition=commons \
-#          --time=10:00:00 \
-#          --mem=30G \
-#          --array=0-9 \
-#          --export=ALL,HPO_SCRIPT=mamlpp/mamlpp_pretrained_hpo.py,SCRIPT_ARGS="--model_type TST" \
-#          mpp-hpo.slurm
-#
-# USAGE (MoE two-phase, single job, no array):
-#   sbatch --job-name=mpp-moe-pretr \
-#          --partition=commons \
-#          --time=12:00:00 \
-#          --mem=32G \
-#          --export=ALL,HPO_SCRIPT=mamlpp/mamlpp_pretr_moe_hpo.py,SCRIPT_ARGS="--model_type DeepCNNLSTM" \
-#          mpp-hpo.slurm
-#
-# Required env var (via --export):
-#   HPO_SCRIPT   : path to the hpo .py file, relative to $CODE_DIR/system/NOTS/
-#
-# Optional env var (via --export):
-#   SCRIPT_ARGS  : any extra CLI args forwarded verbatim to the python script
-#                  (default: empty string)
-#
-# All SBATCH resource directives (#SBATCH --partition, --time, --mem, --array,
-# etc.) are intentionally omitted here — pass them all at the sbatch call site
-# so this file never needs editing.
-# ==============================================================================
+# Unified HPO launcher — works for any *_hpo.py script.
 
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -76,12 +38,12 @@ export PYTHONPATH="$CODE_DIR:$MAML_DIR:$MOE_DIR:${PYTHONPATH:-}"
 
 # RUN_DIR: unique per trial if this is an array job, otherwise per job.
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
-    export RUN_DIR=/scratch/my13/kai/runs/logs/${SLURM_JOB_NAME}/trial_${SLURM_ARRAY_TASK_ID}
+    export RUN_DIR=/scratch/my13/kai/runs/paper/logs/${SLURM_JOB_NAME}/trial_${SLURM_ARRAY_TASK_ID}
 else
-    export RUN_DIR=/scratch/my13/kai/runs/${SLURM_JOB_NAME}_${SLURM_JOB_ID}
+    export RUN_DIR=/scratch/my13/kai/runs/paper/${SLURM_JOB_NAME}_${SLURM_JOB_ID}
 fi
 mkdir -p "$RUN_DIR"
-mkdir -p /scratch/my13/kai/logs
+mkdir -p /scratch/my13/kai/runs/paper/logs
 
 # ---------- 4) Diagnostics ----------------------------------------------------
 echo "===== Environment Diagnostics ====="
