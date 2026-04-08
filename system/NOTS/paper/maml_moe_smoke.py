@@ -253,11 +253,6 @@ def build_model_single_run(model_type: str, base_config: dict = None) -> tuple:
         _apply_overrides(hp, ABLATION_OVERRIDES)
         print()
 
-    # ── Fixed / non-HPO settings ──────────────────────────────────────────────
-    config["use_MOE"]             = True
-    config["pretrain_approach"]   = "None"
-    config["pretrained_model_filename"] = None
-
     # Architecture
     config = inject_model_config(
         config, model_type,
@@ -268,6 +263,9 @@ def build_model_single_run(model_type: str, base_config: dict = None) -> tuple:
     # override with the HPO'd centroid value.
     config["groupnorm_num_groups"] = hp["groupnorm_num_groups"]
 
+    config["use_MOE"]             = True
+    config["pretrain_approach"]   = "None"
+    config["pretrained_model_filename"] = None
     # Task
     config["n_way"]        = 3
     config["k_shot"]       = 1
@@ -492,6 +490,13 @@ if __name__ == "__main__":
         "--fold_idx", type=int, default=0,
         help="Which cross-validation fold to use (0-indexed).",
     )
+    parser.add_argument(
+    "--overrides", type=str, default="{}",
+    help=(
+        'JSON string of ablation overrides, e.g.: '
+        '--overrides \'{"maml_inner_steps": 5, "num_epochs": 3}\''
+    ),
+)
     args = parser.parse_args()
 
     # Seed everything for reproducibility
@@ -502,5 +507,7 @@ if __name__ == "__main__":
     torch.manual_seed(FIXED_SEED)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(FIXED_SEED)
+
+    ABLATION_OVERRIDES = json.loads(args.overrides)
 
     run_single(model_type=args.model_type, fold_idx=args.fold_idx)
