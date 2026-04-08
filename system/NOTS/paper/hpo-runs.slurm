@@ -6,6 +6,7 @@
 #SBATCH --cpus-per-task=10
 #SBATCH --gres=gpu:1
 #SBATCH --export=ALL
+#SBATCH --output=/scratch/my13/kai/paper/logs/%x_%A_%a.out
 
 echo "JOB_START host=$(hostname) date=$(date) jobid=${SLURM_JOB_ID} array_task=${SLURM_ARRAY_TASK_ID:-none}"
 
