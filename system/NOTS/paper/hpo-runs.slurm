@@ -6,6 +6,7 @@
 #SBATCH --cpus-per-task=10
 #SBATCH --gres=gpu:1
 #SBATCH --export=ALL
+# This --output control where the slurm.outs go
 #SBATCH --output=/scratch/my13/kai/paper/logs/%x_%A_%a.out
 
 echo "JOB_START host=$(hostname) date=$(date) jobid=${SLURM_JOB_ID} array_task=${SLURM_ARRAY_TASK_ID:-none}"
@@ -62,6 +63,7 @@ echo "==================================="
 # ---------- 5) Launch ---------------------------------------------------------
 echo "CWD: $(pwd)"
 # shellcheck disable=SC2086  # SCRIPT_ARGS is intentionally word-split here
+# This --out-dir controls where the checkpoints and such from Python go
 python -u "$CODE_DIR/system/NOTS/paper/${HPO_SCRIPT}" \
     --data_dir "$DATA_DIR" \
     --out_dir  "$RUN_DIR" \
