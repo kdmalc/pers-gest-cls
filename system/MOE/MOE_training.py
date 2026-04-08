@@ -22,15 +22,18 @@ def apply_dropout_flag(mod, enabled):
 def _to_device(x, device):
     return x.to(device) if torch.is_tensor(x) else x
 
-def _model_forward_router(model, batch, device, multimodal: bool):
+def _model_forward_router(model, batch, device, multimodal: bool, config: dict = None):
     """
     Returns: (logits_or_tuple, labels_tensor, batch_size)
     - If `multimodal` is True we call model with named args.
-      Otherwise we call model(features) like the old path. --> This is quite old and can probably be removed...
+      Otherwise we call model(features) like the old path.
+    
+    Args:
+        config: if provided, used to validate that batch contents match
+                use_imu / use_demographics flags. Pass it in — silent
+                mismatches between config and batch are a common bug source.
     """
-    # Dict batch (new or old)
     if isinstance(batch, dict):
-        # labels
         labels = batch['labels']
         if labels is None:
             raise KeyError("Batch missing 'labels' key.")
@@ -39,12 +42,24 @@ def _model_forward_router(model, batch, device, multimodal: bool):
 
         if multimodal:
             emg = _to_device(batch["emg"], device)
-            # TODO: Is this how I want to handle this if IMU / DEMO are missing... not sure... fail quietly...
-            # TODO: pass in config and then add print outs if demo or imu (or emg) are empty/None but use_imu/etc are turned on
-            # NOTE: These should NOT be pulling use_imu and use_demographic (not directly anyways); batch['imu'] is its own thing
-            imu = _to_device(batch["imu"], device) if batch.get("imu", None) is not None else None
-            demo = _to_device(batch["demo"], device) if batch.get("demo", None) is not None else None
-            #pids = _to_device(batch["PIDs"], device) if batch.get("PIDs", None) is not None else None
+
+            imu = batch.get("imu", None)
+            if config is not None and config.get("use_imu", False):
+                if imu is None:
+                    raise ValueError(
+                        "config has use_imu=True but batch['imu'] is None or missing. "
+                        "Check your dataloader — IMU data is not being packed into the batch."
+                    )
+            imu = _to_device(imu, device) if imu is not None else None
+
+            demo = batch.get("demo", None)
+            if config is not None and config.get("use_demographics", False):
+                if demo is None:
+                    raise ValueError(
+                        "config has use_demographics=True but batch['demo'] is None or missing. "
+                        "Check your dataloader — demographics are not being packed into the batch."
+                    )
+            demo = _to_device(demo, device) if demo is not None else None
 
             outputs = model(
                 x_emg=emg,
@@ -53,13 +68,10 @@ def _model_forward_router(model, batch, device, multimodal: bool):
             )
             return outputs, labels, B
         else:
-            # Unimodal (EMG-only) legacy path (old MOE or other single-input models)
             x = _to_device(batch["emg"], device)
-            # TODO: Should this be logits, aux?
             outputs = model(x)
             return outputs, labels, B
 
-    # Tuple/list batch (legacy)
     if isinstance(batch, (list, tuple)) and len(batch) == 2:
         x, labels = batch
         x = _to_device(x, device)

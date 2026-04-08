@@ -12,7 +12,7 @@ import sys
 import os
 # This finds the 'system' directory (one level up from 'pretraining') and adds it to the search path.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from MOE.MOE_training import _model_forward_router, set_MOE_optimizer, SmoothedEarlyStopping
+from MOE.MOE_training import _model_forward_router, set_MOE_optimizer, SmoothedEarlyStopping, _to_device
 from MAML.shared_maml import *
 from MOE.MOE_encoder import dense_MOE_aux_loss as _dense_MOE_aux_loss
 from MOE.MOE_encoder import topk_MOE_aux_loss  as _topk_MOE_aux_loss
@@ -231,42 +231,48 @@ def _normalize_step_item(step_item):
     raise TypeError(f"Episode item must be dict or list of dicts.")
 
 
-def _model_forward_router_MOE(fmodel, batch, device, multimodal=True):
+def _model_forward_router_MOE(fmodel, batch, device, multimodal=True, config=None):
     """
     Like _model_forward_router but requests routing info from MOE models.
 
     Returns (outputs, labels, B, routing_info).
-    routing_info is None for non-MOE models or if the model doesn't return it.
-
-    This works through FunctionalModel because torch.func.functional_call
-    passes **kwargs through to the underlying module's forward().
+    routing_info is None if the model doesn't return it.
     """
-    # Reuse existing router to extract (emg, imu, labels) from the batch dict
-    # Then call with return_routing=True
-    try:
-        emg    = batch['emg'].to(device)
-        labels = batch['labels'].to(device)
-        imu    = batch.get('imu')
-        if imu is not None and multimodal:
-            imu = imu.to(device)
-        else:
-            imu = None
+    labels = batch['labels']
+    if labels is None:
+        raise KeyError("Batch missing 'labels' key.")
+    labels = _to_device(labels.long(), device)
 
-        B = emg.size(0)
-        out = fmodel(emg, imu, return_routing=True)
+    emg = _to_device(batch["emg"], device)
 
-        if isinstance(out, tuple) and len(out) == 2 and isinstance(out[1], dict):
-            logits, routing_info = out
-        else:
-            logits = out[0] if isinstance(out, tuple) else out
-            routing_info = None
+    imu = batch.get("imu", None)
+    if config is not None and config.get("use_imu", False):
+        if imu is None:
+            raise ValueError(
+                "config has use_imu=True but batch['imu'] is None or missing. "
+                "Check your dataloader — IMU data is not being packed into the batch."
+            )
+    imu = _to_device(imu, device) if (imu is not None and multimodal) else None
 
-        return (logits,), labels, B, routing_info
+    demo = batch.get("demo", None)
+    if config is not None and config.get("use_demographics", False):
+        if demo is None:
+            raise ValueError(
+                "config has use_demographics=True but batch['demo'] is None or missing. "
+                "Check your dataloader — demographics are not being packed into the batch."
+            )
+    demo = _to_device(demo, device) if demo is not None else None
 
-    except Exception:
-        # Fallback: non-MOE path via original router
-        outputs, labels, B = _model_forward_router(fmodel, batch, device, multimodal=multimodal)
-        return outputs, labels, B, None
+    B = emg.size(0)
+    out = fmodel(x_emg=emg, x_imu=imu, demographics=demo, return_routing=True)
+
+    if isinstance(out, tuple) and len(out) == 2 and isinstance(out[1], dict):
+        logits, routing_info = out
+    else:
+        logits = out[0] if isinstance(out, tuple) else out
+        routing_info = None
+
+    return (logits,), labels, B, routing_info
 
 # -----------------------------
 # One epoch of MAML++ training: ie batched inner loops followed by one outer loop
@@ -709,12 +715,12 @@ def mamlpp_adapt_and_eval(model, config, support_batch, query_batch, debug=False
     # --- Pre-adaptation sanity check ---
     if debug:
         device = next(model.parameters()).device
-        s_emg  = support_batch["emg"].to(device)   # [S, T, C]
-        q_emg  = query_batch["emg"].to(device)     # [Q, T, C]
+        multimodal = config.get("use_imu", False)
+
+        s_emg    = support_batch["emg"].to(device)
+        q_emg    = query_batch["emg"].to(device)
         q_labels = query_batch["labels"].to(device)
 
-        # Support/query leakage check — vectorized over all pairs
-        # diffs: [Q, S] — max absolute difference across all time steps and channels
         diffs = (q_emg.float().unsqueeze(1) - s_emg.float().unsqueeze(0)).abs().amax(dim=(-2, -1))
         leaking_pairs = (diffs < 1e-5).nonzero(as_tuple=False)
         assert leaking_pairs.numel() == 0, \
@@ -722,11 +728,15 @@ def mamlpp_adapt_and_eval(model, config, support_batch, query_batch, debug=False
 
         model.eval()
         with torch.no_grad():
-            pre_adapt_logits = model(q_emg)
+            fmodel = FunctionalModel(model, named_param_dict(model))
+            outputs, labels, B = _model_forward_router(
+                fmodel, query_batch, device, multimodal=multimodal, config=config
+            )
+            pre_adapt_logits = outputs[0] if isinstance(outputs, tuple) else outputs
             pre_adapt_preds  = pre_adapt_logits.argmax(dim=-1)
             pre_adapt_acc    = (pre_adapt_preds == q_labels).float().mean().item()
         print(f"  [Debug] Pre-adaptation acc: {pre_adapt_acc:.4f}")
-        model.train()  # restore for MAML inner loop / RNN grads
+        model.train()
 
     # 1. Adapt
     theta_prime = mamlpp_adapt(model, config, support_batch)
