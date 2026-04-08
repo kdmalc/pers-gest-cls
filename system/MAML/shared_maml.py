@@ -47,10 +47,9 @@ def meta_evaluate(model, episodic_loader, config, adapt_and_eval_fn):
             if metrics.get("pre_adapt_acc") is not None:
                 pre_adapt_accs.append(metrics["pre_adapt_acc"])
 
-        if pre_adapt_accs:
-            arr = np.array(pre_adapt_accs)
-            print(f"  [Debug] Pre-adapt acc: {arr.mean():.4f} ± {arr.std():.4f}  "
-                f"(min={arr.min():.4f}, max={arr.max():.4f}, n={len(arr)})")
+    if pre_adapt_accs:
+        arr = np.array(pre_adapt_accs)
+        print(f"  [Debug] Pre-adapt acc: {arr.mean():.4f} ± {arr.std():.4f}  (n={len(arr)})")
 
     return {
         "loss": total_loss / max(n_eps, 1),
