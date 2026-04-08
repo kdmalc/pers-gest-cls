@@ -1,0 +1,107 @@
+#!/bin/bash
+# ==============================================================================
+# Unified HPO launcher — works for any mamlpp/*_hpo.py script.
+#
+# USAGE (single job / debug):
+#   sbatch --job-name=mpp-pr-d \
+#          --partition=debug \
+#          --time=00:15:00 \
+#          --mem=30G \
+#          --export=ALL,HPO_SCRIPT=mamlpp/mamlpp_pretrained_hpo.py,SCRIPT_ARGS="--model_type TST" \
+#          mpp-hpo.slurm
+#
+# USAGE (production array, e.g. 10 trials):
+#   sbatch --job-name=mpp-pr-hpo \
+#          --partition=commons \
+#          --time=10:00:00 \
+#          --mem=30G \
+#          --array=0-9 \
+#          --export=ALL,HPO_SCRIPT=mamlpp/mamlpp_pretrained_hpo.py,SCRIPT_ARGS="--model_type TST" \
+#          mpp-hpo.slurm
+#
+# USAGE (MoE two-phase, single job, no array):
+#   sbatch --job-name=mpp-moe-pretr \
+#          --partition=commons \
+#          --time=12:00:00 \
+#          --mem=32G \
+#          --export=ALL,HPO_SCRIPT=mamlpp/mamlpp_pretr_moe_hpo.py,SCRIPT_ARGS="--model_type DeepCNNLSTM" \
+#          mpp-hpo.slurm
+#
+# Required env var (via --export):
+#   HPO_SCRIPT   : path to the hpo .py file, relative to $CODE_DIR/system/NOTS/
+#
+# Optional env var (via --export):
+#   SCRIPT_ARGS  : any extra CLI args forwarded verbatim to the python script
+#                  (default: empty string)
+#
+# All SBATCH resource directives (#SBATCH --partition, --time, --mem, --array,
+# etc.) are intentionally omitted here — pass them all at the sbatch call site
+# so this file never needs editing.
+# ==============================================================================
+
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=10
+#SBATCH --gres=gpu:1
+#SBATCH --export=ALL
+
+echo "JOB_START host=$(hostname) date=$(date) jobid=${SLURM_JOB_ID} array_task=${SLURM_ARRAY_TASK_ID:-none}"
+
+# ---------- Validate required inputs ------------------------------------------
+if [[ -z "${HPO_SCRIPT:-}" ]]; then
+    echo "ERROR: HPO_SCRIPT env var is not set. Pass it via --export, e.g.:" >&2
+    echo "  --export=ALL,HPO_SCRIPT=mamlpp/mamlpp_pretrained_hpo.py" >&2
+    exit 1
+fi
+
+SCRIPT_ARGS="${SCRIPT_ARGS:-}"
+
+# ---------- 1) Environment modules --------------------------------------------
+source /etc/profile.d/modules.sh
+module purge
+module load Mamba/23.11.0-0
+
+source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/conda.sh
+source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/mamba.sh
+
+# ---------- 2) Activate env ---------------------------------------------------
+mamba activate /projects/my13/kai/meta-pers-gest/envs/fl-torch
+
+# ---------- 3) Paths ----------------------------------------------------------
+export CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
+export DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
+export MAML_DIR="$CODE_DIR/system/MAML"
+export MOE_DIR="$CODE_DIR/system/MOE"
+export PYTHONPATH="$CODE_DIR:$MAML_DIR:$MOE_DIR:${PYTHONPATH:-}"
+
+# RUN_DIR: unique per trial if this is an array job, otherwise per job.
+if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
+    export RUN_DIR=/scratch/my13/kai/runs/logs/${SLURM_JOB_NAME}/trial_${SLURM_ARRAY_TASK_ID}
+else
+    export RUN_DIR=/scratch/my13/kai/runs/${SLURM_JOB_NAME}_${SLURM_JOB_ID}
+fi
+mkdir -p "$RUN_DIR"
+mkdir -p /scratch/my13/kai/logs
+
+# ---------- 4) Diagnostics ----------------------------------------------------
+echo "===== Environment Diagnostics ====="
+echo "Host      : $(hostname)"
+echo "HPO_SCRIPT: ${HPO_SCRIPT}"
+echo "SCRIPT_ARGS: ${SCRIPT_ARGS}"
+echo "RUN_DIR   : ${RUN_DIR}"
+which python
+python -c "import torch; print(f'PyTorch: {torch.__version__}  CUDA: {torch.version.cuda}  GPU: {torch.cuda.is_available()}')"
+python -c "import sys; print('sys.prefix:', sys.prefix)"
+python -c "import numpy as np; print('numpy:', np.__version__)"
+nvidia-smi || true
+echo "==================================="
+
+# ---------- 5) Launch ---------------------------------------------------------
+echo "CWD: $(pwd)"
+# shellcheck disable=SC2086  # SCRIPT_ARGS is intentionally word-split here
+python -u "$CODE_DIR/system/NOTS/paper/${HPO_SCRIPT}" \
+    --data_dir "$DATA_DIR" \
+    --out_dir  "$RUN_DIR" \
+    $SCRIPT_ARGS
+
+echo "JOB_END date=$(date)"

@@ -1,0 +1,20 @@
+How to call the new slurm files:
+
+# 100 trials (100 array jobs × 1 trial each)
+export HPO_SCRIPT="1s3w_maml_moe_hpo.py"
+export SCRIPT_ARGS="--model_type DeepCNNLSTM"
+sbatch \
+  --job-name=mpp-moe-pretr \
+  --partition=commons \
+  --time=12:00:00 \
+  --mem=32G \
+  --array=0-99 \
+  --output=/scratch/my13/kai/runs/paper/logs/%x_%j_%a.out \
+  hpo-runs.slurm
+
+########################################################
+
+# Debug run (1 trial, debug partition)
+export HPO_SCRIPT="1s3w_maml_moe_hpo.py"
+export SCRIPT_ARGS="--model_type DeepCNNLSTM"
+sbatch hpo-runs-d.slurm
