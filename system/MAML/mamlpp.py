@@ -6,6 +6,7 @@ import torch.nn as nn
 import numpy as np
 import time
 import torch.nn.functional as F
+from functools import partial
 
 import sys
 import os
@@ -422,22 +423,23 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
 
 # -----------------------------
 # Pretrain: this handles the full training (ie all epochs for inner and outer loops)
+## This is just the MAML training stage
 # -----------------------------
 def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=None):
     device = config["device"]
     model.to(device)
 
-    use_MOE       = config.get('use_MOE', False)
-    MOE_log_every = int(config.get('MOE_log_every', 5))
-    MOE_plot_dir  = config.get('MOE_plot_dir', None)
-    num_experts   = int(config.get('num_experts', 4))
-    model_name    = config.get('model_type', 'Model')
+    use_MOE       = config['use_MOE']
+    MOE_log_every = int(config['MOE_log_every'])
+    MOE_plot_dir  = config['MOE_plot_dir']
+    num_experts   = int(config['num_experts'])
+    model_name    = config['model_type']
 
     meta_opt = set_MOE_optimizer(
         model,
         lr=float(config["learning_rate"]),
-        use_weight_decay=float(config.get("weight_decay", 0)) > 0.0,
-        weight_decay=float(config.get("weight_decay", 0)),
+        use_weight_decay=float(config["weight_decay"]) > 0.0,
+        weight_decay=float(config["weight_decay"]),
         optimizer_name=config["optimizer"],
     )
 
@@ -480,7 +482,11 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         # Val
         if episodic_val_loader is not None:
             val_start_time = time.time()
-            val_metrics = meta_evaluate(model, episodic_val_loader, config, mamlpp_adapt_and_eval)
+            if ep < 2:
+                adapt_fn = partial(mamlpp_adapt_and_eval, debug=True)
+                val_metrics = meta_evaluate(model, episodic_val_loader, config, adapt_fn)
+            else:
+                val_metrics = meta_evaluate(model, episodic_val_loader, config, mamlpp_adapt_and_eval)
             cur_val_loss, cur_val_acc = val_metrics["loss"], val_metrics["acc"]
             val_loss_log.append(cur_val_loss)
             val_acc_log.append(cur_val_acc)
@@ -698,21 +704,41 @@ def mamlpp_predict_with_params(model, adapted_params, batch, config):
     
     return logits, preds, labels, B
 
-def mamlpp_adapt_and_eval(model, config, support_batch, query_batch):
-    # 1. Adapt (Will set model to TRAIN mode)
+def mamlpp_adapt_and_eval(model, config, support_batch, query_batch, debug=False):
+
+    # --- Pre-adaptation sanity check ---
+    if debug:
+        q_emg    = query_batch["emg"].to(next(model.parameters()).device)
+        q_labels = query_batch["labels"].to(next(model.parameters()).device)
+        
+        # Support/query leakage check — compare sample-level data, not just indices
+        s_emg = support_batch["emg"]
+        for i, qe in enumerate(q_emg):
+            for j, se in enumerate(s_emg):
+                assert not torch.allclose(qe.float(), se.float()), \
+                    f"Query sample {i} is identical to support sample {j} — data leakage!"
+        
+        model.eval()
+        with torch.no_grad():
+            pre_adapt_logits = model(q_emg)
+            pre_adapt_preds  = pre_adapt_logits.argmax(dim=-1)
+            pre_adapt_acc    = (pre_adapt_preds == q_labels).float().mean().item()
+        print(f"  [Debug] Pre-adaptation acc: {pre_adapt_acc:.4f}")
+        model.train()  # restore for RNN grads
+
+    # 1. Adapt
     theta_prime = mamlpp_adapt(model, config, support_batch)
     
-    # 2. Predict (Will set model to EVAL mode)
+    # 2. Predict
     logits, preds, labels, B = mamlpp_predict_with_params(model, theta_prime, query_batch, config)
 
     label_smooth = float(config["label_smooth"])
     criterion = nn.CrossEntropyLoss(label_smoothing=label_smooth) if label_smooth > 0 else nn.CrossEntropyLoss()
     
     q_loss = criterion(logits, labels).item()
-    acc = (preds == labels).sum().item() / max(1, B)
+    acc    = (preds == labels).sum().item() / B  # Don't mask real errors with max(1,B)
 
-    # NOTE: theta_prime is not used by the rest of the code, and I think it returns the entire computational graph each time this func is called...
-    return {"loss": q_loss, "acc": acc}#, "adapted_params": theta_prime}
+    return {"loss": q_loss, "acc": acc}
 
 def compute_meta_batch_alignment(task_gradients_list):
     """

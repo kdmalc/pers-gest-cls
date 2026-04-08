@@ -326,7 +326,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
 
     # DEBUG
     config["track_gradient_alignment"] = False
-    config["verbose"] = False
+    config["debug_verbose"] = False
     config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
     config['num_eval_episodes'] = 10
     config['debug_one_user_only'] = False
