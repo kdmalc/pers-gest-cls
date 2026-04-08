@@ -4,9 +4,9 @@ How to call the new slurm files:
 export HPO_SCRIPT="1s3w_maml_moe_hpo.py"
 export SCRIPT_ARGS="--model_type DeepCNNLSTM"
 sbatch \
-  --job-name=mpp-moe-pretr \
+  --job-name=maml-moe-hpo \
   --partition=commons \
-  --time=12:00:00 \
+  --time=20:00:00 \
   --mem=32G \
   --array=0-99 \
   --output=/scratch/my13/kai/runs/paper/logs/%x_%j_%a.out \
