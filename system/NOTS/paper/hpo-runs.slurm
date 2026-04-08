@@ -8,7 +8,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --export=ALL
 # This --output control where the slurm.outs go
-#SBATCH --output=/scratch/my13/kai/paper/logs/%x_%A_%a.out
+#SBATCH --output=/scratch/my13/kai/runs/paper/logs/%x_%A_%a.out
 
 echo "JOB_START host=$(hostname) date=$(date) jobid=${SLURM_JOB_ID} array_task=${SLURM_ARRAY_TASK_ID:-none}"
 
@@ -68,6 +68,8 @@ echo "CWD: $(pwd)"
 python -u "$CODE_DIR/system/NOTS/paper/${HPO_SCRIPT}" \
     --data_dir "$DATA_DIR" \
     --out_dir  "$RUN_DIR" \
+    # Note that as long as OVERRIDES is not set in the env (CLI) then this wont have any affect on the other runs
+    ${OVERRIDES:+--overrides "$OVERRIDES"} \
     $SCRIPT_ARGS
 
 echo "JOB_END date=$(date)"
