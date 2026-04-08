@@ -1,6 +1,3 @@
-N_TRIALS = int(os.environ.get("N_TRIALS", 100))
-FIXED_SEED = 42
-
 # =============================================================================
 # WARM-START CONFIGURATION
 # =============================================================================
@@ -23,6 +20,8 @@ WARM_START_PARAMS: list[dict] = [
 ]
 
 import os
+N_TRIALS = int(os.environ.get("N_TRIALS", 100))
+FIXED_SEED = 42
 import argparse
 import copy, json, time
 from datetime import datetime
