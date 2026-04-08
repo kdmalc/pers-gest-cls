@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 
 def meta_evaluate(model, episodic_loader, config, adapt_and_eval_fn):
     """
@@ -7,6 +8,7 @@ def meta_evaluate(model, episodic_loader, config, adapt_and_eval_fn):
     """
     model.train() # Requirement for RNN gradients
     total_loss = total_correct = total_count = n_eps = 0
+    pre_adapt_accs = []
 
     step_counter = 0
     ep_counter = 0
@@ -41,6 +43,14 @@ def meta_evaluate(model, episodic_loader, config, adapt_and_eval_fn):
             total_correct += (metrics["acc"] * q_size)
             total_count += q_size
             n_eps += 1
+
+            if metrics.get("pre_adapt_acc") is not None:
+                pre_adapt_accs.append(metrics["pre_adapt_acc"])
+
+        if pre_adapt_accs:
+            arr = np.array(pre_adapt_accs)
+            print(f"  [Debug] Pre-adapt acc: {arr.mean():.4f} ± {arr.std():.4f}  "
+                f"(min={arr.min():.4f}, max={arr.max():.4f}, n={len(arr)})")
 
     return {
         "loss": total_loss / max(n_eps, 1),

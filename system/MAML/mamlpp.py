@@ -466,6 +466,15 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
     routing_reports = []
     num_epochs = int(config["num_epochs"])
 
+    # Epoch 0 baseline: before ANY MAML training
+    if episodic_val_loader is not None:
+        print("=== Epoch 0 Baseline (before ANY MAML training) ===")
+        val_start = time.time()
+        adapt_fn = partial(mamlpp_adapt_and_eval, debug=True)
+        val_metrics = meta_evaluate(model, episodic_val_loader, config, adapt_fn)
+        print(f"Epoch 0 val loss/acc: {val_metrics['loss']:.4f}, {val_metrics['acc']*100:.2f}%")
+        print(f"Epoch 0 val completed in {time.time()-val_start:.2f}s")
+
     for ep in range(1, num_epochs + 1):
         print(f"MAML++ Pretraining: Epoch {ep} of {num_epochs}")
         epoch_start_time = time.time()
@@ -488,7 +497,7 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         # Val
         if episodic_val_loader is not None:
             val_start_time = time.time()
-            if ep < 2:
+            if ep < 2:  # This only triggers on the first epoch (we start with epoch 1 FYI)
                 adapt_fn = partial(mamlpp_adapt_and_eval, debug=True)
                 val_metrics = meta_evaluate(model, episodic_val_loader, config, adapt_fn)
             else:
@@ -711,20 +720,19 @@ def mamlpp_predict_with_params(model, adapted_params, batch, config):
     return logits, preds, labels, B
 
 def mamlpp_adapt_and_eval(model, config, support_batch, query_batch, debug=False):
+    pre_adapt_acc = None
 
-    # --- Pre-adaptation sanity check ---
     if debug:
         device = next(model.parameters()).device
         multimodal = config.get("use_imu", False)
-
-        s_emg    = support_batch["emg"].to(device)
         q_emg    = query_batch["emg"].to(device)
         q_labels = query_batch["labels"].to(device)
+        s_emg    = support_batch["emg"].to(device)
 
         diffs = (q_emg.float().unsqueeze(1) - s_emg.float().unsqueeze(0)).abs().amax(dim=(-2, -1))
         leaking_pairs = (diffs < 1e-5).nonzero(as_tuple=False)
         assert leaking_pairs.numel() == 0, \
-            f"Support/query leakage! Identical (query_idx, support_idx) pairs: {leaking_pairs.tolist()}"
+            f"Support/query leakage! Pairs: {leaking_pairs.tolist()}"
 
         model.eval()
         with torch.no_grad():
@@ -733,24 +741,20 @@ def mamlpp_adapt_and_eval(model, config, support_batch, query_batch, debug=False
                 fmodel, query_batch, device, multimodal=multimodal, config=config
             )
             pre_adapt_logits = outputs[0] if isinstance(outputs, tuple) else outputs
-            pre_adapt_preds  = pre_adapt_logits.argmax(dim=-1)
-            pre_adapt_acc    = (pre_adapt_preds == q_labels).float().mean().item()
-        print(f"  [Debug] Pre-adaptation acc: {pre_adapt_acc:.4f}")
+            pre_adapt_acc = (pre_adapt_logits.argmax(dim=-1) == q_labels).float().mean().item()
         model.train()
 
-    # 1. Adapt
+    # Adapt
     theta_prime = mamlpp_adapt(model, config, support_batch)
-    
-    # 2. Predict
+    # Predict
     logits, preds, labels, B = mamlpp_predict_with_params(model, theta_prime, query_batch, config)
 
     label_smooth = float(config["label_smooth"])
     criterion = nn.CrossEntropyLoss(label_smoothing=label_smooth) if label_smooth > 0 else nn.CrossEntropyLoss()
-    
     q_loss = criterion(logits, labels).item()
-    acc    = (preds == labels).sum().item() / B  # Don't mask real errors with max(1,B)
+    acc    = (preds == labels).sum().item() / B
 
-    return {"loss": q_loss, "acc": acc}
+    return {"loss": q_loss, "acc": acc, "pre_adapt_acc": pre_adapt_acc}
 
 def compute_meta_batch_alignment(task_gradients_list):
     """
