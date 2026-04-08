@@ -279,6 +279,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
     # For all other pretrain_approach values, arch params must match the checkpoint
     # so we pass None and let inject_model_config use the hardcoded defaults.
     _using_pretrained = config["pretrain_approach"] != "None"
+    # TODO: So... we arent HPOing at all over cnn_base_filters? ... okay... probably worth testing more than 128...
     if model_type == "DeepCNNLSTM" and not _using_pretrained:
         # v1 trend: 128 best for cnn_base_filters, 128 best for lstm_hidden → fixed.
         _cnn_base_filters = 128
@@ -379,12 +380,13 @@ def build_model_from_trial(trial, model_type, base_config=None):
     # === MOE (Mixture of Experts) ===
     if config["use_MOE"]:
         # v1: peaked ~32, uptick at 100/120 → expand range to resolve the open right tail.
-        config["num_experts"]          = trial.suggest_int("num_experts", 24, 200)
+        ## I think it takes too much memory to test more than like 80 (maybe even 60...) experts...
+        config["num_experts"]          = trial.suggest_categorical("num_experts", [20, 24, 30, 32, 36, 40, 44, 48, 50, 56, 60, 64])
         # v1: 8-10 all good, never tested above 10 → open the right tail.
         # Enforce top_k < num_experts // 2 to avoid trivially dense routing.
-        _num_experts = config["num_experts"]
-        _top_k_max = max(5, min(20, _num_experts // 2 - 1))
-        config["MOE_top_k"]            = trial.suggest_int("MOE_top_k", 5, _top_k_max)
+        #_num_experts = config["num_experts"]
+        #_top_k_max = max(5, min(20, _num_experts // 2 - 1))
+        config["MOE_top_k"]            = trial.suggest_int("MOE_top_k", 5, 20)
         config["top_k"]                = config["MOE_top_k"]
         # v1: encoder only → fixed.
         config["MOE_placement"]        = "encoder"
