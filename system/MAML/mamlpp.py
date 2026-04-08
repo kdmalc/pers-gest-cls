@@ -708,23 +708,25 @@ def mamlpp_adapt_and_eval(model, config, support_batch, query_batch, debug=False
 
     # --- Pre-adaptation sanity check ---
     if debug:
-        q_emg    = query_batch["emg"].to(next(model.parameters()).device)
-        q_labels = query_batch["labels"].to(next(model.parameters()).device)
-        
-        # Support/query leakage check — compare sample-level data, not just indices
-        s_emg = support_batch["emg"]
-        for i, qe in enumerate(q_emg):
-            for j, se in enumerate(s_emg):
-                assert not torch.allclose(qe.float(), se.float()), \
-                    f"Query sample {i} is identical to support sample {j} — data leakage!"
-        
+        device = next(model.parameters()).device
+        s_emg  = support_batch["emg"].to(device)   # [S, T, C]
+        q_emg  = query_batch["emg"].to(device)     # [Q, T, C]
+        q_labels = query_batch["labels"].to(device)
+
+        # Support/query leakage check — vectorized over all pairs
+        # diffs: [Q, S] — max absolute difference across all time steps and channels
+        diffs = (q_emg.float().unsqueeze(1) - s_emg.float().unsqueeze(0)).abs().amax(dim=(-2, -1))
+        leaking_pairs = (diffs < 1e-5).nonzero(as_tuple=False)
+        assert leaking_pairs.numel() == 0, \
+            f"Support/query leakage! Identical (query_idx, support_idx) pairs: {leaking_pairs.tolist()}"
+
         model.eval()
         with torch.no_grad():
             pre_adapt_logits = model(q_emg)
             pre_adapt_preds  = pre_adapt_logits.argmax(dim=-1)
             pre_adapt_acc    = (pre_adapt_preds == q_labels).float().mean().item()
         print(f"  [Debug] Pre-adaptation acc: {pre_adapt_acc:.4f}")
-        model.train()  # restore for RNN grads
+        model.train()  # restore for MAML inner loop / RNN grads
 
     # 1. Adapt
     theta_prime = mamlpp_adapt(model, config, support_batch)
