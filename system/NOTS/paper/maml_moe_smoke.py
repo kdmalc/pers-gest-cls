@@ -494,9 +494,11 @@ if __name__ == "__main__":
     "--overrides", type=str, default="{}",
     help=(
         'JSON string of ablation overrides, e.g.: '
-        '--overrides \'{"maml_inner_steps": 5, "num_epochs": 3}\''
-    ),
-)
+        '--overrides \'{"maml_inner_steps": 5, "num_epochs": 3}\''),
+    )
+    # NOTE: Smoke accepts these arugments but doesnt do anything with them... why do we not use them lol
+    parser.add_argument("--data_dir", type=str)
+    parser.add_argument("--out_dir",  type=str)
     args = parser.parse_args()
 
     # Seed everything for reproducibility

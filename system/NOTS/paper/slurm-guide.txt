@@ -22,12 +22,11 @@ sbatch hpo-runs-d.slurm
 ########################################################
 
 # SMOKE TEST
+export HPO_SCRIPT="maml_moe_smoke.py"
+export SCRIPT_ARGS="--model_type DeepCNNLSTM --overrides '{\"maml_inner_steps\": 5}'"
 sbatch \
   --job-name=maml-moe-smoke \
   --partition=commons \
   --time=20:00:00 \
   --mem=32G \
-  --gres=gpu:1 \
-  --output=/scratch/my13/kai/runs/paper/logs/smoke_%j.out \
-  --export=ALL \
-  --wrap="python maml_moe_smoke.py --model_type DeepCNNLSTM --overrides '{\"maml_inner_steps\": 3, \"num_epochs\": 5, \"episodes_per_epoch_train\": 50}'"
+  hpo-runs.slurm
