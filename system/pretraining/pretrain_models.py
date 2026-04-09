@@ -78,7 +78,7 @@ class MetaCNNLSTM(nn.Module):
         use_imu  = config.get('use_imu', False)
         n_filt   = config['cnn_filters']       # e.g. 64
         k        = config['cnn_kernel']        # e.g. 3
-        gn_grps  = config.get('gn_groups', 8)
+        gn_grps  = config.get('groupnorm_num_groups', 8)
         lstm_h   = config['lstm_hidden']       # e.g. 128
         n_way    = config['n_way']
         drop     = config.get('dropout', 0.0)
@@ -203,7 +203,7 @@ class DeepCNNLSTM(nn.Module):
         base_f    = config['cnn_base_filters']    # e.g. 32
         n_layers  = config.get('cnn_layers', 3)   # 3 conv layers
         k         = config['cnn_kernel']
-        gn_groups = config['gn_groups']
+        gn_groups = config['groupnorm_num_groups']
         lstm_h    = config['lstm_hidden']
         n_way     = config['n_way']
         drop      = config.get('dropout', 0.2)
