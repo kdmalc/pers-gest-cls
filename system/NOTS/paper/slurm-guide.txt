@@ -1,6 +1,9 @@
 How to call the new slurm files:
 
-# 100 trials (100 array jobs × 1 trial each)
+########################################################
+
+# HPO 100 TRIALS (100 array jobs × 1 trial each)
+
 export HPO_SCRIPT="1s3w_maml_moe_hpo.py"
 export SCRIPT_ARGS="--model_type DeepCNNLSTM"
 sbatch \
@@ -14,7 +17,8 @@ sbatch \
 
 ########################################################
 
-# Debug run (1 trial, debug partition)
+# HPO DEBUG RUN (1 trial, debug partition)
+
 export HPO_SCRIPT="1s3w_maml_moe_hpo.py"
 export SCRIPT_ARGS="--model_type DeepCNNLSTM"
 sbatch hpo-runs-d.slurm
@@ -22,6 +26,7 @@ sbatch hpo-runs-d.slurm
 ########################################################
 
 # SMOKE TEST
+
 export HPO_SCRIPT="maml_moe_smoke.py"
 export OVERRIDES='{"maml_inner_steps": 5}'
 export SCRIPT_ARGS="--model_type DeepCNNLSTM"
@@ -32,3 +37,28 @@ sbatch \
   --mem=32G \
   hpo-runs.slurm
 unset OVERRIDES
+
+########################################################
+
+TRANSFER LEARNING
+# DeepCNNLSTM is hardcoded in 1s3w_transfer_learning_hpo.py
+
+export HPO_SCRIPT="1s3w_transfer_learning_hpo.py"
+
+export SCRIPT_ARGS="--eval_mode zero_shot"
+sbatch --job-name=trnsfr-zero-hpo --partition=commons --time=20:00:00 \
+  --mem=32G --array=0-99 \
+  --output=/scratch/my13/kai/runs/paper/logs/%x_%j_%a.out \
+  hpo-runs.slurm
+
+  export SCRIPT_ARGS="--eval_mode full"
+sbatch --job-name=trnsfr-full-ft-hpo --partition=commons --time=20:00:00 \
+  --mem=32G --array=0-99 \
+  --output=/scratch/my13/kai/runs/paper/logs/%x_%j_%a.out \
+  hpo-runs.slurm
+
+  export SCRIPT_ARGS="--eval_mode head_only"
+sbatch --job-name=trnsfr-head-ft-hpo --partition=commons --time=20:00:00 \
+  --mem=32G --array=0-99 \
+  --output=/scratch/my13/kai/runs/paper/logs/%x_%j_%a.out \
+  hpo-runs.slurm

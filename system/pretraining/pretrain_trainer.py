@@ -170,7 +170,7 @@ def _run_epoch(model, loader, optimizer, criterion, device, config, scaler=None,
             # ── Latent feature diagnostics (first few epochs, first batch) ──
             if is_train and batch_idx == 0 and epoch <= 1:
                 with torch.no_grad():
-                    feat_debug, _ = model.backbone(emg, imu)
+                    feat_debug, _ = model.backbone(x_emg=emg, x_imu=imu)
                     print("------ LATENT FEATURES CHECK ------")
                     print(f"[Ep{epoch}] feat: mean={feat_debug.mean():.3f} std={feat_debug.std():.3f} "
                           f"logits: mean={logits.mean():.3f} std={logits.std():.3f} "
