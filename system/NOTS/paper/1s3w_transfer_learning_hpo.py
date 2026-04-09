@@ -309,8 +309,14 @@ def run_study(study_name: str, storage_path: str, eval_mode: str, n_trials: int 
     print(f"Staggering start: sleeping for {sleep_time:.2f} seconds...")
     time.sleep(sleep_time)
 
-    lock_obj = JournalFileBackend(storage_path)
-    storage  = JournalStorage(lock_obj)
+    use_journal = int(os.environ["HPO_USE_JOURNAL"])
+    if use_journal:
+        lock_obj = JournalFileBackend(storage_path)
+        storage  = JournalStorage(lock_obj)
+        print(f"Journal storage enabled: {storage_path}")
+    else:
+        storage = optuna.storages.InMemoryStorage()
+        print("Journal storage DISABLED (debug mode) — using InMemoryStorage.")
 
     time.sleep(random.uniform(0, 10))
 

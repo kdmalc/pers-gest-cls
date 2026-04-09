@@ -34,6 +34,8 @@ SCRIPT_ARGS="${SCRIPT_ARGS:-}"
 
 # Force a single Optuna trial — overrides the N_TRIALS constant in the script
 export N_TRIALS=1
+# Debug mode: never write an Optuna journal (uses InMemoryStorage instead)
+export HPO_USE_JOURNAL=0
 
 # ---------- 1) Environment modules --------------------------------------------
 source /etc/profile.d/modules.sh

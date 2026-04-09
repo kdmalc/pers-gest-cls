@@ -20,6 +20,8 @@ if [[ -z "${HPO_SCRIPT:-}" ]]; then
 fi
 
 SCRIPT_ARGS="${SCRIPT_ARGS:-}"
+# Full HPO mode: write an Optuna journal
+export HPO_USE_JOURNAL=1
 
 # ---------- 1) Environment modules --------------------------------------------
 source /etc/profile.d/modules.sh
