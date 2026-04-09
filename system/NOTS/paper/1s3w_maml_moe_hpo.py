@@ -191,7 +191,6 @@ def inject_model_config(config: dict, model_type: str,
             #"val_support_shots":    1,            # k-shot for prototype construction
             #"val_query_per_class":  9,            # How many query samples to evaluate per class
 
-            "num_val_episodes":     20,           
             # OPTIMIZATION
             "lr_scheduler":         "cosine",     # 'cosine', 'reduce_on_plateau', or None
             "lr_warmup_epochs":     5,
@@ -331,7 +330,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config["track_gradient_alignment"] = False
     config["debug_verbose"] = False
     config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
-    config['num_eval_episodes'] = 10
+    config['num_eval_episodes'] = 100
     config['debug_one_user_only'] = False
     config['debug_one_episode'] = False
     config['debug_five_episodes'] = False

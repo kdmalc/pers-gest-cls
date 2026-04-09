@@ -131,7 +131,7 @@ FIXED_CONFIG = {
     "label_smooth":             0.1,
     "use_label_shuf_meta_aug":  True,
     "gradient_clip_max_norm":   10.0,
-    "num_eval_episodes":        10,
+    "num_eval_episodes":        100,
 
     # NOTE: lr_scheduler is not used if use_cosine_outer_lr is False!
     "use_cosine_outer_lr":      False,
@@ -240,7 +240,7 @@ def inject_model_config(config: dict, model_type: str) -> dict:
             "use_GlobalAvgPooling": True,
             "attn_pool_heads":      4,
             "embedding_dim":        128, "proj_hidden_dim": 256,
-            "num_val_episodes":     20,
+            "num_eval_episodes":     100,
             "lr_scheduler":         "cosine",
             "lr_warmup_epochs":     5,
             "lr_min":               1e-6,

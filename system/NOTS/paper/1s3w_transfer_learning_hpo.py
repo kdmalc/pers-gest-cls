@@ -177,7 +177,7 @@ def build_config_from_trial(trial, eval_mode: str) -> dict:
         config["ft_weight_decay"] = 0.0
 
     # ── Eval ─────────────────────────────────────────────────────────────────
-    config["num_eval_episodes"] = 10
+    config["num_eval_episodes"] = 100
     config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     return config
