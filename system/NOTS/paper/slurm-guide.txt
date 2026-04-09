@@ -8,11 +8,7 @@ export HPO_SCRIPT="1s3w_maml_moe_hpo.py"
 export SCRIPT_ARGS="--model_type DeepCNNLSTM"
 sbatch \
   --job-name=maml-moe-hpo \
-  --partition=commons \
-  --time=20:00:00 \
-  --mem=32G \
   --array=0-99 \
-  --output=/scratch/my13/kai/runs/paper/logs/%x_%j_%a.out \
   hpo-runs.slurm
 
 ########################################################
@@ -32,9 +28,6 @@ export OVERRIDES='{"maml_inner_steps": 5}'
 export SCRIPT_ARGS="--model_type DeepCNNLSTM"
 sbatch \
   --job-name=maml-moe-smoke \
-  --partition=commons \
-  --time=20:00:00 \
-  --mem=32G \
   hpo-runs.slurm
 unset OVERRIDES
 
@@ -46,19 +39,13 @@ TRANSFER LEARNING
 export HPO_SCRIPT="1s3w_transfer_learning_hpo.py"
 
 export SCRIPT_ARGS="--eval_mode zero_shot"
-sbatch --job-name=trnsfr-zero-hpo --partition=commons --time=20:00:00 \
-  --mem=32G --array=0-99 \
-  --output=/scratch/my13/kai/runs/paper/logs/%x_%j_%a.out \
+sbatch --job-name=trnsfr-zero-hpo --array=0-99 \
   hpo-runs.slurm
 
-  export SCRIPT_ARGS="--eval_mode full"
-sbatch --job-name=trnsfr-full-ft-hpo --partition=commons --time=20:00:00 \
-  --mem=32G --array=0-99 \
-  --output=/scratch/my13/kai/runs/paper/logs/%x_%j_%a.out \
+export SCRIPT_ARGS="--eval_mode full"
+sbatch --job-name=trnsfr-full-ft-hpo --array=0-99 \
   hpo-runs.slurm
 
-  export SCRIPT_ARGS="--eval_mode head_only"
-sbatch --job-name=trnsfr-head-ft-hpo --partition=commons --time=20:00:00 \
-  --mem=32G --array=0-99 \
-  --output=/scratch/my13/kai/runs/paper/logs/%x_%j_%a.out \
+export SCRIPT_ARGS="--eval_mode head_only"
+sbatch --job-name=trnsfr-head-ft-hpo --array=0-99 \
   hpo-runs.slurm

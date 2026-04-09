@@ -3,6 +3,8 @@
 
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --partition=commons
+#SBATCH --mem=32G
 #SBATCH --time=20:00:00  # This gets overwritten by whatever is passed in via the command line FYI
 #SBATCH --cpus-per-task=10
 #SBATCH --gres=gpu:1
