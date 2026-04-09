@@ -65,11 +65,13 @@ echo "==================================="
 echo "CWD: $(pwd)"
 # shellcheck disable=SC2086  # SCRIPT_ARGS is intentionally word-split here
 # This --out-dir controls where the checkpoints and such from Python go
+# Note: OVERRIDES is optional — if unset, --overrides is not passed at all.
+OVERRIDES_ARG=()
+[[ -n "${OVERRIDES:-}" ]] && OVERRIDES_ARG=(--overrides "$OVERRIDES")
 python -u "$CODE_DIR/system/NOTS/paper/${HPO_SCRIPT}" \
     --data_dir "$DATA_DIR" \
     --out_dir  "$RUN_DIR" \
-    # Note that as long as OVERRIDES is not set in the env (CLI) then this wont have any affect on the other runs
-    ${OVERRIDES:+--overrides "$OVERRIDES"} \
+    "${OVERRIDES_ARG[@]}" \
     $SCRIPT_ARGS
 
 echo "JOB_END date=$(date)"
