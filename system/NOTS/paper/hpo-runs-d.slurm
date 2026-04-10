@@ -32,11 +32,6 @@ fi
 
 SCRIPT_ARGS="${SCRIPT_ARGS:-}"
 
-# Force a single Optuna trial — overrides the N_TRIALS constant in the script
-export N_TRIALS=1
-# Debug mode: never write an Optuna journal (uses InMemoryStorage instead)
-export HPO_USE_JOURNAL=0
-
 # ---------- 1) Environment modules --------------------------------------------
 source /etc/profile.d/modules.sh
 module purge
@@ -47,6 +42,11 @@ source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/mamba.sh
 
 # ---------- 2) Activate env ---------------------------------------------------
 mamba activate /projects/my13/kai/meta-pers-gest/envs/fl-torch
+
+# Force a single Optuna trial — overrides the N_TRIALS constant in the script
+export N_TRIALS=1
+# Debug mode: never write an Optuna journal (uses InMemoryStorage instead)
+export HPO_USE_JOURNAL=0
 
 # ---------- 3) Paths ----------------------------------------------------------
 export CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls

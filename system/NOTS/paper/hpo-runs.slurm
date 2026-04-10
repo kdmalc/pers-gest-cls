@@ -22,8 +22,6 @@ if [[ -z "${HPO_SCRIPT:-}" ]]; then
 fi
 
 SCRIPT_ARGS="${SCRIPT_ARGS:-}"
-# Full HPO mode: write an Optuna journal
-export HPO_USE_JOURNAL=1
 
 # ---------- 1) Environment modules --------------------------------------------
 source /etc/profile.d/modules.sh
@@ -35,6 +33,9 @@ source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/mamba.sh
 
 # ---------- 2) Activate env ---------------------------------------------------
 mamba activate /projects/my13/kai/meta-pers-gest/envs/fl-torch
+
+# Full HPO mode: write an Optuna journal
+export HPO_USE_JOURNAL=1
 
 # ---------- 3) Paths ----------------------------------------------------------
 export CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
