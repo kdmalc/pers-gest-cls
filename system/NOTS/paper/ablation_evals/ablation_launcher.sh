@@ -57,16 +57,17 @@ ENV_PATH=/projects/my13/kai/meta-pers-gest/envs/fl-torch
 # Defaults apply if not overridden.
 TIME_DEFAULT="20:00:00"
 
-TIME_M0="24:00:00";  MEM_M0=32G    # 5 seeds × full MAML
-TIME_A1="16:00:00";  MEM_A1=24G    # 5 seeds × supervised (faster)
-TIME_A2="12:00:00";  MEM_A2=24G    # 5 seeds × supervised, no MoE
-TIME_A3="24:00:00";  MEM_A3=32G    # 5 seeds × MAML, no MoE
-TIME_A4="24:00:00";  MEM_A4=32G    # 5 seeds × MAML, wider encoder
-TIME_A5="72:00:00";  MEM_A5=48G    # 8 expert counts × 5 seeds × full MAML — HEAVY
-TIME_A7="48:00:00";  MEM_A7=32G    # N_subjects × 5 seeds × supervised per-subject
-TIME_A8="72:00:00";  MEM_A8=48G    # N_subjects × 5 seeds × full MAML per-subject — HEAVY
-TIME_A9="24:00:00";  MEM_A9=32G    # 5 seeds × MAML + separate modality experts
-TIME_A12="24:00:00"; MEM_A12=32G   # 5 seeds × full MAML, different data
+# Time limit on commons is 24 hours I think. So I'm gonan comment all these for now...
+#TIME_M0="24:00:00";  MEM_M0=32G    # 5 seeds × full MAML
+#TIME_A1="16:00:00";  MEM_A1=24G    # 5 seeds × supervised (faster)
+#TIME_A2="12:00:00";  MEM_A2=24G    # 5 seeds × supervised, no MoE
+#TIME_A3="24:00:00";  MEM_A3=32G    # 5 seeds × MAML, no MoE
+#TIME_A4="24:00:00";  MEM_A4=32G    # 5 seeds × MAML, wider encoder
+#TIME_A5="72:00:00";  MEM_A5=48G    # 8 expert counts × 5 seeds × full MAML — HEAVY
+#TIME_A7="48:00:00";  MEM_A7=32G    # N_subjects × 5 seeds × supervised per-subject
+#TIME_A8="72:00:00";  MEM_A8=48G    # N_subjects × 5 seeds × full MAML per-subject — HEAVY
+#TIME_A9="24:00:00";  MEM_A9=32G    # 5 seeds × MAML + separate modality experts
+#TIME_A12="24:00:00"; MEM_A12=32G   # 5 seeds × full MAML, different data
 
 # ── Helper to get resource value ──────────────────────────────────────────────
 get_resource() {
