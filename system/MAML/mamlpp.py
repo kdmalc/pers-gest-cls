@@ -103,8 +103,8 @@ def _compute_aux_loss(routing_info, config, aux_coeff):
     gate_w = routing_info.get('gate_weights')
     if gate_w is None:
         return 0.0
-    top_k = config.get('top_k', None)
-    num_experts = config.get('num_experts', None)
+    top_k = config['top_k']
+    num_experts = config['num_experts']
     if top_k is None or top_k == num_experts:   # dense / soft routing
         return _dense_MOE_aux_loss(gate_w, coeff=aux_coeff)
     else:                                        # sparse top-k routing
@@ -145,13 +145,13 @@ def inner_loop_mamlpp(
     """
     device = config['device']
     multimodal = config['multimodal']
-    use_MOE    = config.get('use_MOE', False)
-    aux_coeff  = float(config.get('MOE_aux_coeff', 1e-2))
+    use_MOE    = config['use_MOE']
+    aux_coeff  = float(config['MOE_aux_coeff'])
     # "inner"  — aux loss added to support loss during inner-loop adaptation steps
     # "outer"  — aux loss added to query loss so the meta-update shapes gate balance
     # "both"   — aux loss applied at both inner and outer levels
     # default is "outer"
-    aux_placement = config.get('apply_MOE_aux_loss_inner_outer', 'outer')
+    aux_placement = config['apply_MOE_aux_loss_inner_outer']
 
     # MSL Logic
     msl_use = (config['use_maml_msl'] == True) or (config['use_maml_msl'] == "hybrid" and epoch <= config['maml_msl_num_epochs'])
@@ -246,7 +246,7 @@ def _model_forward_router_MOE(fmodel, batch, device, multimodal=True, config=Non
     emg = _to_device(batch["emg"], device)
 
     imu = batch.get("imu", None)
-    if config is not None and config.get("use_imu", False):
+    if config is not None and config["use_imu"]:
         if imu is None:
             raise ValueError(
                 "config has use_imu=True but batch['imu'] is None or missing. "
@@ -565,6 +565,7 @@ def _maml_routing_analysis_epoch(model, episodic_val_loader, config,
 
     device     = config['device']
     multimodal = bool(config.get('multimodal', True))
+    # TODO: what the heck is this, demo_dim_labels definitely does not exist in the config...
     demo_labels = config.get('demo_dim_labels', None)
 
     collector = RoutingCollector(num_experts=num_experts, model_name=f"{model_name}_maml_val")
@@ -576,14 +577,15 @@ def _maml_routing_analysis_epoch(model, episodic_val_loader, config,
                 episodes = _normalize_step_item(step_item)
                 for episode in episodes:
                     # Use adapted params from a quick inner-loop run
-                    support_batch = episode.get('support', episode)
-                    query_batch   = episode.get('query', episode)
+                    support_batch = episode['support']
+                    query_batch   = episode['query']
 
                     # --- PID extraction ---
                     # user_id lives at the episode level (set by maml_mm_collate),
                     # NOT inside query_batch. Replicate it once per query sample.
-                    user_id = episode.get('user_id')
+                    user_id = episode['user_id']
                     if user_id is None:
+                        # TODO: We should remove this... we should ONLY be using one of these...
                         # Flat (non-episodic) loader fallback: check both common key names
                         user_id = episode.get('pid', episode.get('pids', 'unknown'))
                     # Normalise to a flat list of strings, one entry per query sample
@@ -724,7 +726,7 @@ def mamlpp_adapt_and_eval(model, config, support_batch, query_batch, debug=False
 
     if debug:
         device = next(model.parameters()).device
-        multimodal = config.get("use_imu", False)
+        multimodal = config["use_imu"]
         q_emg    = query_batch["emg"].to(device)
         q_labels = query_batch["labels"].to(device)
         s_emg    = support_batch["emg"].to(device)

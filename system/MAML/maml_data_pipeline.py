@@ -112,8 +112,8 @@ def maml_mm_collate(batch):
     return {
         "support":   stack_samples(episode["support"]),
         "query":     stack_samples(episode["query"]),
-        "user_id":   episode.get("user_id"),
-        "label_map": episode.get("label_map"),
+        "user_id":   episode["user_id"],
+        "label_map": episode["label_map"],
     }
 
 
@@ -318,7 +318,7 @@ class MetaGestureDataset(Dataset):
             # ── Fetch tensors for this user × class ──────────────────────────
             slot        = self.data[user_id][class_label]
             emg_all     = slot["emg"]               # (num_trials, T, C)
-            imu_all     = slot.get("imu", None)     # (num_trials, T, C_imu) or None
+            imu_all     = slot["imu"]     # (num_trials, T, C_imu) or None
             demo        = slot["demo"]               # (demo_dim,)
 
             # ── Determine which trial indices to use ─────────────────────────
@@ -433,33 +433,44 @@ def get_maml_dataloaders(config, tensor_dict_path):
             if imu is not None and imu.shape[1] != config['imu_in_ch']:
                  tensor_dict[pid][gest_class]['imu'] = imu.permute(0, 2, 1).contiguous()
 
-    num_workers    = int(config.get("num_workers", 4))
-    use_label_shuf = config.get("use_label_shuf_meta_aug", True)
+    num_workers    = int(config["num_workers"])
+    use_label_shuf = config["use_label_shuf_meta_aug"]
 
     # ── Resolve gesture class list ────────────────────────────────────────────
     # 'maml_gesture_classes' is the canonical key.
-    # 'maml_reps' is kept as a legacy alias — historically the name was misleading
-    # (it stored class labels, not repetition numbers).
     if "maml_gesture_classes" in config:
         gesture_classes = config["maml_gesture_classes"]
-    elif "maml_reps" in config:
-        gesture_classes = config["maml_reps"]
-        # Emit a one-time reminder to rename the config key.
-        print(
-            "[get_maml_dataloaders] WARNING: config key 'maml_reps' is a legacy alias "
-            "for gesture CLASS labels (0-indexed). Please rename to 'maml_gesture_classes' "
-            "to avoid confusion with repetition/trial numbers."
-        )
     else:
         raise KeyError(
-            "Config must contain 'maml_gesture_classes' (or legacy 'maml_reps') — "
+            "Config must contain 'maml_gesture_classes' — "
             "a list of 0-indexed gesture class labels to sample episodes from."
         )
 
     # ── Optional trial-index restriction (legacy intra-subject rep split) ─────
     # Pass a list of 0-indexed trial positions to restrict which trials are used,
     # or leave as None to use all available trials (standard MAML by-user split).
-    target_trial_indices = config.get("target_trial_indices", None)
+    target_trial_indices = config["target_trial_indices"]
+
+    # ── Leakage check: train and val PIDs must be disjoint ────────────────────
+    num_eval_episodes = config["num_eval_episodes"]
+    train_pids = config["train_PIDs"]
+    val_pids   = (
+        config["train_PIDs"]
+        if (config.get("debug_one_episode") or config.get("debug_five_episodes"))
+        else config["val_PIDs"]
+    )
+    train_pid_set = set(train_pids)
+    val_pid_set   = set(val_pids)
+    overlap = train_pid_set & val_pid_set
+    assert len(overlap) == 0, (
+        f"[get_maml_dataloaders] TRAIN/VAL PID LEAKAGE DETECTED! "
+        f"Overlapping PIDs: {sorted(overlap)}"
+    )
+    print(f"[get_maml_dataloaders] Train PIDs ({len(train_pids)}): {sorted(train_pids)}")
+    print(f"[get_maml_dataloaders] Val   PIDs ({len(val_pids)}):   {sorted(val_pids)}")
+    print(f"[get_maml_dataloaders] num_eval_episodes per val user: {num_eval_episodes}")
+    print(f"[get_maml_dataloaders] Total val episodes in cache: {len(val_pids) * num_eval_episodes}")
+    print(f"[get_maml_dataloaders] use_label_shuf_meta_aug: {use_label_shuf}")
 
     train_ds = MetaGestureDataset(
         tensor_dict,
@@ -471,16 +482,16 @@ def get_maml_dataloaders(config, tensor_dict_path):
         q_query                 = config["q_query"],
         episodes_per_epoch      = config["episodes_per_epoch_train"],
         is_train                = True,
-        debug_one_episode       = config.get("debug_one_episode",   False),
-        debug_five_episodes     = config.get("debug_five_episodes",  False),
-        debug_one_user_only     = config.get("debug_one_user_only",  False),
+        debug_one_episode       = config["debug_one_episode"],
+        debug_five_episodes     = config["debug_five_episodes"],
+        debug_one_user_only     = config["debug_one_user_only"],
         use_label_shuf_meta_aug = use_label_shuf,
     )
 
     # Val uses train_PIDs in debug mode (to guarantee the same fixed episodes exist)
     val_pids = (
         config["train_PIDs"]
-        if (config.get("debug_one_episode") or config.get("debug_five_episodes"))
+        if (config["debug_one_episode"] or config["debug_five_episodes"])
         else config["val_PIDs"]
     )
 
@@ -491,13 +502,13 @@ def get_maml_dataloaders(config, tensor_dict_path):
         target_trial_indices    = target_trial_indices,
         n_way                   = config["n_way"],
         k_shot                  = config["k_shot"],
-        q_query                 = config.get("q_query", None),
-        num_eval_episodes       = config.get("num_eval_episodes", 10),
+        q_query                 = config["q_query"],
+        num_eval_episodes       = config["num_eval_episodes"],
         is_train                = False,
-        seed                    = config.get("seed", 42),
-        debug_one_episode       = config.get("debug_one_episode",   False),
-        debug_five_episodes     = config.get("debug_five_episodes",  False),
-        debug_one_user_only     = config.get("debug_one_user_only",  False),
+        seed                    = config["seed"],
+        debug_one_episode       = config["debug_one_episode"],
+        debug_five_episodes     = config["debug_five_episodes"],
+        debug_one_user_only     = config["debug_one_user_only"],
         use_label_shuf_meta_aug = use_label_shuf,
     )
 

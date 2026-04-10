@@ -372,7 +372,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
 
     # === Multimodal & Conditioning (Keeping these if you still use FiLM/Demo heads) ===
     # NOTE: Turning demographics off (wasnt used in pretraining)
-    config["multimodal"] = True  # TODO: I dont know if this gets used at all anymore...
+    config["multimodal"] = True  # TODO: I dont know if this gets used at all anymore... or even what for...
     config["use_imu"] = True 
     config["use_demographics"] = False
     config["use_film_x_demo"] = False  #trial.suggest_categorical("use_film_x_demo", [True, False])
@@ -649,6 +649,7 @@ def objective(trial, model_type):
             val_metrics = mamlpp_adapt_and_eval(model, config, support_set, query_set)
             user_metrics[user_id].append(val_metrics["acc"])
 
+        # TODO: "Over n episodes" comes from here! The length of accs, as opposed to whatever the value of num_eval_episodes is!
         all_user_means = []
         for user_id, accs in user_metrics.items():
             m_acc = np.mean(accs)
