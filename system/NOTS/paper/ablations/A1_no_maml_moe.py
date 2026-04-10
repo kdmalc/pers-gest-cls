@@ -25,8 +25,10 @@ import torch
 from pathlib import Path
 CODE_DIR = Path(os.environ.get("CODE_DIR", "./")).resolve()
 sys.path.insert(0, str(CODE_DIR))
+sys.path.insert(0, str(CODE_DIR / "system"))
 sys.path.insert(0, str(CODE_DIR / "system" / "MAML"))
 sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
+# Remove this? Idk
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
