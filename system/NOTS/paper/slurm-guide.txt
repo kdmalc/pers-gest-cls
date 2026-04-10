@@ -24,7 +24,7 @@ sbatch hpo-runs-d.slurm
 # SMOKE TEST
 
 export HPO_SCRIPT="maml_moe_smoke.py"
-export OVERRIDES='{"maml_inner_steps": 5}'
+export OVERRIDES='{"maml_inner_steps": 5, "maml_inner_steps_eval": 5}'
 export SCRIPT_ARGS="--model_type DeepCNNLSTM"
 sbatch \
   --job-name=maml-moe-smoke \

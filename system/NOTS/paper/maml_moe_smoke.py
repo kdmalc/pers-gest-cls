@@ -116,7 +116,6 @@ def inject_model_config(config: dict, model_type: str,
             "use_GlobalAvgPooling": True,
             "attn_pool_heads": 4,
             "embedding_dim": 128, "proj_hidden_dim": 256,
-            "num_val_episodes": 20,
             "lr_scheduler": "cosine", "lr_warmup_epochs": 5, "lr_min": 1e-6,
             "grad_clip": 5.0, "log_interval": 100,
         })
