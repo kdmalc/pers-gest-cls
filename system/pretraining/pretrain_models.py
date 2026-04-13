@@ -80,7 +80,7 @@ class MetaCNNLSTM(nn.Module):
         k        = config['cnn_kernel']        # e.g. 3
         gn_grps  = config.get('groupnorm_num_groups', 8)
         lstm_h   = config['lstm_hidden']       # e.g. 128
-        n_way    = config['n_way']
+        n_way    = config['n_way'] if config['meta_learning'] else config['pretrain_num_classes']
         drop     = config.get('dropout', 0.0)
         bidir    = config.get('bidirectional', False)
         head_type = config.get('head_type', 'linear')
@@ -205,7 +205,7 @@ class DeepCNNLSTM(nn.Module):
         k         = config['cnn_kernel']
         gn_groups = config['groupnorm_num_groups']
         lstm_h    = config['lstm_hidden']
-        n_way     = config['n_way']
+        n_way     = config['n_way'] if config['meta_learning'] else config['pretrain_num_classes']
         drop      = config.get('dropout', 0.2)
         bidir     = config.get('bidirectional', True)
         head_type = config.get('head_type', 'mlp')
@@ -378,7 +378,7 @@ class TST(nn.Module):
         d_ff      = config.get('d_ff', d_model * 4)
         n_blocks  = config.get('n_blocks', 4)      # 3-6 per paper
         drop      = config.get('dropout', 0.2)
-        n_way     = config['n_way']
+        n_way     = config['n_way'] if config['meta_learning'] else config['pretrain_num_classes']
         head_type = config.get('head_type', 'mlp')
 
         in_ch = C_emg + (C_imu if use_imu else 0)

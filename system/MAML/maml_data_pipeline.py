@@ -420,18 +420,27 @@ def get_maml_dataloaders(config, tensor_dict_path):
 
     # ── Re-orient Data to Contiguous (B, C, T) once ──────────────────────────
     # Needs to be contiguous for the CNN
-    print("[maml_data_pipeline] Re-orienting data tensors to (trials, channels, seq_len)...")
-    for pid in tensor_dict:
-        for gest_class in tensor_dict[pid]:
-            # EMG: (trials, seq, chan) -> (trials, chan, seq) ----> (trials, 64, 16) -> (trials, 16, 64)
-            emg = tensor_dict[pid][gest_class]['emg']
-            if emg.shape[1] != config['emg_in_ch']: # Double check it's "sideways"
-                tensor_dict[pid][gest_class]['emg'] = emg.permute(0, 2, 1).contiguous()
-            
-            # IMU: (trials, seq, chan) -> (trials, chan, seq) ----> (trials, 64, 72) -> (trials, 72, 64)
-            imu = tensor_dict[pid][gest_class].get('imu')
-            if imu is not None and imu.shape[1] != config['imu_in_ch']:
-                 tensor_dict[pid][gest_class]['imu'] = imu.permute(0, 2, 1).contiguous()
+    #print("[maml_data_pipeline] Re-orienting data tensors to (trials, channels, seq_len)...")
+    #for pid in tensor_dict:
+    #    for gest_class in tensor_dict[pid]:
+    #        # EMG: (trials, seq, chan) -> (trials, chan, seq) ----> (trials, 64, 16) -> (trials, 16, 64)
+    #        emg = tensor_dict[pid][gest_class]['emg']
+    #        if emg.shape[1] != config['emg_in_ch']: # Double check it's "sideways"
+    #            tensor_dict[pid][gest_class]['emg'] = emg.permute(0, 2, 1).contiguous()
+    #        # IMU: (trials, seq, chan) -> (trials, chan, seq) ----> (trials, 64, 72) -> (trials, 72, 64)
+    #        imu = tensor_dict[pid][gest_class].get('imu')
+    #        if imu is not None and imu.shape[1] != config['imu_in_ch']:
+    #             tensor_dict[pid][gest_class]['imu'] = imu.permute(0, 2, 1).contiguous()
+    if not full_dict.get("_reoriented", False):
+        for pid in tensor_dict:
+            for gest_class in tensor_dict[pid]:
+                emg = tensor_dict[pid][gest_class]['emg']
+                if emg.shape[-1] == config['emg_in_ch']:  # (trials, T, C) → needs flip
+                    tensor_dict[pid][gest_class]['emg'] = emg.permute(0, 2, 1).contiguous()
+                imu = tensor_dict[pid][gest_class].get('imu')
+                if imu is not None and imu.shape[-1] == config['imu_in_ch']:
+                    tensor_dict[pid][gest_class]['imu'] = imu.permute(0, 2, 1).contiguous()
+        full_dict["_reoriented"] = True
 
     num_workers    = int(config["num_workers"])
     use_label_shuf = config["use_label_shuf_meta_aug"]

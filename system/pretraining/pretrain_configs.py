@@ -13,6 +13,8 @@ import torch
 PRETRAIN_CONFIG = {
     # ── Dataset / task ────────────────────────────────────────────────────────
     "n_way":    10,   # number of gesture classes --> NOTE: THIS IS SUPERVISED PRETRAINING, not few-shot learning! Keep this as 10 here!
+    'meta_learning': False,
+    'pretrain_num_classes': 10,  
 
     # ── Participant split ──────────────────────────────────────────────────────
     "train_PIDs": [

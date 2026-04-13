@@ -298,7 +298,7 @@ class MetaCNNLSTM_EncoderMOE(nn.Module):
         k        = config["cnn_kernel"]
         gn_grps  = config.get("groupnorm_num_groups", 8)
         lstm_h   = config["lstm_hidden"]
-        n_way    = config["n_way"]
+        n_way    = config['n_way'] if config['meta_learning'] else config['pretrain_num_classes']
         drop     = config.get("dropout", 0.0)
         bidir    = config.get("bidirectional", False)
         head_type = config.get("head_type", "linear")
@@ -456,7 +456,7 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         k        = config["cnn_kernel"]
         gn_grps  = config["groupnorm_num_groups"]
         lstm_h   = config["lstm_hidden"]
-        n_way    = config["n_way"]
+        n_way    = config['n_way'] if config['meta_learning'] else config['pretrain_num_classes']
         drop     = config.get("dropout", 0.2)
         bidir    = config.get("bidirectional", True)
         head_type = config.get("head_type", "mlp")
@@ -592,7 +592,7 @@ class MetaCNNLSTM_MiddleMOE(nn.Module):
         k        = config["cnn_kernel"]
         gn_grps  = config.get("groupnorm_num_groups", 8)
         lstm_h   = config["lstm_hidden"]
-        n_way    = config["n_way"]
+        n_way    = config['n_way'] if config['meta_learning'] else config['pretrain_num_classes']
         drop     = config.get("dropout", 0.0)
         bidir    = config.get("bidirectional", False)
         head_type = config.get("head_type", "linear")
@@ -737,7 +737,7 @@ class DeepCNNLSTM_MiddleMOE(nn.Module):
         k        = config["cnn_kernel"]
         gn_grps  = config["groupnorm_num_groups"]
         lstm_h   = config["lstm_hidden"]
-        n_way    = config["n_way"]
+        n_way    = config['n_way'] if config['meta_learning'] else config['pretrain_num_classes']
         drop     = config.get("dropout", 0.2)
         bidir    = config.get("bidirectional", True)
         head_type = config.get("head_type", "mlp")

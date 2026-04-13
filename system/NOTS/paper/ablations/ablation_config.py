@@ -128,7 +128,8 @@ def make_base_config(ablation_id: str) -> dict:
     config["n_way"]      = 3    # eval/finetuning: 3-way classification
     config["k_shot"]     = 1
     config["q_query"]    = 9
-    config["num_classes"] = 10  # eval/finetuning head size (must equal n_way for episodic eval)
+    config["num_classes"] = 10  # unused by architecture directly; pretrain_num_classes is the
+                             # authoritative source for non-MAML head size
 
     # Pretraining uses all 10 gesture classes (full supervised dataset).
     # The model is built with this many output logits during the pretrain phase.
@@ -238,7 +239,11 @@ def make_base_config(ablation_id: str) -> dict:
 # =============================================================================
 
 def build_maml_moe_model(config: dict):
-    """Build MAML + MoE model (M0, A5, A8, A9, A12)."""
+    """Build MAML + MoE model (M0, A5, A8, A9, A12).
+
+    meta_learning=True in base config, so the architecture reads n_way (=3)
+    for the classification head — correct for episodic training and eval.
+    """
     from MOE.MOE_encoder import build_MOE_model
     model = build_MOE_model(config)
     model.to(config["device"])
@@ -246,7 +251,11 @@ def build_maml_moe_model(config: dict):
 
 
 def build_maml_no_moe_model(config: dict):
-    """Build MAML + single encoder (A3, A4)."""
+    """Build MAML + single encoder, no MoE (A3, A4).
+
+    meta_learning=True in base config, so the architecture reads n_way (=3)
+    for the classification head — correct for episodic training and eval.
+    """
     from pretraining.pretrain_models import build_model
     cfg = copy.deepcopy(config)
     cfg["use_MOE"] = False
@@ -258,34 +267,35 @@ def build_maml_no_moe_model(config: dict):
 def build_supervised_moe_model(config: dict):
     """Build supervised (no-MAML) + MoE model (A1).
 
-    The model is built with `pretrain_num_classes` output logits so it matches
-    the flat dataloader label space (all 10 gestures).  At eval time the head
-    is replaced with a fresh `n_way`-class head by `replace_head_for_eval`.
+    meta_learning=False, so the architecture's meta_learning toggle routes to
+    pretrain_num_classes (=10) for the head — correct for flat supervised
+    pretraining over all gesture classes. At eval time the head is replaced
+    with a fresh n_way-class (=3) head by replace_head_for_eval().
+    No need to override n_way here; the architecture handles it.
     """
     from MOE.MOE_encoder import build_MOE_model
     cfg = copy.deepcopy(config)
     cfg["use_MOE"] = True
-    cfg["num_classes"] = cfg["pretrain_num_classes"]  # 10-class head for pretraining
     model = build_MOE_model(cfg)
     model.to(cfg["device"])
     return model
 
 
 def build_supervised_no_moe_model(config: dict):
-    """Build vanilla supervised CNN-LSTM (A2, A7).
+    """Build vanilla supervised CNN-LSTM, no MoE (A2, A7).
 
-    Same two-phase class count logic as build_supervised_moe_model.
+    meta_learning=False, so the architecture's meta_learning toggle routes to
+    pretrain_num_classes (=10) for the head — correct for flat supervised
+    pretraining over all gesture classes. At eval time the head is replaced
+    with a fresh n_way-class (=3) head by replace_head_for_eval().
+    No need to override n_way here; the architecture handles it.
     """
     from pretraining.pretrain_models import build_model
     cfg = copy.deepcopy(config)
     cfg["use_MOE"] = False
-    cfg["num_classes"] = cfg["pretrain_num_classes"]  # 10-class head for pretraining
     model = build_model(cfg)
     model.to(cfg["device"])
     return model
-
-
-
 
 
 # =============================================================================
