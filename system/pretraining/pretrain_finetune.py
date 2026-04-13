@@ -36,6 +36,8 @@ import torch.nn as nn
 import numpy as np
 from typing import Literal
 
+from ablation_config import replace_head_for_eval
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Core: finetune on a single support set, evaluate on query set
@@ -92,8 +94,15 @@ def finetune_and_eval_user(
 
     # Work on a copy — never mutate the caller's model
     ft_model = copy.deepcopy(model)
-    ft_model.train()
     ft_model.to(device)
+
+    # Replace the pretrained N-class head with a fresh n_way-class head.
+    # This is the correct transfer learning protocol: the backbone carries the
+    # pretrained representation; the head is re-initialised for the target task.
+    # Fine-tuning then adapts either just the head or the whole network.
+    replace_head_for_eval(ft_model, config)
+
+    ft_model.train()
 
     if mode == 'head_only':
         # Freeze everything except the classification head

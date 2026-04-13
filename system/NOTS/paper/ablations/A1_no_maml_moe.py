@@ -34,6 +34,7 @@ from ablation_config import (
     make_base_config, build_supervised_moe_model,
     set_seeds, FIXED_SEED, NUM_FINAL_SEEDS,
     run_supervised_test_eval, save_results, save_model_checkpoint, count_parameters,
+    replace_head_for_eval,
     RUN_DIR,
 )
 from pretraining.pretrain_data_pipeline import get_pretrain_dataloaders
@@ -87,9 +88,9 @@ def run_one_seed(seed: int, config: dict, tensor_dict: dict) -> dict:
     print(f"\n[A1 | seed={seed}] Parameters: {n_params:,}")
 
     train_dl, val_dl, n_classes = get_pretrain_dataloaders(config, tensor_dict)
-    assert n_classes == config["num_classes"], (
-        f"Expected {config['num_classes']} classes, got {n_classes}. "
-        "Check your gesture class list."
+    assert n_classes == config["pretrain_num_classes"], (
+        f"Flat dataloader returned {n_classes} classes but pretrain_num_classes="
+        f"{config['pretrain_num_classes']}. Check your gesture class list."
     )
 
     trained_model, history = pretrain(model, train_dl, val_dl, config)

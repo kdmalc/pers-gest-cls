@@ -125,10 +125,15 @@ def make_base_config(ablation_id: str) -> dict:
     config["FILM_on_context_or_demo"] = "context"
 
     # ── Task setup ────────────────────────────────────────────────────────────
-    config["n_way"]      = 3
+    config["n_way"]      = 3    # eval/finetuning: 3-way classification
     config["k_shot"]     = 1
     config["q_query"]    = 9
-    config["num_classes"] = 10
+    config["num_classes"] = 10  # eval/finetuning head size (must equal n_way for episodic eval)
+
+    # Pretraining uses all 10 gesture classes (full supervised dataset).
+    # The model is built with this many output logits during the pretrain phase.
+    # At eval time the head is replaced with a fresh `n_way`-class head.
+    config["pretrain_num_classes"] = 10
 
     # ── Architecture (FIXED per spec) ─────────────────────────────────────────
     config["cnn_base_filters"]    = 128
@@ -251,22 +256,94 @@ def build_maml_no_moe_model(config: dict):
 
 
 def build_supervised_moe_model(config: dict):
-    """Build supervised (no-MAML) + MoE model (A1)."""
+    """Build supervised (no-MAML) + MoE model (A1).
+
+    The model is built with `pretrain_num_classes` output logits so it matches
+    the flat dataloader label space (all 10 gestures).  At eval time the head
+    is replaced with a fresh `n_way`-class head by `replace_head_for_eval`.
+    """
     from MOE.MOE_encoder import build_MOE_model
     cfg = copy.deepcopy(config)
     cfg["use_MOE"] = True
+    cfg["num_classes"] = cfg["pretrain_num_classes"]  # 10-class head for pretraining
     model = build_MOE_model(cfg)
     model.to(cfg["device"])
     return model
 
 
 def build_supervised_no_moe_model(config: dict):
-    """Build vanilla supervised CNN-LSTM (A2, A7)."""
+    """Build vanilla supervised CNN-LSTM (A2, A7).
+
+    Same two-phase class count logic as build_supervised_moe_model.
+    """
     from pretraining.pretrain_models import build_model
     cfg = copy.deepcopy(config)
     cfg["use_MOE"] = False
+    cfg["num_classes"] = cfg["pretrain_num_classes"]  # 10-class head for pretraining
     model = build_model(cfg)
     model.to(cfg["device"])
+    return model
+
+
+
+
+
+# =============================================================================
+# Head replacement for eval-time transfer learning
+# =============================================================================
+
+def replace_head_for_eval(model: torch.nn.Module, config: dict) -> torch.nn.Module:
+    """
+    Replace the pretrained classification head with a fresh `n_way`-class head.
+
+    This is the standard transfer learning protocol: pretrain on all classes,
+    then swap in a randomly-initialised head for the target few-shot task.
+    The backbone weights are untouched.  Fine-tuning (head_only or full) is
+    applied AFTER this replacement by `finetune_and_eval_user`.
+
+    The function inspects `model.head` and replaces the final Linear layer in
+    place, preserving any intermediate MLP layers.  Works for both:
+      - A simple Linear head  (model.head is nn.Linear)
+      - An MLP head           (model.head is nn.Sequential ending in nn.Linear)
+
+    Args:
+        model  : pretrained model whose .head attribute will be replaced.
+        config : must contain 'n_way' (int) — number of eval classes.
+
+    Returns:
+        model with replaced head (same object, modified in-place AND returned).
+    """
+    import torch.nn as nn
+
+    n_way = int(config["n_way"])
+    head  = model.head
+
+    if isinstance(head, nn.Linear):
+        in_features  = head.in_features
+        model.head   = nn.Linear(in_features, n_way)
+        nn.init.xavier_uniform_(model.head.weight)
+        nn.init.zeros_(model.head.bias)
+
+    elif isinstance(head, nn.Sequential):
+        # Find and replace only the terminal Linear layer
+        layers = list(head.children())
+        assert isinstance(layers[-1], nn.Linear), (
+            f"Expected the last layer of model.head (Sequential) to be nn.Linear, "
+            f"got {type(layers[-1])}. Add explicit support for this head type."
+        )
+        in_features  = layers[-1].in_features
+        layers[-1]   = nn.Linear(in_features, n_way)
+        nn.init.xavier_uniform_(layers[-1].weight)
+        nn.init.zeros_(layers[-1].bias)
+        model.head   = nn.Sequential(*layers)
+
+    else:
+        raise TypeError(
+            f"replace_head_for_eval: model.head is {type(head)}, expected nn.Linear "
+            f"or nn.Sequential. Add explicit support for this head type."
+        )
+
+    model.head.to(next(model.parameters()).device)
     return model
 
 
