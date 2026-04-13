@@ -90,6 +90,9 @@ def find_matched_cnn_filters(target_cnn_params: int, config_template: dict,
     Returns the best cnn_base_filters value found.
     """
     from pretraining.pretrain_models import build_model as _build
+    import math
+
+    gn_groups = config_template["groupnorm_num_groups"]
 
     def _cnn_param_count(filters: int) -> int:
         cfg = copy.deepcopy(config_template)
@@ -97,11 +100,9 @@ def find_matched_cnn_filters(target_cnn_params: int, config_template: dict,
         cfg["lstm_hidden"]      = lstm_hidden
         cfg["use_MOE"]          = False
         m = _build(cfg)
-        # Count only the CNN part (before LSTM)
         if hasattr(m, "cnn") or hasattr(m, "conv"):
             cnn_mod = getattr(m, "cnn", None) or getattr(m, "conv", None)
             return sum(p.numel() for p in cnn_mod.parameters() if p.requires_grad)
-        # Fallback: count all non-LSTM, non-head params
         total = 0
         for name, p in m.named_parameters():
             if p.requires_grad and "lstm" not in name.lower() and "head" not in name.lower():
@@ -109,18 +110,15 @@ def find_matched_cnn_filters(target_cnn_params: int, config_template: dict,
         return total
 
     lo, hi = search_range
+    # Snap lo up to nearest valid multiple of gn_groups
+    lo = math.ceil(lo / gn_groups) * gn_groups
+
     best_filters = lo
     best_diff = abs(_cnn_param_count(lo) - target_cnn_params)
 
-    # Coarse sweep
-    for f in range(lo, hi + 1, 16):
-        diff = abs(_cnn_param_count(f) - target_cnn_params)
-        if diff < best_diff:
-            best_diff = diff
-            best_filters = f
-
-    # Fine sweep around best
-    for f in range(max(lo, best_filters - 16), min(hi, best_filters + 16) + 1):
+    # Single pass over all valid multiples — parameter count is monotone in base_f
+    # so there's no need for a coarse+fine two-phase search
+    for f in range(lo, hi + 1, gn_groups):
         diff = abs(_cnn_param_count(f) - target_cnn_params)
         if diff < best_diff:
             best_diff = diff

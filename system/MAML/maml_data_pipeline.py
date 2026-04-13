@@ -452,25 +452,26 @@ def get_maml_dataloaders(config, tensor_dict_path):
     target_trial_indices = config["target_trial_indices"]
 
     # ── Leakage check: train and val PIDs must be disjoint ────────────────────
-    num_eval_episodes = config["num_eval_episodes"]
-    train_pids = config["train_PIDs"]
-    val_pids   = (
-        config["train_PIDs"]
-        if (config.get("debug_one_episode") or config.get("debug_five_episodes"))
-        else config["val_PIDs"]
-    )
-    train_pid_set = set(train_pids)
-    val_pid_set   = set(val_pids)
-    overlap = train_pid_set & val_pid_set
-    assert len(overlap) == 0, (
-        f"[get_maml_dataloaders] TRAIN/VAL PID LEAKAGE DETECTED! "
-        f"Overlapping PIDs: {sorted(overlap)}"
-    )
-    print(f"[get_maml_dataloaders] Train PIDs ({len(train_pids)}): {sorted(train_pids)}")
-    print(f"[get_maml_dataloaders] Val   PIDs ({len(val_pids)}):   {sorted(val_pids)}")
-    print(f"[get_maml_dataloaders] num_eval_episodes per val user: {num_eval_episodes}")
-    print(f"[get_maml_dataloaders] Total val episodes in cache: {len(val_pids) * num_eval_episodes}")
-    print(f"[get_maml_dataloaders] use_label_shuf_meta_aug: {use_label_shuf}")
+    if config.get("subject_specific_model", False) is False:
+        num_eval_episodes = config["num_eval_episodes"]
+        train_pids = config["train_PIDs"]
+        val_pids   = (
+            config["train_PIDs"]
+            if (config.get("debug_one_episode") or config.get("debug_five_episodes"))
+            else config["val_PIDs"]
+        )
+        train_pid_set = set(train_pids)
+        val_pid_set   = set(val_pids)
+        overlap = train_pid_set & val_pid_set
+        assert len(overlap) == 0, (
+            f"[get_maml_dataloaders] TRAIN/VAL PID LEAKAGE DETECTED! "
+            f"Overlapping PIDs: {sorted(overlap)}"
+        )
+        print(f"[get_maml_dataloaders] Train PIDs ({len(train_pids)}): {sorted(train_pids)}")
+        print(f"[get_maml_dataloaders] Val   PIDs ({len(val_pids)}):   {sorted(val_pids)}")
+        print(f"[get_maml_dataloaders] num_eval_episodes per val user: {num_eval_episodes}")
+        print(f"[get_maml_dataloaders] Total val episodes in cache: {len(val_pids) * num_eval_episodes}")
+        print(f"[get_maml_dataloaders] use_label_shuf_meta_aug: {use_label_shuf}")
 
     train_ds = MetaGestureDataset(
         tensor_dict,

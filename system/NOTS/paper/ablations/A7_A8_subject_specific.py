@@ -79,6 +79,7 @@ ALL_SUBJECT_PIDS = TRAIN_PIDS + VAL_PIDS + TEST_PIDS
 
 def build_config_a7() -> dict:
     config = make_base_config(ablation_id="A7")
+    config["subject_specific_model"] = True
     config["meta_learning"] = False
     config["use_MOE"]       = False
     config["batch_size"]    = 64
@@ -165,6 +166,7 @@ def run_a7_one_subject(pid: str, seed: int, config: dict,
 
 def build_config_a8() -> dict:
     config = make_base_config(ablation_id="A8")
+    config["subject_specific_model"] = True
     # Full M0 config, but train/test will be overridden per subject
     return config
 

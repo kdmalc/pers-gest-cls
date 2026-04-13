@@ -260,9 +260,15 @@ class DeepCNNLSTM(nn.Module):
             self.head = MLPHead(self.feat_dim, self.feat_dim // 2, n_way, drop)
 
     def backbone(self, x_emg: torch.Tensor, x_imu=None, demographics=None):
-        x = x_emg
         if self.config.get('use_imu', False) and x_imu is not None:
-            x = torch.cat([x, x_imu], dim=1)
+            assert x_emg.shape[0] == x_imu.shape[0], \
+                f"Batch size mismatch: EMG {x_emg.shape} vs IMU {x_imu.shape}"
+            assert x_emg.shape[2] == x_imu.shape[2], \
+                f"Sequence length mismatch: EMG {x_emg.shape} vs IMU {x_imu.shape}. " \
+                f"Check strides/padding in data pipeline."
+            x = torch.cat([x_emg, x_imu], dim=1)
+        else:
+            x = x_emg
 
         h = self.cnn(x).permute(0, 2, 1)   # (B, T, C)
 

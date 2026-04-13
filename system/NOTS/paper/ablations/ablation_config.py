@@ -137,8 +137,8 @@ def make_base_config(ablation_id: str) -> dict:
     config["lstm_hidden"]         = 128
     config["lstm_layers"]         = 3
     config["bidirectional"]       = True
-    config["groupnorm_num_groups"] = 4    # FIXED per spec
-    config["use_GlobalAvgPooling"] = False  # FIXED per spec
+    config["groupnorm_num_groups"] = 4 
+    config["use_GlobalAvgPooling"] = False
     config["use_batch_norm"]       = False
     config["dropout"]              = 0.1
     config["head_type"]            = "mlp"
@@ -306,7 +306,7 @@ def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
         tensor_dict,
         target_pids            = test_pids,
         target_gesture_classes = config["maml_gesture_classes"],
-        target_trial_indices   = config.get("target_trial_indices", None),
+        target_trial_indices   = config["target_trial_indices"],
         n_way                  = config["n_way"],
         k_shot                 = config["k_shot"],
         q_query                = config.get("q_query", None),
@@ -356,7 +356,7 @@ def run_supervised_test_eval(model, config: dict, tensor_dict_path: str,
         tensor_dict,
         target_pids            = test_pids,
         target_gesture_classes = config["maml_gesture_classes"],
-        target_trial_indices   = config.get("target_trial_indices", None),
+        target_trial_indices   = config["target_trial_indices"],
         n_way                  = config["n_way"],
         k_shot                 = config["k_shot"],
         q_query                = config.get("q_query", None),
