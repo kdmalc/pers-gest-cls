@@ -37,7 +37,6 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from MOE.MOE_encoder import dense_MOE_aux_loss as _dense_MOE_aux_loss
 from MOE.MOE_encoder import topk_MOE_aux_loss as _topk_MOE_aux_loss
-# TODO: Need to define _moe_aux_loss throughout now
 from MOE.MOE_analysis import RoutingCollector, RoutingAnalyzer
 
 # ─────────────────────────────────────────────────────────────────────────────

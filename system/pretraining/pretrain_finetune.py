@@ -36,6 +36,10 @@ import torch.nn as nn
 import numpy as np
 from typing import Literal
 
+import sys
+import os
+# This finds the 'system' directory (one level up from 'pretraining') and adds it to the search path.
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from system.NOTS.paper.ablations.ablation_config import replace_head_for_eval
 
 
