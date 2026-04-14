@@ -69,11 +69,10 @@ if torch.cuda.is_available():
 # ── Trial indices ──────────────────────────────────────────────────────────────
 # We have 1 sample/class. That is rep 1. That is all we get.
 # Reps 2–10 are the query pool — never used for any form of learning.
-TRAIN_TRIAL_INDICES    = [1]
-HELD_OUT_TRIAL_INDICES = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+SS_TRAIN_TRIAL_INDICES    = [1]
+SS_HELD_OUT_TRIAL_INDICES = [2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 from ablation_config import TRAIN_PIDS, VAL_PIDS, TEST_PIDS
-ALL_SUBJECT_PIDS = TRAIN_PIDS + VAL_PIDS + TEST_PIDS
 
 
 # =============================================================================
@@ -114,10 +113,10 @@ def run_a7_one_subject(pid: str, seed: int, config: dict,
 
     Step 3 — Episodic eval:
         For each episode, MetaGestureDataset samples a 3-way task.
-        Support = 1 sample/class drawn from TRAIN_TRIAL_INDICES (rep 1) — the
+        Support = 1 sample/class drawn from SS_TRAIN_TRIAL_INDICES (rep 1) — the
         same rep the backbone trained on. This is intentional: the support set
         IS the 1 sample/class we have. Query = 9 samples/class from
-        HELD_OUT_TRIAL_INDICES (reps 2–10, never seen during learning).
+        SS_HELD_OUT_TRIAL_INDICES (reps 2–10, never seen during learning).
         Fine-tune head-only on the 3 support samples, then eval on query.
     """
     set_seeds(seed)
@@ -126,8 +125,9 @@ def run_a7_one_subject(pid: str, seed: int, config: dict,
 
     config["train_PIDs"] = [pid]
     config["val_PIDs"]   = [pid]
-    config["train_reps"] = TRAIN_TRIAL_INDICES    # [1] — 1 sample/class, all we have
-    config["val_reps"]   = TRAIN_TRIAL_INDICES    # same data; val loss is a training monitor only
+    config["train_reps"] = SS_TRAIN_TRIAL_INDICES    # [1] — 1 sample/class, all we have
+    # TODO: Should we change this to SS_HELD_OUT_TRIAL_INDICES? Overwise arent we just super overfitting to a single sample...
+    config["val_reps"]   = SS_TRAIN_TRIAL_INDICES    # same data; val loss is a training monitor only
 
     model = build_supervised_no_moe_model(config)
 
@@ -140,7 +140,8 @@ def run_a7_one_subject(pid: str, seed: int, config: dict,
     trained_model.load_state_dict(history["best_state"])
 
     # Replace 10-class pretrain head with a fresh 3-class head.
-    trained_model = replace_head_for_eval(trained_model, config)
+    #trained_model = replace_head_for_eval(trained_model, config)
+    # NOTE: I think the head is also replaced within finetune_and_eval_user. We dont need to do this both places
 
     # Episodic eval.
     # Pass all 10 reps to MetaGestureDataset so it can construct valid
@@ -150,7 +151,8 @@ def run_a7_one_subject(pid: str, seed: int, config: dict,
         tensor_dict,
         target_pids            = [pid],
         target_gesture_classes = config["maml_gesture_classes"],
-        target_trial_indices   = TRAIN_TRIAL_INDICES + HELD_OUT_TRIAL_INDICES,
+        # TODO: What is going on here... is this correct...
+        target_trial_indices   = SS_TRAIN_TRIAL_INDICES + SS_HELD_OUT_TRIAL_INDICES,
         n_way                  = config["n_way"],
         k_shot                 = config["k_shot"],    # 1
         q_query                = config["q_query"],   # 9
@@ -227,7 +229,8 @@ def run_a8_one_subject(pid: str, seed: int, config: dict,
         tensor_dict,
         target_pids            = [pid],
         target_gesture_classes = config["maml_gesture_classes"],
-        target_trial_indices   = TRAIN_TRIAL_INDICES + HELD_OUT_TRIAL_INDICES,
+        # TODO: What is going on here... is this correct...
+        target_trial_indices   = SS_TRAIN_TRIAL_INDICES + SS_HELD_OUT_TRIAL_INDICES,
         n_way                  = config["n_way"],
         k_shot                 = config["k_shot"],    # 1
         q_query                = config["q_query"],   # 9
@@ -268,7 +271,7 @@ def run_subject_specific_ablation(ablation_id: str, subject_runner, config: dict
     print(json.dumps({k: str(v) for k, v in config.items()}, indent=2))
 
     all_results = []
-    for pid in ALL_SUBJECT_PIDS:
+    for pid in TEST_PIDS:  # For subject-specific, we only need to train on the one-shot from the novel test user...
         for seed_idx in range(NUM_FINAL_SEEDS):
             actual_seed = FIXED_SEED + seed_idx
             print(f"\n{'='*70}")
