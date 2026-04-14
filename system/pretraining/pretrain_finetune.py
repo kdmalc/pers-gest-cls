@@ -36,7 +36,7 @@ import torch.nn as nn
 import numpy as np
 from typing import Literal
 
-from ablation_config import replace_head_for_eval
+from system.NOTS.paper.ablations.ablation_config import replace_head_for_eval
 
 
 # ─────────────────────────────────────────────────────────────────────────────
