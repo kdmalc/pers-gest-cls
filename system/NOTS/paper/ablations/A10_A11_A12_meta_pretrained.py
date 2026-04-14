@@ -159,7 +159,7 @@ class MetaEMGWrapper(nn.Module):
         # We import here (not at module level) so the script can be imported
         # even if the neuromotor repo isn't on the path yet.
         try:
-            # TODO: Fix this...
+            # NOTE: I installed their repo as a package on the cluster, so this should work? We'll see
             from generic_neuromotor_interface.networks import DiscreteGesturesArchitecture
         except ImportError as e:
             raise ImportError(
