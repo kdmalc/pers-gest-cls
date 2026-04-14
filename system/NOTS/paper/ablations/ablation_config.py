@@ -382,7 +382,7 @@ def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
     Evaluate a MAML model on test_pids using episodic (1-shot 3-way) sampling.
     Returns dict with per-user accs, mean, std.
     """
-    from MAML.maml_data_pipeline import MetaGestureDataset, maml_mm_collate
+    from MAML.maml_data_pipeline import MetaGestureDataset, maml_mm_collate, reorient_tensor_dict
     from MAML.mamlpp import mamlpp_adapt_and_eval
     import pickle
     from torch.utils.data import DataLoader
@@ -390,7 +390,7 @@ def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
 
     with open(tensor_dict_path, "rb") as f:
         full_dict   = pickle.load(f)
-    tensor_dict = full_dict["data"]
+    tensor_dict = reorient_tensor_dict(full_dict, config)    
 
     test_ds = MetaGestureDataset(
         tensor_dict,
