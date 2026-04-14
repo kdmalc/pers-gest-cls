@@ -130,7 +130,6 @@ def make_base_config(ablation_id: str) -> dict:
     config["q_query"]    = 9
     config["num_classes"] = 10  # unused by architecture directly; pretrain_num_classes is the
                              # authoritative source for non-MAML head size
-
     # Pretraining uses all 10 gesture classes (full supervised dataset).
     # The model is built with this many output logits during the pretrain phase.
     # At eval time the head is replaced with a fresh `n_way`-class head.
@@ -208,11 +207,20 @@ def make_base_config(ablation_id: str) -> dict:
     config["expert_architecture"]    = "MLP"
 
     # ── Gesture / trial selection ─────────────────────────────────────────────
-    config["maml_gesture_classes"]   = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    config["target_trial_indices"]   = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     config["feature_engr"]           = "None"
     config["pretrain_approach"]      = "None"
     config["pretrained_model_filename"] = None
+    config["maml_gesture_classes"]   = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    config["available_gesture_classes"] = config["maml_gesture_classes"]
+    config["target_trial_indices"]   = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    # Pretrain (flat) dataloader extras
+    config["train_reps"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["val_reps"]   = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["augment"]    = False
+    # For finetuning
+    config["ft_train_reps"] = [1]
+    config["ft_val_reps"]   = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["ft_label_smooth"] = 0.0
 
     # ── Augmentation ─────────────────────────────────────────────────────────
     config["use_label_shuf_meta_aug"] = True
@@ -223,11 +231,6 @@ def make_base_config(ablation_id: str) -> dict:
     config["debug_one_user_only"]      = False
     config["debug_one_episode"]        = False
     config["debug_five_episodes"]      = False
-
-    # Pretrain (flat) dataloader extras
-    config["train_reps"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    config["val_reps"]   = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    config["augment"]    = False
 
     config["device"] = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

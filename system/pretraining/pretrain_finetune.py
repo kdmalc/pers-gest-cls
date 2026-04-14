@@ -124,7 +124,7 @@ def finetune_and_eval_user(
     ft_steps = int(config['ft_steps'])
     ft_wd    = float(config.get('ft_weight_decay', 0.0))
     ft_opt   = config.get('ft_optimizer', 'adam').lower()
-    ls       = float(config.get('label_smooth', 0.0))
+    ls       = float(config['ft_label_smooth'])
 
     if ft_opt == 'adam':
         optimizer = torch.optim.Adam(trainable_params, lr=ft_lr, weight_decay=ft_wd)
@@ -286,6 +286,7 @@ def zeroshot_eval_user(
         dict with 'acc' and 'loss'
     """
     device = config['device']
+    # TODO: What? sampled_classes is definitely not in the config...
     sampled_classes = config.get('sampled_classes', None)
 
     query_emg    = query_emg.to(device)
@@ -357,19 +358,20 @@ def evaluate_all_val_users(
     """
     device      = config['device']
     val_pids    = config['val_PIDs']
-    n_way       = int(config.get('n_way', 3))
-    k_shot      = int(config.get('k_shot', 1))
-    q_query     = int(config.get('q_query', 9))
-    n_episodes  = int(config.get('num_eval_episodes', 10))
-    use_imu     = bool(config.get('use_imu', True))
+    n_way       = int(config['n_way'])
+    k_shot      = int(config['k_shot'])
+    q_query     = int(config['q_query'])
+    n_episodes  = int(config['num_eval_episodes'])
+    use_imu     = bool(config['use_imu'])
     all_classes = list(config['maml_gesture_classes'])
     all_reps    = list(config['target_trial_indices'])  # 1-indexed
 
+    # TODO: This implements a train/val split within the novel user...
+    ## This really should be in the config...
     # Support/query rep split.  Default: rep 1 → support, rest → query.
     # This mirrors 1-shot: the user provides 1 example per class.
-    support_reps = list(config.get('ft_support_reps', [all_reps[0]]))
-    query_reps   = list(config.get('ft_query_reps',
-                                    [r for r in all_reps if r not in support_reps]))
+    support_reps = list(config['ft_train_reps'])
+    query_reps   = list(config['ft_val_reps'])
 
     assert len(support_reps) >= k_shot, (
         f"k_shot={k_shot} but only {len(support_reps)} support reps defined."

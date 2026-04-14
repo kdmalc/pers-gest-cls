@@ -272,15 +272,14 @@ def get_pretrain_dataloaders(config: dict, tensor_dict: dict):
         val_dl   : DataLoader
         n_classes: int
     """
-    # DELETE the pickle block that was here — caller owns loading now
-    gesture_classes = config.get("available_gesture_classes", None)
+    gesture_classes = config["available_gesture_classes"]
 
     train_ds = PretrainGestureDataset(
         tensor_dict,
         target_pids               = config["train_PIDs"],
         target_rep_nums           = config["train_reps"],
         available_gesture_classes = gesture_classes,
-        use_imu                   = config.get("use_imu", True),
+        use_imu                   = config["use_imu"],
         augment                   = config.get("augment", False),
         aug_noise_std             = config.get("aug_noise_std", 0.05),
         aug_max_shift             = config.get("aug_max_shift", 4),
@@ -291,13 +290,14 @@ def get_pretrain_dataloaders(config: dict, tensor_dict: dict):
         target_pids               = config["val_PIDs"],
         target_rep_nums           = config["val_reps"],
         available_gesture_classes = gesture_classes,
-        use_imu                   = config.get("use_imu", True),
+        use_imu                   = config["use_imu"],
         augment                   = False,
     )
 
-    nw = int(config.get("num_workers", 4))
-    bs = int(config.get("batch_size", 64))
+    nw = int(config["num_workers"])
+    bs = int(config["batch_size"])
 
+    # NOTE: Why is the val bs twice the train bs... bs for val shouldnt even matter right...
     train_dl = DataLoader(train_ds, batch_size=bs,   shuffle=True,  num_workers=nw,
                           collate_fn=pretrain_collate, pin_memory=True, drop_last=True)
     val_dl   = DataLoader(val_ds,   batch_size=bs*2, shuffle=False, num_workers=nw,

@@ -93,6 +93,15 @@ def run_one_seed(seed: int, config: dict, tensor_dict: dict) -> dict:
         f"{config['pretrain_num_classes']}. Check your gesture class list."
     )
 
+    # After get_pretrain_dataloaders, before pretrain():
+    sample_batch = next(iter(train_dl))
+    labels = sample_batch["labels"]
+    assert labels.min() >= 0 and labels.max() < config["pretrain_num_classes"], (
+        f"Label range [{labels.min()}, {labels.max()}] out of bounds for "
+        f"pretrain_num_classes={config['pretrain_num_classes']}. "
+        f"Check available_gesture_classes and tensor_dict keys."
+    )
+
     trained_model, history = pretrain(model, train_dl, val_dl, config)
     best_val_acc = max(history["val_acc_log"]) if history["val_acc_log"] else float("nan")
     print(f"[A1 | seed={seed}] Training complete. Best val acc = {best_val_acc:.4f}")

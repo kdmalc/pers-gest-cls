@@ -227,19 +227,19 @@ def pretrain(model, train_dl, val_dl, config: dict, save_path: str = None):
     device = config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
     model  = model.to(device)
 
-    use_moe   = config.get('use_MOE', False)
+    use_moe   = config['use_MOE']
     moe_log_every = int(config.get('MOE_log_every', 5))    # 0 = never
     moe_plot_dir  = config.get('MOE_plot_dir', None)
-    num_experts   = int(config.get('num_experts', 4))
+    num_experts   = int(config['num_experts'])
 
     # ── Loss ────────────────────────────────────────────────────────────────
-    label_smooth = float(config.get('label_smooth', 0.1))
+    label_smooth = float(config['label_smooth'])
     criterion    = nn.CrossEntropyLoss(label_smoothing=label_smooth)
 
     # ── Optimizer ───────────────────────────────────────────────────────────
     opt_name = config.get('optimizer', 'adamw').lower()
-    lr       = float(config.get('learning_rate', 1e-3))
-    wd       = float(config.get('weight_decay', 1e-4))
+    lr       = float(config['learning_rate'])
+    wd       = float(config['weight_decay'])
 
     if opt_name == 'adamw':
         decay_params     = [p for n, p in model.named_parameters() if 'bias' not in n and 'norm' not in n.lower() and p.requires_grad]
@@ -259,7 +259,7 @@ def pretrain(model, train_dl, val_dl, config: dict, save_path: str = None):
         pg.setdefault('initial_lr', lr)
 
     # ── Scheduler ───────────────────────────────────────────────────────────
-    num_epochs    = int(config.get('num_epochs', 100))
+    num_epochs    = int(config['num_epochs'])
     warmup_epochs = int(config.get('warmup_epochs', 5))
     use_scheduler = config.get('use_scheduler', True)
     scheduler     = build_scheduler(optimizer, num_epochs, warmup_epochs) if use_scheduler else None

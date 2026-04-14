@@ -293,24 +293,24 @@ class MetaCNNLSTM_EncoderMOE(nn.Module):
         # ── Sizes ───────────────────────────────────────────────────────────
         C_emg    = config["emg_in_ch"]
         C_imu    = config.get("imu_in_ch", 72)
-        use_imu  = config.get("use_imu", False)
+        use_imu  = config["use_imu"]
         n_filt   = config["cnn_filters"]
         k        = config["cnn_kernel"]
-        gn_grps  = config.get("groupnorm_num_groups", 8)
+        gn_grps  = config["groupnorm_num_groups"]
         lstm_h   = config["lstm_hidden"]
         n_way    = config['n_way'] if config['meta_learning'] else config['pretrain_num_classes']
         drop     = config.get("dropout", 0.0)
         bidir    = config.get("bidirectional", False)
-        head_type = config.get("head_type", "linear")
+        head_type = config["head_type"]
 
         # MOE config
-        E            = config.get("num_experts", 4)
-        ctx_hidden   = config.get("MOE_ctx_hidden_dim", 64)
-        ctx_out      = config.get("MOE_ctx_out_dim", 32)
-        MOE_drop     = config.get("MOE_dropout", drop)
-        gate_temp    = config.get("MOE_gate_temperature", 1.0)
-        top_k        = config.get("MOE_top_k", None)
-        width_mult   = config.get("MOE_expert_expand", 1.0)
+        E            = config["num_experts"]
+        ctx_hidden   = config["MOE_ctx_hidden_dim"]
+        ctx_out      = config["MOE_ctx_out_dim"]
+        MOE_drop     = config["MOE_dropout"]
+        gate_temp    = config["MOE_gate_temperature"]
+        top_k        = config["MOE_top_k"]
+        width_mult   = config["MOE_expert_expand"]
 
         self.use_imu     = use_imu
         self.num_experts = E
@@ -450,25 +450,25 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         # ── Sizes ───────────────────────────────────────────────────────────
         C_emg    = config["emg_in_ch"]
         C_imu    = config.get("imu_in_ch", 72)
-        use_imu  = config.get("use_imu", False)
+        use_imu  = config["use_imu"]
         base_f   = config["cnn_base_filters"]
-        n_layers = config.get("cnn_layers", 3)
+        n_layers = config["cnn_layers"]
         k        = config["cnn_kernel"]
         gn_grps  = config["groupnorm_num_groups"]
         lstm_h   = config["lstm_hidden"]
         n_way    = config['n_way'] if config['meta_learning'] else config['pretrain_num_classes']
-        drop     = config.get("dropout", 0.2)
-        bidir    = config.get("bidirectional", True)
-        head_type = config.get("head_type", "mlp")
+        drop     = config["dropout"]
+        bidir    = config["bidirectional"]
+        head_type = config["head_type"]
 
         # MOE config
-        E          = config.get("num_experts", 4)
-        ctx_hidden = config.get("MOE_ctx_hidden_dim", 64)
-        ctx_out    = config.get("MOE_ctx_out_dim", 32)
-        MOE_drop   = config.get("MOE_dropout", drop)
-        gate_temp  = config.get("MOE_gate_temperature", 1.0)
-        top_k      = config.get("MOE_top_k", None)
-        width_mult = config.get("MOE_expert_expand", 1.0)
+        E          = config["num_experts"]
+        ctx_hidden = config["MOE_ctx_hidden_dim"]
+        ctx_out    = config["MOE_ctx_out_dim"]
+        MOE_drop   = config["MOE_dropout"]
+        gate_temp  = config["MOE_gate_temperature"]
+        top_k      = config["MOE_top_k"]
+        width_mult = config["MOE_expert_expand"]
 
         self.use_imu     = use_imu
         self.num_experts = E
