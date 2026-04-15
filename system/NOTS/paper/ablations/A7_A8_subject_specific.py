@@ -127,6 +127,9 @@ def run_a7_one_subject(pid: str, seed: int, config: dict,
     config["val_PIDs"]   = [pid]
     config["train_reps"] = SS_TRAIN_TRIAL_INDICES    # [1] — 1 sample/class, all we have
     # TODO: Should we change this to SS_HELD_OUT_TRIAL_INDICES? Overwise arent we just super overfitting to a single sample...
+    # Well... SS_HELD_OUT_TRIAL_INDICES is literally the test data...
+    ## Do we create SS_VAL_TRIAL_INDICES and SS_TEST_TRIAL_INDICES?
+    ## Presumably we need/want it to match the 1s3w comparison.......
     config["val_reps"]   = SS_TRAIN_TRIAL_INDICES    # same data; val loss is a training monitor only
 
     model = build_supervised_no_moe_model(config)

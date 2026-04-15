@@ -374,8 +374,11 @@ def evaluate_all_val_users(
     ## This really should be in the config...
     # Support/query rep split.  Default: rep 1 → support, rest → query.
     # This mirrors 1-shot: the user provides 1 example per class.
-    support_reps = list(config['ft_train_reps'])
-    query_reps   = list(config['ft_val_reps'])
+    #support_reps = list(config['ft_train_reps'])
+    #query_reps   = list(config['ft_val_reps'])
+    # TODO: I think finetuning is done correctly (ie we finetune and then toss, episodes are independent), so we can just use train/val as normal (they should be the same right...)
+    support_reps = list(config['train_reps'])
+    query_reps   = list(config['val_reps'])
 
     assert len(support_reps) >= k_shot, (
         f"k_shot={k_shot} but only {len(support_reps)} support reps defined."

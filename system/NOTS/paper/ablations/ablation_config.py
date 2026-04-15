@@ -218,8 +218,9 @@ def make_base_config(ablation_id: str) -> dict:
     config["val_reps"]   = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     config["augment"]    = False
     # For finetuning
-    config["ft_train_reps"] = [1]
-    config["ft_val_reps"]   = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+    # TODO: I think these should get removed? Idk where they are used... if the eval is episodic we dont need these...
+    #config["ft_train_reps"] = [1]
+    #config["ft_val_reps"]   = [2, 3, 4, 5, 6, 7, 8, 9, 10]
     config["ft_label_smooth"] = 0.0
 
     # ── Augmentation ─────────────────────────────────────────────────────────

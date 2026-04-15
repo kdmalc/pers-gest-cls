@@ -103,23 +103,23 @@ def run_one_seed(seed: int, config: dict, tensor_dict: dict) -> dict:
     )
 
     trained_model, history = pretrain(model, train_dl, val_dl, config)
-    best_val_acc = max(history["val_acc_log"]) if history["val_acc_log"] else float("nan")
+    best_val_acc = max(history["val_acc"]) if history["val_acc"] else float("nan")
     print(f"[A1 | seed={seed}] Training complete. Best val acc = {best_val_acc:.4f}")
 
     save_model_checkpoint(
         {
             "seed":              seed,
-            "model_state_dict":  history["best_state"],
+            "model_state_dict":  trained_model.state_dict(),
             "config":            config,
             "best_val_acc":      best_val_acc,
-            "train_loss_log":    history.get("train_loss_log", []),
-            "val_acc_log":       history.get("val_acc_log", []),
+            "train_loss_log":    history["train_loss"],
+            "val_acc_log":       history["val_acc"],
         },
         config,
         tag=f"seed{seed}_best",
     )
 
-    trained_model.load_state_dict(history["best_state"])
+    #trained_model.load_state_dict(history["best_state"])
 
     tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
 
