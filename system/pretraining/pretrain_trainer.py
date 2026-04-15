@@ -409,6 +409,7 @@ def pretrain(model, train_dl, val_dl, config: dict, save_path: str = None):
                 except Exception as e:
                     print(f"[MoE] Warning: could not save final {tag} RoutingRecord: {e}")
 
+    # It loads in the best_state before returning the model!
     if best_state is not None:
         model.load_state_dict(best_state)
         print(f"\n[Done] Loaded best model from epoch {best_epoch} | val_loss={best_val_loss:.4f}")
@@ -417,6 +418,7 @@ def pretrain(model, train_dl, val_dl, config: dict, save_path: str = None):
     history['best_val_loss'] = best_val_loss
     history['best_val_acc']  = history['val_acc'][best_epoch - 1] if best_epoch > 0 else 0.0
 
+    # NOTE: History keys do not match mamlpp_pretrain() in mamlpp...
     return model, history
 
 

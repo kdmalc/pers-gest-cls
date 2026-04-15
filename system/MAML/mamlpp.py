@@ -538,6 +538,7 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         model.load_state_dict(best_state)
         print(f"[MAML++] loaded best model (val acc={best_val_acc:.3f})")
 
+    # NOTE: These do not match pretrain() in pretrain_trainer...
     return model, {
         "train_loss_log":  train_loss_log,
         "train_acc_log":   train_acc_log,

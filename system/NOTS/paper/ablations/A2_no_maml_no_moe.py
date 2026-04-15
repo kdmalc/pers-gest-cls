@@ -102,8 +102,6 @@ def run_one_seed(seed: int, config: dict, tensor_dict: dict) -> dict:
         tag=f"seed{seed}_best",
     )
 
-    #trained_model.load_state_dict(history["best_state"])
-
     tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
 
     head_results = run_supervised_test_eval(
