@@ -9,7 +9,6 @@
 #   - Search spaces updated to reflect trends visible in the new warm-start data:
 #       * cnn_base_filters / lstm_hidden re-opened for search (new top-10 show
 #         more diversity here than the v2 "128/128 fixed" assumption).
-#       * use_GlobalAvgPooling re-opened (new top-10 heavily favour True).
 #       * maml_use_lslr re-opened (new top-10 show mixed signal).
 #       * use_maml_msl re-opened with 'hybrid' and False (new top-10 favour hybrid).
 #       * maml_inner_steps range narrowed to [5,7,9,10] (9/10 appear in new data).
@@ -242,7 +241,7 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config["padding"]         = 0
 
     # New warm-start: True in all 10 trials → still sweep to be safe, but prior is strong.
-    config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
+    config["use_GlobalAvgPooling"] = True  #trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
 
     # === Multimodal ===
     config["multimodal"]               = True
