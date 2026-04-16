@@ -95,8 +95,6 @@ if torch.cuda.is_available():
 
 
 # =============================================================================
-# ── TODO: Fill in these paths before running ─────────────────────────────────
-# =============================================================================
 
 # Path to Meta's pretrained checkpoint
 META_CHECKPOINT_PATH = Path(
@@ -105,15 +103,12 @@ META_CHECKPOINT_PATH = Path(
 
 # Path to your 2kHz EMG-only tensor_dict pkl (the "pre-downsampling" version).
 # Same format as your standard tensor_dict but with seq_len matching 2kHz windows.
-# TODO: set this once your 2kHz data is prepared.
-EMG_2KHZ_PKL_PATH = None  # e.g. Path("/path/to/segfilt_2khz_emg_tensor_dict.pkl")
+EMG_2KHZ_PKL_PATH = "/projects/my13/kai/meta-pers-gest/pers-gest-cls/dataset/meta-learning-sup-que-ds/segfilt_2khz_emg_tensor_dict.pkl"
 
 # Input dimensions for your 2kHz data.
-# EMG channels should still be 16. Sequence length depends on your window size.
-# At 2kHz, 500 ms = 1000 samples.  Confirm with whoever processed the data.
-# TODO: confirm and set.
-EMG_2KHZ_IN_CH  = 16    # almost certainly still 16
-EMG_2KHZ_SEQ_LEN = 1000  # 500 ms at 2kHz — CONFIRM this with your data
+# At 2kHz, 500 ms = 1000 samples.
+EMG_2KHZ_IN_CH  = 16   
+EMG_2KHZ_SEQ_LEN = 4300  # Check extraction NB or the data itself if you want to confirm
 
 # Fine-tuning settings for A11.
 # Per spec: tune ft_lr in [1e-5, 1e-2] and ft_steps in {10, 25, 50, 100}.
