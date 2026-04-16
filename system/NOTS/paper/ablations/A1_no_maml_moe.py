@@ -152,9 +152,11 @@ def main():
 
     # Load tensor_dict once — reused across seeds
     tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
+    
+    from MAML.maml_data_pipeline import reorient_tensor_dict
     with open(tensor_dict_path, "rb") as f:
-        full_dict   = pickle.load(f)
-    tensor_dict = full_dict["data"]
+        full_dict = pickle.load(f)
+    tensor_dict = reorient_tensor_dict(full_dict, config)
 
     all_seed_results = []
     for seed_idx in range(NUM_FINAL_SEEDS):

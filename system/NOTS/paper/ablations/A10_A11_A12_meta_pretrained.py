@@ -361,9 +361,10 @@ def prototypical_zeroshot_eval(
 
     device = config["device"]
 
+    from MAML.maml_data_pipeline import reorient_tensor_dict
     with open(tensor_dict_path, "rb") as f:
         full_dict = pickle.load(f)
-    tensor_dict = full_dict["data"]
+    tensor_dict = reorient_tensor_dict(full_dict, config)
 
     test_ds = MetaGestureDataset(
         tensor_dict,

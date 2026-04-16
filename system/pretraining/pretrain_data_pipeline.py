@@ -4,10 +4,10 @@ pretrain_data_pipeline.py
 Standard supervised pretraining dataloader for EMG gesture classification.
 
 ────────────────────────────────────────────────────────────────────────────────
-NEW tensor_dict layout (as of bug-fix):
+Tensor layout contract (post reorient_tensor_dict):
   tensor_dict[pid][gesture_class]  →  dict with fields:
-    'emg'          : Tensor (num_trials, seq_len, num_channels)  → (10, 64, 16)
-    'imu'          : Tensor (num_trials, seq_len, imu_channels)  → (10, 64, 72) or None
+    'emg'          : Tensor (num_trials, C, T)  → (10, 16, 64)
+    'imu'          : Tensor (num_trials, C, T)  → (10, 72, 64) or None
     'demo'         : Tensor (demographic vector)
     'enc_gest_ID'  : encoded gesture ID (internal, not used here)
     'gest_ID'      : int — same as the outer key; 0-indexed gesture class label (0..9)
@@ -18,6 +18,13 @@ NEW tensor_dict layout (as of bug-fix):
     pid          : str,  e.g. "P102"
     gesture_class: int,  0-indexed gesture class label, i.e. 0 … (n_classes-1)
                    *** NOT a repetition number, NOT an encoded ID ***
+
+  IMPORTANT: tensor_dict MUST have been reoriented via
+    reorient_tensor_dict(full_dict, config)
+  before being passed to get_pretrain_dataloaders(). The on-disk layout is
+  (num_trials, T, C); reorient_tensor_dict flips this to (num_trials, C, T)
+  in-place. Passing unreoriented data will raise an AssertionError in
+  __getitem__ — this is intentional so the failure is loud and immediate.
 
 ────────────────────────────────────────────────────────────────────────────────
 Terminology used throughout this file — please keep these DISTINCT:
@@ -44,6 +51,8 @@ Config keys consumed here (aligned with BASE_CONFIG):
   val_reps                  : list[int]  — 1-indexed trial numbers used for val
   available_gesture_classes : list[int]  — 0-indexed class labels to include
   use_imu                   : bool
+  emg_in_ch                 : int        — expected EMG channel count (e.g. 16)
+  imu_in_ch                 : int        — expected IMU channel count (e.g. 72)
   batch_size                : int
   num_workers               : int
   augment                   : bool       — applied to train set only
@@ -52,32 +61,9 @@ Config keys consumed here (aligned with BASE_CONFIG):
   aug_ch_drop               : float
 """
 
-import pickle
 import random
 import torch
 from torch.utils.data import Dataset, DataLoader
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Tensor layout helper
-# ─────────────────────────────────────────────────────────────────────────────
-
-def to_channel_first_2d(x: torch.Tensor) -> torch.Tensor:
-    """
-    Convert a single sample from (seq_len, num_channels) → (num_channels, seq_len).
-
-    The new tensor_dict stores data as (num_trials, seq_len, num_channels).
-    After slicing out one trial we get (seq_len, num_channels), i.e. (T, C).
-    Models expect (C, T).  This function handles that final permute.
-
-    Args:
-        x: Tensor of shape (T, C)  — a single trial, channel-last
-
-    Returns:
-        Tensor of shape (C, T)  — channel-first, ready for Conv1d / LSTM
-    """
-    assert x.dim() == 2, f"Expected 2D tensor (T, C), got shape {x.shape}"
-    return x.permute(1, 0).contiguous()  # (T, C) → (C, T)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -104,7 +90,7 @@ def _temporal_shift(x: torch.Tensor, max_shift: int = 4) -> torch.Tensor:
 
 def _channel_dropout(x: torch.Tensor, drop_prob: float = 0.1) -> torch.Tensor:
     """
-    Zero out entire EMG channels independently with probability drop_prob.
+    Zero out entire channels independently with probability drop_prob.
 
     Args:
         x: Tensor (C, T)
@@ -124,13 +110,15 @@ class PretrainGestureDataset(Dataset):
     Each item is ONE trial (one repetition of one gesture by one participant).
     The label is the gesture class label (0-indexed integer, 0 … n_classes-1).
 
-    Indexing into tensor_dict:
-      tensor_dict[pid][gesture_class]['emg']  →  (num_trials, seq_len, num_channels)
-      We select the trial corresponding to a specific 1-indexed rep_num via:
-          trial_idx = rep_num - 1   (converts 1-indexed → 0-indexed array position)
+    Tensor layout contract:
+      tensor_dict[pid][gesture_class]['emg']  →  (num_trials, C, T)  — channel-first
+      reorient_tensor_dict() must have been called before constructing this dataset.
+      Slicing one trial gives (C, T), which is what __getitem__ returns directly
+      (clone + cast only, no permute). Shape asserts in __getitem__ enforce this.
 
     Args:
-        tensor_dict              : loaded data dict (already extracted from full_dict['data'])
+        tensor_dict              : loaded+reoriented data dict (from full_dict['data']
+                                   after reorient_tensor_dict has been called)
         target_pids              : participant IDs to include
         target_rep_nums          : 1-indexed trial/repetition numbers to include
                                    e.g. [1,2,...,8] for train, [9,10] for val
@@ -140,25 +128,31 @@ class PretrainGestureDataset(Dataset):
         aug_noise_std            : Gaussian noise scale (relative to signal std)
         aug_max_shift            : max circular time shift in samples
         aug_ch_drop              : per-channel zero-out probability
+        emg_channels             : expected EMG channel count — used to assert correct orientation
+        imu_channels             : expected IMU channel count — used to assert correct orientation
     """
 
     def __init__(
         self,
         tensor_dict: dict,
         target_pids: list,
-        target_rep_nums: list,           # 1-indexed trial numbers, e.g. [1..8] or [9,10]
+        target_rep_nums: list,                   # 1-indexed trial numbers, e.g. [1..8] or [9,10]
         available_gesture_classes: list = None,  # 0-indexed class labels
         use_imu: bool = False,
         augment: bool = False,
         aug_noise_std: float = 0.05,
         aug_max_shift: int = 4,
         aug_ch_drop: float = 0.10,
+        emg_channels: int = 16,
+        imu_channels: int = 72,
     ):
         self.use_imu       = use_imu
         self.augment       = augment
         self.aug_noise_std = aug_noise_std
         self.aug_max_shift = aug_max_shift
         self.aug_ch_drop   = aug_ch_drop
+        self.emg_channels  = emg_channels
+        self.imu_channels  = imu_channels
 
         # ── Determine which gesture class labels to include ──────────────────
         # Keys in tensor_dict[pid] are 0-indexed integer class labels.
@@ -177,12 +171,9 @@ class PretrainGestureDataset(Dataset):
 
         # ── Build flat sample list ───────────────────────────────────────────
         # Each entry: (emg_trial, imu_trial_or_None, class_label)
-        #   emg_trial : Tensor (seq_len, num_channels)  — channel-last, 1 trial
-        #   imu_trial : Tensor (seq_len, imu_channels) or None
+        #   emg_trial  : Tensor (C, T)  — channel-first, 1 trial (post reorient_tensor_dict)
+        #   imu_trial  : Tensor (C_imu, T) or None
         #   class_label: int  0 … (n_classes-1)
-        #
-        # We do NOT permute to (C, T) here; we do it in __getitem__ so that
-        # cached tensors stay in the original layout and cloning is cheap.
 
         self.samples = []
         skipped_trials = 0
@@ -196,8 +187,8 @@ class PretrainGestureDataset(Dataset):
                     continue
 
                 slot    = tensor_dict[pid][class_label]
-                emg_all = slot['emg']   # (num_trials, seq_len, num_channels)
-                imu_all = slot.get('imu', None)  # (num_trials, seq_len, imu_channels) or None
+                emg_all = slot['emg']              # (num_trials, C, T) — post reorient
+                imu_all = slot.get('imu', None)    # (num_trials, C_imu, T) or None
 
                 num_trials_available = emg_all.shape[0]  # should be 10
 
@@ -209,7 +200,7 @@ class PretrainGestureDataset(Dataset):
                         skipped_trials += 1
                         continue  # This rep_num doesn't exist for this pid/gesture
 
-                    emg_trial = emg_all[trial_idx]   # (seq_len, num_channels) = (T, C)
+                    emg_trial = emg_all[trial_idx]   # (C, T)
                     imu_trial = imu_all[trial_idx] if imu_all is not None else None
 
                     self.samples.append((emg_trial, imu_trial, class_label))
@@ -222,10 +213,17 @@ class PretrainGestureDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        emg_tc, imu_tc, class_label = self.samples[idx]
+        emg_ct, imu_ct, class_label = self.samples[idx]
 
-        # Clone before any in-place-style ops; convert (T, C) → (C, T)
-        emg = to_channel_first_2d(emg_tc.clone().float())   # (C_emg, T)
+        # Data is (C, T) — reorient_tensor_dict was called before this Dataset
+        # was constructed. Assert rather than permute so a missing reorient call
+        # crashes loudly instead of silently producing wrong shapes downstream.
+        assert emg_ct.shape[0] == self.emg_channels, (
+            f"EMG trial shape {tuple(emg_ct.shape)}: expected dim0={self.emg_channels} (C). "
+            f"Was reorient_tensor_dict() called before building this Dataset?"
+        )
+
+        emg = emg_ct.clone().float()   # (C_emg, T)
 
         if self.augment:
             emg = _gaussian_noise(emg, self.aug_noise_std)
@@ -233,14 +231,18 @@ class PretrainGestureDataset(Dataset):
             emg = _channel_dropout(emg, self.aug_ch_drop)
 
         imu = None
-        if self.use_imu and imu_tc is not None:
-            imu = to_channel_first_2d(imu_tc.clone().float())  # (C_imu, T)
+        if self.use_imu and imu_ct is not None:
+            assert imu_ct.shape[0] == self.imu_channels, (
+                f"IMU trial shape {tuple(imu_ct.shape)}: expected dim0={self.imu_channels} (C). "
+                f"Was reorient_tensor_dict() called before building this Dataset?"
+            )
+            imu = imu_ct.clone().float()   # (C_imu, T)
             if self.augment:
                 imu = _gaussian_noise(imu, self.aug_noise_std)
 
         return {
-            "emg":   emg,                                      # (C_emg, T)
-            "imu":   imu,                                      # (C_imu, T) or None
+            "emg":   emg,                                       # (C_emg, T)
+            "imu":   imu,                                       # (C_imu, T) or None
             "label": torch.tensor(class_label, dtype=torch.long),
         }
 
@@ -265,7 +267,15 @@ def pretrain_collate(batch):
 def get_pretrain_dataloaders(config: dict, tensor_dict: dict):
     """
     Build train and val DataLoaders for supervised pretraining.
-    Caller is responsible for loading tensor_dict from disk (load once, reuse).
+
+    IMPORTANT: `tensor_dict` must already have been reoriented via
+      reorient_tensor_dict(full_dict, config)
+    before being passed here. Tensors must be in (num_trials, C, T) layout.
+    Passing raw on-disk layout (num_trials, T, C) will trigger AssertionErrors
+    in __getitem__ on the first batch — this is intentional.
+
+    Caller is responsible for loading tensor_dict from disk (load once, reuse
+    across seeds to avoid redundant I/O and repeated reorientation).
 
     Returns:
         train_dl : DataLoader
@@ -273,6 +283,8 @@ def get_pretrain_dataloaders(config: dict, tensor_dict: dict):
         n_classes: int
     """
     gesture_classes = config["available_gesture_classes"]
+    emg_channels    = config["emg_in_ch"]
+    imu_channels    = config["imu_in_ch"]
 
     train_ds = PretrainGestureDataset(
         tensor_dict,
@@ -284,6 +296,8 @@ def get_pretrain_dataloaders(config: dict, tensor_dict: dict):
         aug_noise_std             = config.get("aug_noise_std", 0.05),
         aug_max_shift             = config.get("aug_max_shift", 4),
         aug_ch_drop               = config.get("aug_ch_drop", 0.10),
+        emg_channels              = emg_channels,
+        imu_channels              = imu_channels,
     )
     val_ds = PretrainGestureDataset(
         tensor_dict,
@@ -292,12 +306,15 @@ def get_pretrain_dataloaders(config: dict, tensor_dict: dict):
         available_gesture_classes = gesture_classes,
         use_imu                   = config["use_imu"],
         augment                   = False,
+        emg_channels              = emg_channels,
+        imu_channels              = imu_channels,
     )
 
     nw = int(config["num_workers"])
     bs = int(config["batch_size"])
 
-    # NOTE: Why is the val bs twice the train bs... bs for val shouldnt even matter right...
+    # val batch size is 2× train: no gradients means lower memory pressure,
+    # so we can push larger batches through for speed. Correctness is unaffected.
     train_dl = DataLoader(train_ds, batch_size=bs,   shuffle=True,  num_workers=nw,
                           collate_fn=pretrain_collate, pin_memory=True, drop_last=True)
     val_dl   = DataLoader(val_ds,   batch_size=bs*2, shuffle=False, num_workers=nw,
