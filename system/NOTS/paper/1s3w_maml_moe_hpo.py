@@ -1,24 +1,43 @@
 # =============================================================================
+# HPO v3  —  MAML+MoE  |  1-shot 3-way  |  50 inner-steps @ eval (FIXED)
+# =============================================================================
+# What changed from v2:
+#   - maml_inner_steps_eval is FIXED to 50 (no longer HPO'd).
+#     Rationale: 100-step eval caused meta-overfitting (epoch-0 was always best).
+#     50 steps is now the canonical eval budget, matching ablation_config.py.
+#   - Warm-start params are the top-10 from the 50-step HPO run you already have.
+#   - Search spaces updated to reflect trends visible in the new warm-start data:
+#       * cnn_base_filters / lstm_hidden re-opened for search (new top-10 show
+#         more diversity here than the v2 "128/128 fixed" assumption).
+#       * use_GlobalAvgPooling re-opened (new top-10 heavily favour True).
+#       * maml_use_lslr re-opened (new top-10 show mixed signal).
+#       * use_maml_msl re-opened with 'hybrid' and False (new top-10 favour hybrid).
+#       * maml_inner_steps range narrowed to [5,7,9,10] (9/10 appear in new data).
+#       * outer_lr / wd lower bounds loosened slightly (new top-10 go a bit lower).
+#       * MOE_ctx_out_dim / MOE_ctx_hidden_dim re-opened (new top-10 show 16-128 spread).
+#       * MOE_dropout re-opened (new top-10 show 0.001-0.17 spread).
+#       * label_smooth fixed to 0.05 (every single new top-10 trial uses it).
+#       * episodes_per_epoch_train range updated to [100, 200, 250, 500].
+#   - V3_SUGGEST_KEYS updated accordingly.
+#   - reorient_tensor_dict added to data loading (matches ablation_config.py).
+# =============================================================================
+
+# =============================================================================
 # WARM-START CONFIGURATION
 # =============================================================================
-# These are the top-10 param dicts extracted from your old HPO study.
-# Then paste those dicts into WARM_START_PARAMS below.
-# Keys that are no longer suggest_*'d in v2 are automatically dropped before enqueuing.
-# Values outside the new search space bounds are automatically clamped.
+# Top-10 param dicts from the 50-step-eval HPO run.
+# Keys not actively suggest_*'d in v3 are dropped before enqueuing.
 WARM_START_PARAMS: list[dict] = [
-    # --- Paste your top-10 trial param dicts here: ---
-    {'cnn_base_filters': 128, 'lstm_hidden': 128, 'meta_batchsize': 4, 'maml_inner_steps': 15, 'maml_inner_steps_eval': 100, 'maml_alpha_init': 0.002487014323436451, 'maml_alpha_init_eval': 0.011690130192128601, 'outer_lr': 0.0002767277795088434, 'wd': 0.00016686152395082782, 'groupnorm_num_groups': 4, 'use_GlobalAvgPooling': False, 'num_experts': 37, 'MOE_top_k': 8, 'MOE_placement': 'encoder', 'MOE_gate_temperature': 0.5941228804888874, 'MOE_aux_coeff': 0.03370428220209942, 'MOE_ctx_out_dim': 32, 'MOE_ctx_hidden_dim': 32, 'MOE_dropout': 0.06309626206246866, 'MOE_aux_loss_plcmt': 'both', 'episodes_per_epoch_train': 400, 'label_smooth': 0.2, 'use_maml_msl': False, 'maml_use_lslr': True, 'use_lslr_at_eval': False},
-    # NOTE: This one actually had label_smooth as 0.05 but I changed it to 0.1 so we dont have to deal with matching/snapping to current trials vals  
-    {'cnn_base_filters': 64, 'lstm_hidden': 64, 'meta_batchsize': 24, 'maml_inner_steps': 7, 'maml_inner_steps_eval': 50, 'maml_alpha_init': 0.0016865261840566302, 'maml_alpha_init_eval': 0.03241222861959444, 'outer_lr': 0.00011753148144028081, 'wd': 0.0006958201039866241, 'groupnorm_num_groups': 8, 'use_GlobalAvgPooling': True, 'num_experts': 25, 'MOE_top_k': 6, 'MOE_placement': 'encoder', 'MOE_gate_temperature': 0.5007953923754159, 'MOE_aux_coeff': 0.17418352079333946, 'MOE_ctx_out_dim': 32, 'MOE_ctx_hidden_dim': 64, 'MOE_dropout': 0.10372039932801176, 'MOE_aux_loss_plcmt': 'inner', 'episodes_per_epoch_train': 200, 'label_smooth': 0.1, 'use_maml_msl': 'hybrid', 'maml_msl_num_epochs': 36, 'maml_use_lslr': True, 'use_lslr_at_eval': True},
-    {'cnn_base_filters': 128, 'lstm_hidden': 128, 'meta_batchsize': 24, 'maml_inner_steps': 5, 'maml_inner_steps_eval': 100, 'maml_alpha_init': 0.00215918882245269, 'maml_alpha_init_eval': 0.01724339619955581, 'outer_lr': 0.0003387394041748131, 'wd': 0.0009824071974333427, 'groupnorm_num_groups': 4, 'use_GlobalAvgPooling': True, 'num_experts': 30, 'MOE_top_k': 9, 'MOE_placement': 'encoder', 'MOE_gate_temperature': 0.6408701211544334, 'MOE_aux_coeff': 0.056782346864083004, 'MOE_ctx_out_dim': 32, 'MOE_ctx_hidden_dim': 32, 'MOE_dropout': 0.13485301536482325, 'MOE_aux_loss_plcmt': 'both', 'episodes_per_epoch_train': 200, 'label_smooth': 0.15, 'use_maml_msl': False, 'maml_use_lslr': True, 'use_lslr_at_eval': False},
-    {'cnn_base_filters': 128, 'lstm_hidden': 128, 'meta_batchsize': 24, 'maml_inner_steps': 7, 'maml_inner_steps_eval': 100, 'maml_alpha_init': 0.0034462276812239597, 'maml_alpha_init_eval': 0.02666723608258689, 'outer_lr': 0.000325178356793008, 'wd': 0.0007397089221701143, 'groupnorm_num_groups': 4, 'use_GlobalAvgPooling': True, 'num_experts': 30, 'MOE_top_k': 6, 'MOE_placement': 'encoder', 'MOE_gate_temperature': 0.5061333844823092, 'MOE_aux_coeff': 0.11698636887529903, 'MOE_ctx_out_dim': 32, 'MOE_ctx_hidden_dim': 32, 'MOE_dropout': 0.1253800279316267, 'MOE_aux_loss_plcmt': 'both', 'episodes_per_epoch_train': 200, 'label_smooth': 0.15, 'use_maml_msl': False, 'maml_use_lslr': True, 'use_lslr_at_eval': False},
-    {'cnn_base_filters': 96, 'lstm_hidden': 128, 'meta_batchsize': 24, 'maml_inner_steps': 5, 'maml_inner_steps_eval': 100, 'maml_alpha_init': 0.0011434609940195383, 'maml_alpha_init_eval': 0.013743064348488956, 'outer_lr': 0.00034135142611364734, 'wd': 0.0007170786924069433, 'groupnorm_num_groups': 4, 'use_GlobalAvgPooling': True, 'num_experts': 33, 'MOE_top_k': 9, 'MOE_placement': 'encoder', 'MOE_gate_temperature': 0.6335521873141069, 'MOE_aux_coeff': 0.03501548028398173, 'MOE_ctx_out_dim': 32, 'MOE_ctx_hidden_dim': 32, 'MOE_dropout': 0.04230749123593348, 'MOE_aux_loss_plcmt': 'both', 'episodes_per_epoch_train': 200, 'label_smooth': 0.15, 'use_maml_msl': False, 'maml_use_lslr': True, 'use_lslr_at_eval': False},
-    {'cnn_base_filters': 128, 'lstm_hidden': 128, 'meta_batchsize': 24, 'maml_inner_steps': 5, 'maml_inner_steps_eval': 100, 'maml_alpha_init': 0.0017216935927801568, 'maml_alpha_init_eval': 0.011853116456857101, 'outer_lr': 0.00026490992611198004, 'wd': 0.0005916346664076503, 'groupnorm_num_groups': 4, 'use_GlobalAvgPooling': False, 'num_experts': 34, 'MOE_top_k': 8, 'MOE_placement': 'encoder', 'MOE_gate_temperature': 0.8699118064663742, 'MOE_aux_coeff': 0.02310788712091788, 'MOE_ctx_out_dim': 32, 'MOE_ctx_hidden_dim': 32, 'MOE_dropout': 0.0504295542159047, 'MOE_aux_loss_plcmt': 'both', 'episodes_per_epoch_train': 400, 'label_smooth': 0.15, 'use_maml_msl': False, 'maml_use_lslr': True, 'use_lslr_at_eval': False},
-    {'cnn_base_filters': 128, 'lstm_hidden': 128, 'meta_batchsize': 24, 'maml_inner_steps': 5, 'maml_inner_steps_eval': 100, 'maml_alpha_init': 0.0011183844865088456, 'maml_alpha_init_eval': 0.016198132801199163, 'outer_lr': 0.0003540503244445774, 'wd': 0.0005563798791955568, 'groupnorm_num_groups': 4, 'use_GlobalAvgPooling': False, 'num_experts': 33, 'MOE_top_k': 9, 'MOE_placement': 'encoder', 'MOE_gate_temperature': 0.7657953294476175, 'MOE_aux_coeff': 0.013345796478000776, 'MOE_ctx_out_dim': 32, 'MOE_ctx_hidden_dim': 32, 'MOE_dropout': 0.043416296058108685, 'MOE_aux_loss_plcmt': 'both', 'episodes_per_epoch_train': 200, 'label_smooth': 0.15, 'use_maml_msl': False, 'maml_use_lslr': True, 'use_lslr_at_eval': False},
-    {'cnn_base_filters': 128, 'lstm_hidden': 128, 'meta_batchsize': 24, 'maml_inner_steps': 15, 'maml_inner_steps_eval': 100, 'maml_alpha_init': 0.0017216829766792134, 'maml_alpha_init_eval': 0.011866730146132275, 'outer_lr': 0.0002609723868148387, 'wd': 0.0005665515136725304, 'groupnorm_num_groups': 4, 'use_GlobalAvgPooling': False, 'num_experts': 34, 'MOE_top_k': 10, 'MOE_placement': 'encoder', 'MOE_gate_temperature': 0.7286780038831032, 'MOE_aux_coeff': 0.023210676279289848, 'MOE_ctx_out_dim': 32, 'MOE_ctx_hidden_dim': 32, 'MOE_dropout': 0.020657422756797494, 'MOE_aux_loss_plcmt': 'both', 'episodes_per_epoch_train': 150, 'label_smooth': 0.2, 'use_maml_msl': False, 'maml_use_lslr': True, 'use_lslr_at_eval': False},
-    {'cnn_base_filters': 96, 'lstm_hidden': 128, 'meta_batchsize': 24, 'maml_inner_steps': 5, 'maml_inner_steps_eval': 100, 'maml_alpha_init': 0.0012055397867547857, 'maml_alpha_init_eval': 0.017463998265245268, 'outer_lr': 0.0005302871048171204, 'wd': 0.00011247316599298583, 'groupnorm_num_groups': 4, 'use_GlobalAvgPooling': False, 'num_experts': 30, 'MOE_top_k': 9, 'MOE_placement': 'encoder', 'MOE_gate_temperature': 0.731592271399892, 'MOE_aux_coeff': 0.020058560771118856, 'MOE_ctx_out_dim': 32, 'MOE_ctx_hidden_dim': 32, 'MOE_dropout': 0.048324894870915444, 'MOE_aux_loss_plcmt': 'both', 'episodes_per_epoch_train': 200, 'label_smooth': 0.15, 'use_maml_msl': False, 'maml_use_lslr': True, 'use_lslr_at_eval': False},
-    # NOTE: This actually had top-k as 3, but I changed it to 5 so we dont have to deal with matching/snapping to current trials vals
-    {'cnn_base_filters': 96, 'lstm_hidden': 128, 'meta_batchsize': 24, 'maml_inner_steps': 5, 'maml_inner_steps_eval': 100, 'maml_alpha_init': 0.0016197539504100604, 'maml_alpha_init_eval': 0.03511177830175203, 'outer_lr': 0.0003952820704399841, 'wd': 0.0001160703915328084, 'groupnorm_num_groups': 4, 'use_GlobalAvgPooling': True, 'num_experts': 30, 'MOE_top_k': 5, 'MOE_placement': 'encoder', 'MOE_gate_temperature': 0.6345909881059265, 'MOE_aux_coeff': 0.055950632129962055, 'MOE_ctx_out_dim': 128, 'MOE_ctx_hidden_dim': 32, 'MOE_dropout': 0.05833202692533046, 'MOE_aux_loss_plcmt': 'both', 'episodes_per_epoch_train': 200, 'label_smooth': 0.15, 'use_maml_msl': False, 'maml_use_lslr': True, 'use_lslr_at_eval': False}
+    {'cnn_base_filters': 64, 'lstm_hidden': 64, 'maml_inner_steps': 7, 'maml_alpha_init': 0.0016865261840566302, 'maml_alpha_init_eval': 0.03241222861959444, 'outer_lr': 0.00011753148144028081, 'wd': 0.0006958201039866241, 'groupnorm_num_groups': 8, 'use_GlobalAvgPooling': True, 'num_experts': 25, 'MOE_top_k': 6, 'MOE_gate_temperature': 0.5007953923754159, 'MOE_aux_coeff': 0.17418352079333946, 'MOE_ctx_out_dim': 32, 'MOE_ctx_hidden_dim': 64, 'MOE_dropout': 0.10372039932801176, 'MOE_aux_loss_plcmt': 'inner', 'episodes_per_epoch_train': 200, 'label_smooth': 0.05, 'use_maml_msl': 'hybrid', 'maml_msl_num_epochs': 36, 'maml_use_lslr': True, 'use_lslr_at_eval': True},
+    {'cnn_base_filters': 64, 'lstm_hidden': 128, 'maml_inner_steps': 7, 'maml_alpha_init': 0.003183796421686842, 'maml_alpha_init_eval': 0.02561505243517187, 'outer_lr': 0.00017730562335905792, 'wd': 0.0009623784816096662, 'groupnorm_num_groups': 8, 'use_GlobalAvgPooling': True, 'num_experts': 23, 'MOE_top_k': 4, 'MOE_gate_temperature': 0.5894698227360172, 'MOE_aux_coeff': 0.13261101041518134, 'MOE_ctx_out_dim': 64, 'MOE_ctx_hidden_dim': 64, 'MOE_dropout': 0.1742031578572473, 'MOE_aux_loss_plcmt': 'inner', 'episodes_per_epoch_train': 250, 'label_smooth': 0.05, 'use_maml_msl': 'hybrid', 'maml_msl_num_epochs': 23, 'maml_use_lslr': False, 'use_lslr_at_eval': True},
+    {'cnn_base_filters': 64, 'lstm_hidden': 64, 'maml_inner_steps': 9, 'maml_alpha_init': 0.002708370774699923, 'maml_alpha_init_eval': 0.0021108128739609285, 'outer_lr': 0.0001951781386901919, 'wd': 6.85027628401306e-05, 'groupnorm_num_groups': 8, 'use_GlobalAvgPooling': True, 'num_experts': 27, 'MOE_top_k': 3, 'MOE_gate_temperature': 0.9458878022205542, 'MOE_aux_coeff': 0.16641221051826932, 'MOE_ctx_out_dim': 16, 'MOE_ctx_hidden_dim': 64, 'MOE_dropout': 0.08151144309939662, 'MOE_aux_loss_plcmt': 'inner', 'episodes_per_epoch_train': 100, 'label_smooth': 0.05, 'use_maml_msl': 'hybrid', 'maml_msl_num_epochs': 17, 'maml_use_lslr': True, 'use_lslr_at_eval': True},
+    {'cnn_base_filters': 64, 'lstm_hidden': 256, 'maml_inner_steps': 7, 'maml_alpha_init': 0.0013373621508281483, 'maml_alpha_init_eval': 0.06693266709636093, 'outer_lr': 0.00023241537465524889, 'wd': 0.0009827548412804656, 'groupnorm_num_groups': 8, 'use_GlobalAvgPooling': True, 'num_experts': 24, 'MOE_top_k': 7, 'MOE_gate_temperature': 1.0459149632012676, 'MOE_aux_coeff': 0.11694630533248768, 'MOE_ctx_out_dim': 128, 'MOE_ctx_hidden_dim': 64, 'MOE_dropout': 0.024707209736742966, 'MOE_aux_loss_plcmt': 'inner', 'episodes_per_epoch_train': 500, 'label_smooth': 0.05, 'use_maml_msl': 'hybrid', 'maml_msl_num_epochs': 26, 'maml_use_lslr': False, 'use_lslr_at_eval': True},
+    {'cnn_base_filters': 64, 'lstm_hidden': 64, 'maml_inner_steps': 7, 'maml_alpha_init': 0.001282949149676896, 'maml_alpha_init_eval': 0.006278649366666367, 'outer_lr': 0.00014911507147964058, 'wd': 0.0003105413582509981, 'groupnorm_num_groups': 8, 'use_GlobalAvgPooling': True, 'num_experts': 26, 'MOE_top_k': 5, 'MOE_gate_temperature': 0.827815891577418, 'MOE_aux_coeff': 0.09490439617134293, 'MOE_ctx_out_dim': 16, 'MOE_ctx_hidden_dim': 64, 'MOE_dropout': 0.09440229157373216, 'MOE_aux_loss_plcmt': 'inner', 'episodes_per_epoch_train': 100, 'label_smooth': 0.05, 'use_maml_msl': 'hybrid', 'maml_msl_num_epochs': 30, 'maml_use_lslr': True, 'use_lslr_at_eval': True},
+    {'cnn_base_filters': 96, 'lstm_hidden': 64, 'maml_inner_steps': 7, 'maml_alpha_init': 0.0036027098514744647, 'maml_alpha_init_eval': 0.028273543982439742, 'outer_lr': 0.00019567289773981725, 'wd': 0.0006080214276443864, 'groupnorm_num_groups': 4, 'use_GlobalAvgPooling': True, 'num_experts': 22, 'MOE_top_k': 6, 'MOE_gate_temperature': 0.5166154000372265, 'MOE_aux_coeff': 0.11646849831998997, 'MOE_ctx_out_dim': 32, 'MOE_ctx_hidden_dim': 64, 'MOE_dropout': 0.07000153139552596, 'MOE_aux_loss_plcmt': 'both', 'episodes_per_epoch_train': 200, 'label_smooth': 0.05, 'use_maml_msl': False, 'maml_use_lslr': True, 'use_lslr_at_eval': False},
+    {'cnn_base_filters': 64, 'lstm_hidden': 128, 'maml_inner_steps': 7, 'maml_alpha_init': 0.023934012189321143, 'maml_alpha_init_eval': 0.0010860796928206904, 'outer_lr': 0.00010689736539096814, 'wd': 2.586297450657217e-05, 'groupnorm_num_groups': 4, 'use_GlobalAvgPooling': True, 'num_experts': 28, 'MOE_top_k': 3, 'MOE_gate_temperature': 2.431471657932191, 'MOE_aux_coeff': 0.10087273019596443, 'MOE_ctx_out_dim': 16, 'MOE_ctx_hidden_dim': 32, 'MOE_dropout': 0.10564140269584042, 'MOE_aux_loss_plcmt': 'both', 'episodes_per_epoch_train': 100, 'label_smooth': 0.05, 'use_maml_msl': 'hybrid', 'maml_msl_num_epochs': 1, 'maml_use_lslr': True, 'use_lslr_at_eval': True},
+    {'cnn_base_filters': 96, 'lstm_hidden': 256, 'maml_inner_steps': 7, 'maml_alpha_init': 0.001427354132007504, 'maml_alpha_init_eval': 0.05871583020447932, 'outer_lr': 0.00021890580109728611, 'wd': 0.00015067531388534113, 'groupnorm_num_groups': 4, 'use_GlobalAvgPooling': True, 'num_experts': 24, 'MOE_top_k': 8, 'MOE_gate_temperature': 1.037361717564086, 'MOE_aux_coeff': 0.06945893667706689, 'MOE_ctx_out_dim': 128, 'MOE_ctx_hidden_dim': 128, 'MOE_dropout': 0.00014882237603539017, 'MOE_aux_loss_plcmt': 'inner', 'episodes_per_epoch_train': 500, 'label_smooth': 0.05, 'use_maml_msl': 'hybrid', 'maml_msl_num_epochs': 19, 'maml_use_lslr': False, 'use_lslr_at_eval': True},
+    {'cnn_base_filters': 64, 'lstm_hidden': 256, 'maml_inner_steps': 7, 'maml_alpha_init': 0.0022409316363444297, 'maml_alpha_init_eval': 0.07980284866764323, 'outer_lr': 0.00027288242632654975, 'wd': 0.0006233783942107558, 'groupnorm_num_groups': 8, 'use_GlobalAvgPooling': True, 'num_experts': 27, 'MOE_top_k': 6, 'MOE_gate_temperature': 1.9588295665204578, 'MOE_aux_coeff': 0.2274257229744778, 'MOE_ctx_out_dim': 128, 'MOE_ctx_hidden_dim': 64, 'MOE_dropout': 0.06693040779691198, 'MOE_aux_loss_plcmt': 'inner', 'episodes_per_epoch_train': 500, 'label_smooth': 0.05, 'use_maml_msl': 'hybrid', 'maml_msl_num_epochs': 27, 'maml_use_lslr': False, 'use_lslr_at_eval': True},
+    {'cnn_base_filters': 64, 'lstm_hidden': 64, 'maml_inner_steps': 7, 'maml_alpha_init': 0.0010018043002410384, 'maml_alpha_init_eval': 0.006165059688105781, 'outer_lr': 0.00015557309153358813, 'wd': 0.0003484429564449149, 'groupnorm_num_groups': 8, 'use_GlobalAvgPooling': True, 'num_experts': 29, 'MOE_top_k': 5, 'MOE_gate_temperature': 0.7058908557205739, 'MOE_aux_coeff': 0.0971830179235051, 'MOE_ctx_out_dim': 16, 'MOE_ctx_hidden_dim': 64, 'MOE_dropout': 0.09089303028735389, 'MOE_aux_loss_plcmt': 'inner', 'episodes_per_epoch_train': 100, 'label_smooth': 0.05, 'use_maml_msl': 'hybrid', 'maml_msl_num_epochs': 33, 'maml_use_lslr': True, 'use_lslr_at_eval': True},
 ]
 
 import os
@@ -39,23 +58,9 @@ from optuna.storages.journal import JournalStorage, JournalFileBackend
 import random
 from pathlib import Path
 
-# Allow numpy scalars to be loaded in weights_only mode
-#torch.serialization.add_safe_globals([np.core.multiarray.scalar])
-#torch.serialization.add_safe_globals([np.scalar])
-# Didnt work. Just suppress the warning instead:
 import warnings
-# Suppress the specific warning about weights_only=False
-warnings.filterwarnings(
-    "ignore", 
-    message=".*weights_only=False.*", 
-    category=UserWarning
-)
-# Sometimes it is cast as a FutureWarning depending on the torch version
-warnings.filterwarnings(
-    "ignore", 
-    message=".*weights_only=False.*", 
-    category=FutureWarning
-)
+warnings.filterwarnings("ignore", message=".*weights_only=False.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*weights_only=False.*", category=FutureWarning)
 
 print(f"CUDA Available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
@@ -64,10 +69,10 @@ if torch.cuda.is_available():
 # env -> Path objects
 CODE_DIR = Path(os.environ.get("CODE_DIR", "./")).resolve()
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")).resolve()
-RUN_DIR = Path(os.environ.get("RUN_DIR", "./")).resolve()
+RUN_DIR  = Path(os.environ.get("RUN_DIR",  "./")).resolve()
 print(f"CODE_DIR: {CODE_DIR}")
 print(f"DATA_DIR: {DATA_DIR}")
-print(f"RUN_DIR: {RUN_DIR}")
+print(f"RUN_DIR:  {RUN_DIR}")
 
 # === SAVING (to SCRATCH) ===
 results_save_dir = RUN_DIR
@@ -75,23 +80,21 @@ models_save_dir  = RUN_DIR
 results_save_dir.mkdir(parents=True, exist_ok=True)
 models_save_dir.mkdir(parents=True, exist_ok=True)
 
-# === LOADING (from SCRATCH data bucket) ===
+# === LOADING ===
 user_split_json_filepath = CODE_DIR / "system" / "fixed_user_splits" / "4kfcv_splits_shared_test.json"
+
 def apply_fold_to_config(config, all_splits, fold_idx):
     """Mutates config in-place to set train/val/test PIDs for the given fold."""
     split = all_splits[fold_idx]
     config["train_PIDs"] = split["train"]
     config["val_PIDs"]   = split["val"]
     config["test_PIDs"]  = split["test"]
-    #config["num_pretrain_users"] = len(config["train_PIDs"])
-    #config["num_testft_users"] = len(config["val_PIDs"])
 
 from system.MAML.mamlpp import *
-from system.MAML.maml_data_pipeline import get_maml_dataloaders
+from system.MAML.maml_data_pipeline import get_maml_dataloaders, reorient_tensor_dict
 from system.MAML.shared_maml import *
 
 from system.pretraining.pretrain_models import build_model
-from system.pretraining.contrastive_net.contrastive_encoder import ContrastiveGestureEncoder
 
 current_directory = os.getcwd()
 print(f"The current working directory is: {current_directory}")
@@ -109,13 +112,9 @@ def inject_model_config(config: dict, model_type: str,
                         lstm_hidden: int = None):
     """
     Injects the exact architecture parameters used during pretraining.
-    These MUST match pretrain_configs.py or the weights will fail to load.
-
     cnn_base_filters / lstm_hidden:
-        When pretrain_approach == 'None' (no pretrained weights), these can be
-        freely HPO'd and should be passed in from the trial suggestion.
-        When loading pretrained weights they MUST match the checkpoint, so leave
-        them as None and the hardcoded defaults below will be used instead.
+        When pretrain_approach == 'None', these are HPO'd and passed in.
+        When loading pretrained weights they MUST match the checkpoint.
     """
     config["model_type"] = model_type
     config["sequence_length"] = 64
@@ -123,119 +122,26 @@ def inject_model_config(config: dict, model_type: str,
     config['imu_in_ch'] = 72
     config['demo_in_dim'] = 12
 
-    if model_type == "MetaCNNLSTM":
-        config.update({
-            # emg_base_cnn_filters, imu_base_cnn_filters
-            # cnn_kernel_size, groupnorm_num_groups
-            "cnn_filters": 32, "emg_cnn_layers": 1, "imu_cnn_layers": 1,
-            "cnn_kernel": 5, "groupnorm_num_groups": 8,
-            "lstm_hidden": 32, "lstm_layers": 1, "bidirectional": False,
-            "head_type": 'linear',
-        })
-    elif model_type == "DeepCNNLSTM":
-        # Use HPO'd values when provided (pretrain_approach == 'None'),
-        # otherwise fall back to hardcoded defaults that match the checkpoint.
-        _cnn_base_filters = cnn_base_filters if cnn_base_filters is not None else 32
+    if model_type == "DeepCNNLSTM":
+        _cnn_base_filters = cnn_base_filters if cnn_base_filters is not None else 64
         _lstm_hidden      = lstm_hidden      if lstm_hidden      is not None else 64
         config.update({
-            #"emg_base_cnn_filters": 32, "emg_cnn_layers": 3,
-            #"imu_base_cnn_filters": 32, "imu_cnn_layers": 3,\
             "cnn_base_filters": _cnn_base_filters, "cnn_layers": 3,
-            #"cnn_kernel_size": 5, "groupnorm_num_groups": 8,
-            "cnn_kernel": 5, "groupnorm_num_groups": 8,
+            "cnn_kernel": 5, "groupnorm_num_groups": config.get("groupnorm_num_groups", 8),
             "lstm_hidden": _lstm_hidden, "lstm_layers": 3, "bidirectional": True,
-            'head_type': 'mlp',
+            "head_type": "mlp",
         })
-    elif model_type == "TST":
-        config.update({
-            "patch_len": 8, "d_model": 64, "n_heads": 4, "n_blocks": 3,
-        })
-    elif model_type == "ContrastiveNet":
-        config.update({"arch_mode": "cnn_attn",})
-        config.update({        
-            "train_reps":           [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],  # INTRA: [1, 2, 3, 4, 5, 6, 7, 8],
-            "val_reps":             [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],  # INTRA: [9, 10],
-            # CNN ENCODER
-            "emg_base_cnn_filters": 64,           # First layer width; doubles each layer
-            "emg_cnn_layers":       3,
-            "imu_base_cnn_filters": 32,           # Why is this different than EMG...
-            "imu_cnn_layers":       2,
-            "cnn_kernel_size":      5,
-            "emg_stride":           1,
-            "imu_stride":           1,
-            "groupnorm_num_groups": 8,            # GroupNorm groups (must divide filter count)
-            # TEMPORAL PROCESSING  (only used if arch_mode == 'cnn_lstm')
-            "use_lstm":             config['arch_mode'] == 'cnn_lstm',  # TODO: So what happens when this is true but arch_mode is set to attn...
-            "lstm_hidden":          128,
-            "lstm_layers":          2,
-            # In Contrastive: GAP used AFTER LSTM
-            "use_GlobalAvgPooling": True,         # True=GAP over LSTM outputs; False=concat last hidden
-            # ATTENTION POOLING  (only used if arch_mode == 'cnn_attn')
-            "attn_pool_heads":      4,
-            # PROJECTION HEAD  (maps backbone features → contrastive embedding)
-            "embedding_dim":        128,
-            "proj_hidden_dim":      256,          # None → single linear layer
-
-            # SUPCON LOSS SPECIFC (loss_mode == 'supcon') --> No effect / not called with MAML??
-            #"supcon_temperature":   0.07,         # NOTE: This isn't changed (is it even used?) during MAML training right? This is SupConLoss (pretraining) specific right?
-            #"hard_negative_mining": False,        # Start False; ablate on
-            #"label_hierarchy":      False,        # 4-level: (user,gest) > (user,diff) > (diff,gest) > (diff,diff)
-            # SIAMESE LOSS  (loss_mode == 'siamese')
-            #"cosine_margin":        0.4,
-            #"pos_weight":           1.0,
-            # DATALOADER / BATCH CONSTRUCTION
-            #"batch_construction":   "balanced",   # 'balanced' (recommended) or 'random'
-            #"samples_per_class":    6,            # M samples per gesture per batch  
-            #"classes_per_batch":    10,           # How many gesture classes to include per batch
-            # Validation: 1-shot prototyping accuracy (mimics test-time protocol exactly)
-            #"val_support_shots":    1,            # k-shot for prototype construction
-            #"val_query_per_class":  9,            # How many query samples to evaluate per class
-
-            # OPTIMIZATION
-            "lr_scheduler":         "cosine",     # 'cosine', 'reduce_on_plateau', or None
-            "lr_warmup_epochs":     5,
-            "lr_min":               1e-6,         # Cosine annealing minimum
-            # LINEAR PROBE EVALUATION
-            #"epochs_between_linprob": 5,          # How often to run the linear probe
-            #"linprob_epochs":         50,         # How many CE epochs to fit the linear layer
-            #"linprob_lr":             1e-2,       # LR for the linear probe Adam optimizer
-            # MISC
-            "grad_clip":            5.0,          # Max gradient norm; None to disable
-            "log_interval":         100,          # Steps between training log prints
-        })
-    #elif model_type == "MOECNNLSTM":
     else:
-        print("Falling back to old MOE dynamic config (this may not be supported...)")
+        raise ValueError(f"inject_model_config: unsupported model_type='{model_type}'. "
+                         "Only 'DeepCNNLSTM' is supported in this HPO script.")
 
-        # TODO: This is the original network... I dont think it is really support right now...
-        # CNN Width & Depth
-        config["emg_base_cnn_filters"] = 64
-        config["imu_base_cnn_filters"] = 64
-        config["emg_cnn_layers"] = 2
-        config["imu_cnn_layers"] = 2
-        config["cnn_kernel_size"] = 3
-        # LSTM
-        config["use_lstm"] = True 
-        config["lstm_hidden"] = 128
-        config["lstm_layers"] = 2
-
-        config["context_emb_dim"] = 32  #trial.suggest_categorical("context_emb_dim", [16, 24, 32, 64])
-        config["demo_emb_dim"] = 16  #trial.suggest_categorical("demo_emb_dim", [8, 16, 32, 64])
-        config["context_pool_type"] = 'mean'  #trial.suggest_categorical("context_pool_type", ['mean', 'attn']) 
-    
     return config
 
 
 def _check_moe_collapse(history_or_logs: dict, num_experts: int) -> float | None:
     """
     Read max_expert_load from the last routing_report in a history/logs dict.
-    Tries several plausible key paths to be robust to RoutingAnalyzer changes.
     Returns the max_load (0-1) if found, else None.
-
-    Args:
-        history_or_logs: history / logs dict returned by the trainer
-                         (e.g. pretrain_res_dict from mamlpp_pretrain).
-        num_experts: the number of experts used in this trial.
     """
     reports = history_or_logs.get("routing_reports", [])
     if not reports:
@@ -247,11 +153,9 @@ def _check_moe_collapse(history_or_logs: dict, num_experts: int) -> float | None
     lb = last.get("load_balance", {})
     fracs = lb.get("expert_hard_fraction")
     if fracs:
-        return float(max(fracs))   # max load across all experts
+        return float(max(fracs))
     imbal = lb.get("hard_imbalance_ratio")
     if imbal is not None:
-        # Convert imbalance ratio → approximate max fraction (ratio = max/min ≈ max * E)
-        # Better to use expert_hard_fraction directly, but this is a fallback
         return float(imbal / (num_experts + imbal - 1))
     return None
 
@@ -260,301 +164,195 @@ def _check_moe_collapse(history_or_logs: dict, num_experts: int) -> float | None
 def build_model_from_trial(trial, model_type, base_config=None):
     config = copy.deepcopy(base_config) if base_config else {}
 
-    # === MOE (Mixture of Experts) ===
-    # Set use_MOE to True to enable MoE routing on the backbone.
-    # Set use_MOE to False (or trial.suggest_categorical) to disable / sweep it.
+    # === MOE: always on ===
     config["use_MOE"] = True
 
-    # === Finetuning / Transfer Learning Strategy ===
-    # pretrain_approach unifies use_pretrained + best_or_last_pretr + finetuning_approach
-    # into a single axis. "None" skips weight loading entirely.
-    # "frozen_enc_*" variants raise NotImplementedError (require inner-loop plumbing).
+    # === No pretrained weights — free HPO over arch ===
     config["pretrain_approach"] = "None"
-    # pretrained_model_filename: None = use per-model-type default checkpoint stem.
-    # Set to a string (e.g. "MetaCNNLSTM_03232026_170503") to load a specific run,
-    # e.g. a non-MOE checkpoint into a MOE model or vice-versa.
-    config["pretrained_model_filename"] = None  # override manually if needed
+    config["pretrained_model_filename"] = None
 
-    # 1. Inject Architecture Constants
-    # When pretrain_approach == 'None' we can freely HPO arch params for DeepCNNLSTM.
-    # For all other pretrain_approach values, arch params must match the checkpoint
-    # so we pass None and let inject_model_config use the hardcoded defaults.
-    _using_pretrained = config["pretrain_approach"] != "None"
-    # TODO: So... we arent HPOing at all over cnn_base_filters? ... okay... probably worth testing more than 128...
-    if model_type == "DeepCNNLSTM" and not _using_pretrained:
-        # v1 trend: 128 best for cnn_base_filters, 128 best for lstm_hidden → fixed.
-        _cnn_base_filters = 128
-        _lstm_hidden      = 128
-    else:
-        # Cannot HPO arch params — must match the pretrained checkpoint
-        _cnn_base_filters = None
-        _lstm_hidden      = None
+    # ── Architecture: re-open cnn/lstm search based on new warm-start trends ──
+    # New top-10 show: cnn_base_filters ∈ {64, 96}, lstm_hidden ∈ {64, 128, 256}.
+    # v2 had these fixed at 128/128 (old study trend); new data clearly disagrees.
+    _cnn_base_filters = trial.suggest_categorical("cnn_base_filters", [64, 96, 128])
+    _lstm_hidden      = trial.suggest_categorical("lstm_hidden",      [64, 128, 256])
     config = inject_model_config(config, model_type,
                                  cnn_base_filters=_cnn_base_filters,
                                  lstm_hidden=_lstm_hidden)
 
-    # === Task Setup ===
-    # NOTE: Running 1-shot 3-way for now. Final will be 1-shot 10-way... (harder...)
-    config["n_way"] = 3  
-    config["k_shot"] = 1  
-    config["q_query"] = 9
+    # === Task Setup: 1-shot 3-way (fixed for this study) ===
+    config["n_way"]       = 3
+    config["k_shot"]      = 1
+    config["q_query"]     = 9
     config["num_classes"] = 10
+    config["pretrain_num_classes"] = 10
 
     config["feature_engr"] = "None"
 
     config["NOTS"] = True
-    if config["NOTS"]==False:
-        #config["emg_imu_pkl_full_path"] = 'C:\\Users\\kdmen\\Box\\Yamagami Lab\\Data\\Meta_Gesture_Project\\filtered_datasets\\metadata_IMU_EMG_allgestures_allusers.pkl'
-        config["pwmd_xlsx_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\Biosignal gesture questionnaire for participants with disabilities.xlsx"
-        config["pwoutmd_xlsx_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\Biosignal gesture questionnaire for participants without disabilities.xlsx"
-        config["dfs_save_path"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\"
-        config["dfs_load_path"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\dataset\\meta-learning-sup-que-ds\\"
-        config["user_split_json_filepath"] = "C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\fixed_user_splits\\4kfcv_splits_shared_test.json"
-        config["results_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\results\\local_{timestamp}"
-        config["models_save_dir"] = f"C:\\Users\\kdmen\\Repos\\pers-gest-cls\\system\\models\\local_{timestamp}"
-        config["pretrain_dir"]           = str(CODE_DIR / "pretrain_outputs" / "checkpoints" / "")
-    elif config["NOTS"]==True:
-        ## SAVING
-        config["user_split_json_filepath"] = user_split_json_filepath
-        config["results_save_dir"] = results_save_dir
-        config["models_save_dir"] = models_save_dir
-        ## LOADING
-        config["emg_imu_pkl_full_path"] = f"{CODE_DIR}//dataset//filtered_datasets//metadata_IMU_EMG_allgestures_allusers.pkl" 
-        config["pwmd_xlsx_filepath"] = f"{CODE_DIR}//dataset//Biosignal gesture questionnaire for participants with disabilities.xlsx"
-        config["pwoutmd_xlsx_filepath"] = f"{CODE_DIR}//dataset//Biosignal gesture questionnaire for participants without disabilities.xlsx"
-        config["dfs_save_path"] = f"{CODE_DIR}/dataset//"
-        config["dfs_load_path"] = f"{CODE_DIR}/dataset/meta-learning-sup-que-ds//"
-        config["pretrain_dir"]           = str(CODE_DIR / "pretrain_outputs" / "checkpoints" / "")
+    config["user_split_json_filepath"] = user_split_json_filepath
+    config["results_save_dir"]         = results_save_dir
+    config["models_save_dir"]          = models_save_dir
+    config["emg_imu_pkl_full_path"]    = str(CODE_DIR / "dataset" / "filtered_datasets"
+                                             / "metadata_IMU_EMG_allgestures_allusers.pkl")
+    config["dfs_save_path"]   = str(CODE_DIR / "dataset") + "/"
+    config["dfs_load_path"]   = str(CODE_DIR / "dataset" / "meta-learning-sup-que-ds") + "/"
+    config["pretrain_dir"]    = str(CODE_DIR / "pretrain_outputs" / "checkpoints") + "/"
 
     # DEBUG
     config["track_gradient_alignment"] = False
-    config["debug_verbose"] = False
-    config['gradient_clip_max_norm'] = 10.0  # Allegedly CFinn uses 5-10
-    config['num_eval_episodes'] = 100
-    config['debug_one_user_only'] = False
-    config['debug_one_episode'] = False
-    config['debug_five_episodes'] = False
-    if config['debug_one_episode']:
-        config["meta_batchsize"] = 1
-    elif config['debug_five_episodes']:
-        config["meta_batchsize"] = 5
-    else:
-        # v1 trend: 24 clearly dominant → fixed.
-        config["meta_batchsize"] = 24
+    config["debug_verbose"]            = False
+    config["debug_one_user_only"]      = False
+    config["debug_one_episode"]        = False
+    config["debug_five_episodes"]      = False
+    config["gradient_clip_max_norm"]   = 10.0
+    config["num_eval_episodes"]        = 100
+    config["meta_batchsize"]           = 24   # v2 trend: 24 dominant → fixed
 
     # === MAML Core Hyperparameters ===
-    # v1 trend: 15 most used but 5/7 were competitive → keep range, add higher end.
-    config["maml_inner_steps"] = trial.suggest_categorical("maml_inner_steps", [5, 7, 10, 15, 20])
-    # v1 trend: 100 best (lol), 50 fine → narrow to sane range.
-    config["maml_inner_steps_eval"] = trial.suggest_categorical("maml_inner_steps_eval", [50, 75, 100])
+    # New warm-start: inner_steps mostly 7, with 9 present → keep range [5,7,9,10].
+    config["maml_inner_steps"] = trial.suggest_categorical("maml_inner_steps", [5, 7, 9, 10])
 
-    # v1 trend: <0.005 clearly better → tighten upper bound.
-    config["maml_alpha_init"] = trial.suggest_float("maml_alpha_init", 0.0005, 0.005, log=True)
-    # v1 trend: 0.0075-0.075 → keep this range.
-    config["maml_alpha_init_eval"] = trial.suggest_float("maml_alpha_init_eval", 0.005, 0.075, log=True)
-    # v1 trend: 0.0001-0.001, possibly could go lower → extend lower bound.
-    config["learning_rate"] = trial.suggest_float("outer_lr", 5e-5, 1e-3, log=True)
-    # v1 trend: >0.0001 better → raise lower bound.
-    config["weight_decay"] = trial.suggest_float("wd", 1e-4, 1e-3, log=True)
+    # FIXED to 50. This is the whole point of v3 — no more HPO over eval steps.
+    # 100 steps caused meta-overfitting (epoch-0 val always best due to easy fitting
+    # of a random-init model to val user). 50 steps is the ablation-spec canonical value.
+    config["maml_inner_steps_eval"] = 50
 
-    config["device"] = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    config["use_batch_norm"] = False
-    # v1 trend: 4 used more, no strong trend → keep both but note 4 favored.
+    # New warm-start: alpha_init spans 0.001-0.024 but cluster is 0.001-0.004.
+    # Trial 7 (index 6) has an outlier at 0.024 — keep upper bound at 0.025 to
+    # allow TPE to explore but not over-commit to that outlier.
+    config["maml_alpha_init"] = trial.suggest_float("maml_alpha_init", 5e-4, 0.025, log=True)
+
+    # New warm-start: alpha_init_eval spans 0.001-0.08 → open range.
+    config["maml_alpha_init_eval"] = trial.suggest_float("maml_alpha_init_eval", 0.001, 0.08, log=True)
+
+    # New warm-start: outer_lr spans ~1e-4 to ~3e-4; extend lower end slightly.
+    config["learning_rate"] = trial.suggest_float("outer_lr", 5e-5, 5e-4, log=True)
+
+    # New warm-start: wd spans 2.6e-5 to ~1e-3 → widen the range.
+    config["weight_decay"] = trial.suggest_float("wd", 1e-5, 1e-3, log=True)
+
+    config["device"]          = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    config["use_batch_norm"]  = False
+    # New warm-start: 8 dominant (8 of 10 trials) → keep both but TPE will figure it out.
     config["groupnorm_num_groups"] = trial.suggest_categorical("groupnorm_num_groups", [4, 8])
-    config["dropout"] = 0.1
+    config["dropout"]         = 0.1
+    config["emg_stride"]      = 1
+    config["imu_stride"]      = 1
+    config["padding"]         = 0
 
-    config['emg_stride'] = 1  
-    config['imu_stride'] = 1  
-    config["padding"] = 0 
+    # New warm-start: True in all 10 trials → still sweep to be safe, but prior is strong.
+    config["use_GlobalAvgPooling"] = trial.suggest_categorical("use_GlobalAvgPooling", [True, False])
 
-    # v1 trend: False had tighter spread and was used more → fixed to False.
-    config["use_GlobalAvgPooling"] = False
-
-    # === Multimodal & Conditioning (Keeping these if you still use FiLM/Demo heads) ===
-    # NOTE: Turning demographics off (wasnt used in pretraining)
-    config["multimodal"] = True  # TODO: I dont know if this gets used at all anymore... or even what for...
-    config["use_imu"] = True 
-    config["use_demographics"] = False
-    config["use_film_x_demo"] = False  #trial.suggest_categorical("use_film_x_demo", [True, False])
-    config["FILM_on_context_or_demo"] = 'context'  # TODO: Is this currently used... 
+    # === Multimodal ===
+    config["multimodal"]               = True
+    config["use_imu"]                  = True
+    config["use_demographics"]         = False
+    config["use_film_x_demo"]          = False
+    config["FILM_on_context_or_demo"]  = "context"
 
     # === MOE (Mixture of Experts) ===
-    if config["use_MOE"]:
-        # v1: peaked ~32, uptick at 100/120 → expand range to resolve the open right tail.
-        ## I think it takes too much memory to test more than like 80 (maybe even 60...) experts...
-        # NOTE: Needs to include 37, 25, 33, 34 to match warm-start (if you are using the warm start)
-        config["num_experts"]          = trial.suggest_categorical("num_experts", [20, 24, 25, 30, 32, 33, 34, 36, 37, 40, 44, 48, 50, 56, 60, 64])
-        # v1: 8-10 all good, never tested above 10 → open the right tail.
-        # Enforce top_k < num_experts // 2 to avoid trivially dense routing.
-        #_num_experts = config["num_experts"]
-        #_top_k_max = max(5, min(20, _num_experts // 2 - 1))
-        config["MOE_top_k"]            = trial.suggest_categorical("MOE_top_k", [5, 7, 8, 9, 10, 12, 13, 15, 18, 20])
-        config["top_k"]                = config["MOE_top_k"]
-        # v1: encoder only → fixed.
-        config["MOE_placement"]        = "encoder"
-        # v1: <1.5 better → tighten upper bound.
-        config["MOE_gate_temperature"] = trial.suggest_float("MOE_gate_temperature", 0.3, 1.5, log=True)
-        # v1: <0.2, lower better, ~0.02 favored → tighten range.
-        config["MOE_aux_coeff"]        = trial.suggest_float("MOE_aux_coeff", 0.005, 0.2, log=True)
-        # v1: 32 clearly best → fixed.
-        config["MOE_ctx_out_dim"]      = 32
-        # v1: 32 chosen, 64 okay but higher variance, 128 trash → fixed to 32.
-        config["MOE_ctx_hidden_dim"]   = 32
-        # v1: no real trend, Optuna converged ~0.05 → fixed.
-        config["MOE_dropout"]          = 0.05
-        config["MOE_expert_expand"]    = 1.0
-        config["MOE_mlp_hidden_mult"]  = 1.0
-        config["MOE_log_every"]        = 5
-        config["MOE_plot_dir"]         = None
-        # Legacy keys kept for compatibility with older modules
-        config["gate_type"] = "context_feature_demo"
-        config["expert_architecture"] = "MLP"
-        # v1: inner > outer, both favored → keep sweeping.
-        config["apply_MOE_aux_loss_inner_outer"] = trial.suggest_categorical("MOE_aux_loss_plcmt", ["outer", "inner", "both"])
+    # New warm-start: num_experts in {22..29} → tighten around that cluster.
+    # Keep some headroom above 30 in case the old v2 {30-40} range was actually fine
+    # but just hadn't converged yet with the bad eval setup.
+    config["num_experts"] = trial.suggest_categorical(
+        "num_experts", [20, 22, 24, 25, 26, 27, 28, 30, 32, 36])
 
-    config["use_label_shuf_meta_aug"] = True   # TODO: Really ought to explore ablating this...
-    config["num_epochs"] = 50 
-    # v1: 200-400 fine, drops off above 500 → tighten range.
-    config["episodes_per_epoch_train"] = trial.suggest_categorical("episodes_per_epoch_train", [150, 200, 250, 300, 400])
-    # v1: 0.15-0.2 maybe a bit better → keep a focused range.
-    config["label_smooth"] = trial.suggest_categorical("label_smooth", [0.1, 0.15, 0.2])
+    # New warm-start: top_k ∈ {3,4,5,6,7,8} → match this range.
+    config["MOE_top_k"]   = trial.suggest_categorical("MOE_top_k", [3, 4, 5, 6, 7, 8, 9, 10])
+    config["top_k"]       = config["MOE_top_k"]
 
-    #config["num_total_users"] = 32  # TODO: Not sure if this is still used
+    config["MOE_placement"] = "encoder"  # fixed per all studies
 
-    config["maml_gesture_classes"] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # NOTE: THIS IS GESTURE CLASS (LABEL IDs)
-    config["target_trial_indices"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # NOTE: THIS IS GESTURE TRIAL/REPETITION NUM (These are not zero-based indices FYI... bad naming...)
+    # New warm-start: gate_temperature spans 0.5-2.4 → widen upper bound.
+    config["MOE_gate_temperature"] = trial.suggest_float("MOE_gate_temperature", 0.3, 2.5, log=True)
+
+    # New warm-start: aux_coeff spans 0.07-0.23 → widen range vs v2.
+    config["MOE_aux_coeff"] = trial.suggest_float("MOE_aux_coeff", 0.02, 0.25, log=True)
+
+    # New warm-start: ctx_out_dim ∈ {16, 32, 64, 128} → re-open.
+    config["MOE_ctx_out_dim"] = trial.suggest_categorical("MOE_ctx_out_dim", [16, 32, 64, 128])
+
+    # New warm-start: ctx_hidden_dim ∈ {32, 64, 128} → re-open.
+    config["MOE_ctx_hidden_dim"] = trial.suggest_categorical("MOE_ctx_hidden_dim", [32, 64, 128])
+
+    # New warm-start: dropout spans 0.00015-0.174 → re-open as continuous.
+    config["MOE_dropout"] = trial.suggest_float("MOE_dropout", 1e-4, 0.2, log=True)
+
+    config["MOE_expert_expand"]  = 1.0
+    config["MOE_mlp_hidden_mult"] = 1.0
+    config["MOE_log_every"]      = 5
+    config["MOE_plot_dir"]       = None
+    config["gate_type"]          = "context_feature_demo"
+    config["expert_architecture"] = "MLP"
+
+    # New warm-start: 'inner' in 8/10 trials → strong prior, but keep 'both' available.
+    config["apply_MOE_aux_loss_inner_outer"] = trial.suggest_categorical(
+        "MOE_aux_loss_plcmt", ["inner", "both", "outer"])
+
+    config["use_label_shuf_meta_aug"] = True
+    config["num_epochs"] = 50
+
+    # New warm-start: episodes_per_epoch ∈ {100, 200, 250, 500} → match exactly.
+    config["episodes_per_epoch_train"] = trial.suggest_categorical(
+        "episodes_per_epoch_train", [100, 200, 250, 500])
+
+    # New warm-start: label_smooth = 0.05 in ALL 10 trials → fixed.
+    config["label_smooth"] = 0.05
+
+    config["maml_gesture_classes"]  = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    config["target_trial_indices"]  = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["train_reps"]            = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["val_reps"]              = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["augment"]               = False
+    config["ft_label_smooth"]       = 0.0
 
     # Pretraining optim
-    config["optimizer"]          = "adam"  #trial.suggest_categorical("optimizer", ["adamw", "adam"])
-    config["use_earlystopping"] = True
-    config["earlystopping_patience"]= 8 #trial.suggest_int("pre_es_pat", 6, 14)
-    config["earlystopping_min_delta"]= 0.005 #trial.suggest_float("pre_es_delta", 0.001, 0.01)
+    config["optimizer"]               = "adam"
+    config["use_earlystopping"]       = True
+    config["earlystopping_patience"]  = 8
+    config["earlystopping_min_delta"] = 0.005
 
-    # ADDING MAML SPECIFIC
+    # MAML misc
     config["meta_learning"] = True
-    config["num_workers"] = 8  # This is the dataloader, something about how many processes the CPU can use (more is faster generally)
+    config["num_workers"]   = 8
+    config["batch_size"]    = 64
 
-    # MAML++
-    # MULTI STEP LOSS
-    # v1: False clearly best, hybrid had higher spread → fixed to False.
-    config["use_maml_msl"] = False
-    config["maml_msl_num_epochs"] = 0
-    # OPTIMIZATION ORDER
+    # MULTI-STEP LOSS
+    # New warm-start: 'hybrid' in 8/10 trials, False in 2 → sweep both.
+    _use_maml_msl = trial.suggest_categorical("use_maml_msl", ["hybrid", False])
+    config["use_maml_msl"] = _use_maml_msl
+    if _use_maml_msl == "hybrid":
+        # New warm-start: maml_msl_num_epochs spans 1-36 → keep full range.
+        config["maml_msl_num_epochs"] = trial.suggest_int("maml_msl_num_epochs", 1, 40)
+    else:
+        config["maml_msl_num_epochs"] = 0
+
+    # OPTIMIZATION ORDER: first-order only (speed + stability).
     config["maml_opt_order"] = "first"
-    config["maml_first_order_to_second_order_epoch"] = 1000000
+    config["maml_first_order_to_second_order_epoch"] = 1_000_000
+
     # LSLR
-    # v1: True clearly dominant → fixed.
-    config["maml_use_lslr"] = True
-    # MISC  
+    # New warm-start: maml_use_lslr is True in 7/10 trials (mixed signal) → sweep.
+    config["maml_use_lslr"] = trial.suggest_categorical("maml_use_lslr", [True, False])
+
     config["enable_inner_loop_optimizable_bn_params"] = False
-    # v1: False used more but True did fine → keep sweeping, cost is low.
+
+    # use_lslr_at_eval
+    # New warm-start: True in 9/10 trials → strong prior but keep sweep cheap.
     config["use_lslr_at_eval"] = trial.suggest_categorical("use_lslr_at_eval", [True, False])
 
-    # NOTE: lr_scheduler is not used if use_cosine_outer_lr is False!
-    config["use_cosine_outer_lr"] =    False
-    config["lr_scheduler_factor"] =    0.1
-    config["lr_scheduler_patience"] =  6
+    config["use_cosine_outer_lr"]   = False
+    config["lr_scheduler_factor"]   = 0.1
+    config["lr_scheduler_patience"] = 6
 
     # =========================================================================
     # MODEL INITIALIZATION
     # =========================================================================
-    if model_type in ["MetaCNNLSTM", "DeepCNNLSTM", "TST"]:
-        if config["use_MOE"]:
-            from MOE.MOE_encoder import build_MOE_model
-            model = build_MOE_model(config)
-        else:
-            model = build_model(config)
-    #elif model_type == "CNNLSTM":
-    #    model = MultimodalCNNLSTMMOE(config)
-    elif model_type == "ContrastiveNet": 
-        model = ContrastiveGestureEncoder(config)
-    else:
-        raise ValueError(f"model_type {model_type} unknown!")
-    
-    # =========================================================================
-    # ################### PRETRAINED WEIGHT LOADING ######################### #
-    # =========================================================================
-    pretrain_approach = config.get("pretrain_approach", "full_best")
+    from MOE.MOE_encoder import build_MOE_model
+    model = build_MOE_model(config)
 
-    if pretrain_approach == "None":
-        print(f"--> pretrain_approach='None' — using random initialisation for {model_type}.")
-
-    elif pretrain_approach in ("full_best", "full_last", "enc_best", "enc_last",
-                               "frozen_enc_best", "frozen_enc_last"):
-
-        if pretrain_approach.startswith("frozen_enc"):
-            raise NotImplementedError(
-                f"pretrain_approach='{pretrain_approach}' is not yet implemented. "
-                "Freezing the encoder requires plumbing changes in named_param_dict() "
-                "so that frozen parameters are excluded from the inner-loop update. "
-                "Use 'enc_best' or 'enc_last' for encoder-only loading without freezing."
-            )
-
-        best_or_last = "best" if pretrain_approach.endswith("best") else "last"
-        enc_only     = pretrain_approach.startswith("enc")  # TODO: This is not very robust...
-        model_filename     = config.get("pretrained_model_filename", None)  # None → per-model-type default
-
-        print(f"--> Loading pretrained weights for {model_type} "
-              f"(approach={pretrain_approach}, model_filename={model_filename})...")
-
-        pretrain_dir = config['pretrain_dir']
-        # Build the checkpoint path (use model_filename override if provided)
-        if model_filename is not None:
-            load_path = str(Path(pretrain_dir) / f"{model_filename}_{best_or_last}.pt")
-        else:
-            # Per-model-type default stems — update when you retrain pretraining
-            default_stems = {
-                "MetaCNNLSTM":    "MetaCNNLSTM_03232026_170503",
-                "DeepCNNLSTM":    "DeepCNNLSTM_03232026_165043",
-                "TST":            "TST_03232026_163527",
-                "ContrastiveNet": f"ContrastiveNet_{config.get('arch_mode', 'cnn_attn')[-4:]}_20260325_1810",
-                "MOE":            None,
-            }
-            stem = default_stems.get(model_type)
-            load_path = str(Path(pretrain_dir) / f"{stem}_{best_or_last}.pt") if stem else None
-
-        if load_path is None:
-            print(f"--> No default pretrained checkpoint for model_type='{model_type}'. Random init.")
-        else:
-            try:
-                checkpoint = torch.load(load_path, map_location=config["device"], weights_only=False)
-                if "model_state" in checkpoint:
-                    state_dict = checkpoint["model_state"]
-                elif "model_state_dict" in checkpoint:
-                    state_dict = checkpoint["model_state_dict"]
-                else:
-                    state_dict = checkpoint
-
-                # TODO: Need to edit this to make full and encoder are not the same...
-                def _keep_key(k: str, enc_only: bool) -> bool:
-                    if "head" in k or "projector" in k:
-                        return False  # always drop classification/projection head
-                    if enc_only and ("mlp" in k or "classifier" in k or "fc" in k):
-                        return False  # additionally drop MLP body when enc_only
-                    return True
-
-                filtered = {k: v for k, v in state_dict.items() if _keep_key(k, enc_only)}
-                mdict = model.state_dict()
-                mdict.update(filtered)
-                model.load_state_dict(mdict)
-                scope = "encoder (CNN+LSTM)" if enc_only else "full backbone"
-                print(f"--> Successfully loaded {scope} weights ({len(filtered)}/{len(state_dict)} tensors) from: {load_path}")
-
-            except FileNotFoundError:
-                print(f"\n{'#'*65}")
-                print(f"WARNING: Pretrained weight file not found at {load_path}.")
-                print(f"Using random initialization instead!")
-                print(f"{'#'*65}\n")
-    else:
-        raise ValueError(
-            f"Unknown pretrain_approach='{pretrain_approach}'. "
-            "Must be one of: 'None', 'full_best', 'full_last', "
-            "'enc_best', 'enc_last', 'frozen_enc_best', 'frozen_enc_last'."
-        )
-    # =========================================================================
-    # ####################################################################### #
-    # =========================================================================
-
+    print(f"--> pretrain_approach='None' — using random initialisation for {model_type}.")
     model.to(config["device"])
     return model, config
 
@@ -565,13 +363,13 @@ with open(user_split_json_filepath, "r") as f:
     ALL_SPLITS = json.load(f)
 NUM_FOLDS = 1
 
-BASE_CONFIG = {} 
+BASE_CONFIG = {}
 
 def objective(trial, model_type):
     """Optuna objective wrapped to accept model_type."""
-    fold_mean_accs = []
-    all_fold_user_accs = []      
-    pretrain_val_accs = []       
+    fold_mean_accs    = []
+    all_fold_user_accs = []
+    pretrain_val_accs  = []
 
     for fold_idx in range(NUM_FOLDS):
         fold_start_time = time.time()
@@ -593,14 +391,16 @@ def objective(trial, model_type):
         apply_fold_to_config(config, ALL_SPLITS, fold_idx)
 
         # ---- Data Loading ----
-        tensor_dict_path = os.path.join(config["dfs_load_path"], f"segfilt_rts_tensor_dict.pkl")
+        # reorient_tensor_dict is called inside get_maml_dataloaders, but we also
+        # need it for the per-user adapt-and-eval loop below. Load the raw dict
+        # once here and pass the path; the dataloader handles its own reorientation.
+        tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
         episodic_train_loader, episodic_val_loader = get_maml_dataloaders(
             config,
             tensor_dict_path=tensor_dict_path,
         )
 
-        # ---- MAML Pretrain ----
-        ## This is different from actual pretraining. This is "pretraining" in the sense that novel users get their own adaptation phase...
+        # ---- MAML Meta-Training ----
         pretrained_model, pretrain_res_dict = mamlpp_pretrain(
             model,
             config,
@@ -611,7 +411,7 @@ def objective(trial, model_type):
         best_state   = pretrain_res_dict["best_state"]
         pretrain_val_accs.append(float(best_val_acc))
 
-        print(f"[Trial {trial.number} | Fold {fold_idx}] Pretraining done. Best val acc = {best_val_acc:.4f}")
+        print(f"[Trial {trial.number} | Fold {fold_idx}] Meta-training done. Best val acc = {best_val_acc:.4f}")
 
         # ---- MoE collapse detection ----
         if config.get("use_MOE", False):
@@ -623,61 +423,57 @@ def objective(trial, model_type):
                       f"(max_load={max_load:.2f}). Penalising.")
                 return COLLAPSE_PENALTY
 
+        # ---- Save checkpoint ----
         model_filename = f"trial_{trial.number}_fold_{fold_idx}_best.pt"
         save_path = os.path.join(models_save_dir, model_filename)
         torch.save({
-            'trial_num': trial.number,
-            'fold_idx': fold_idx,
-            'model_state_dict': best_state,
-            'config': config,
-            'best_val_acc': best_val_acc, 
-            'train_loss_log': pretrain_res_dict["train_loss_log"], 
-            'train_acc_log': pretrain_res_dict["train_acc_log"],
-            'val_loss_log': pretrain_res_dict["val_loss_log"],
-            'val_acc_log': pretrain_res_dict["val_acc_log"]
+            "trial_num":       trial.number,
+            "fold_idx":        fold_idx,
+            "model_state_dict": best_state,
+            "config":          config,
+            "best_val_acc":    best_val_acc,
+            "train_loss_log":  pretrain_res_dict["train_loss_log"],
+            "train_acc_log":   pretrain_res_dict["train_acc_log"],
+            "val_loss_log":    pretrain_res_dict["val_loss_log"],
+            "val_acc_log":     pretrain_res_dict["val_acc_log"],
         }, save_path)
-        print(f"Model permanently saved to {save_path}")
+        print(f"Model saved to {save_path}")
 
-        # --------- Finetuning / Adaptation per Novel user ---------
+        # ---- Per-user adapt-and-eval (HPO objective signal) ----
         model.load_state_dict(best_state)
         user_metrics = defaultdict(list)
-        
+
         for batch in episodic_val_loader:
-            user_id = batch['user_id']
-            support_set = batch['support']
-            query_set = batch['query']
+            user_id     = batch["user_id"]
+            support_set = batch["support"]
+            query_set   = batch["query"]
             val_metrics = mamlpp_adapt_and_eval(model, config, support_set, query_set)
             user_metrics[user_id].append(val_metrics["acc"])
 
-        # TODO: "Over n episodes" comes from here! The length of accs, as opposed to whatever the value of num_eval_episodes is!
         all_user_means = []
         for user_id, accs in user_metrics.items():
             m_acc = np.mean(accs)
             all_user_means.append(float(m_acc))
+            print(f"  User {user_id} | Acc: {m_acc*100:.2f}% (over {len(accs)} episodes)")
 
-            print(f"User {user_id} | Acc: {m_acc*100:.2f}% ± {m_acc*100:.2f}% (over {len(accs)} episodes)")
-        # Calculate summary across users
-        # These are still ratios (e.g., 0.10)
-        mean_acc_ratio = np.mean(all_user_means)
-        std_acc_ratio = np.std(all_user_means)
-        # Create a clean list of percentages for the summary print
-        user_acc_percentages = [round(a * 100, 2) for a in all_user_means]
-        # --- END TIMER & PRINT ---
-        fold_duration = time.time() - fold_start_time
-        print(f"[Trial {trial.number} | Fold {fold_idx}] User accs (%): {user_acc_percentages}")
-        # Multiply by 100 only ONCE here for display
+        mean_acc_ratio  = np.mean(all_user_means)
+        std_acc_ratio   = np.std(all_user_means)
+        user_acc_pcts   = [round(a * 100, 2) for a in all_user_means]
+        fold_duration   = time.time() - fold_start_time
+
+        print(f"[Trial {trial.number} | Fold {fold_idx}] User accs (%): {user_acc_pcts}")
         print(f"[Trial {trial.number} | Fold {fold_idx}] Mean acc: {mean_acc_ratio*100:.2f}% ± {std_acc_ratio*100:.2f}%")
         print(f"[Trial {trial.number} | Fold {fold_idx}] Finished in {fold_duration:.2f} seconds.")
 
         fold_mean_accs.append(mean_acc_ratio)
         all_fold_user_accs.append(all_user_means)
 
-    clean_fold_accs = [float(f) for f in fold_mean_accs]
+    clean_fold_accs  = [float(f) for f in fold_mean_accs]
     overall_mean_acc = float(np.nanmean(clean_fold_accs))
 
-    trial.set_user_attr("fold_mean_accs", fold_mean_accs)
-    trial.set_user_attr("fold_user_accs", all_fold_user_accs)
-    trial.set_user_attr("mean_pretrain_val_acc", float(np.nanmean(pretrain_val_accs)))
+    trial.set_user_attr("fold_mean_accs",        fold_mean_accs)
+    trial.set_user_attr("fold_user_accs",         all_fold_user_accs)
+    trial.set_user_attr("mean_pretrain_val_acc",  float(np.nanmean(pretrain_val_accs)))
 
     return overall_mean_acc
 
@@ -685,30 +481,42 @@ def objective(trial, model_type):
 def _build_warm_start_params(raw_params: dict, trial_suggest_keys: set) -> dict:
     """
     Filter a raw param dict from the old study so it only contains keys that are
-    actively suggest_*'d in the new study. Keys that are now fixed constants are
-    dropped — enqueuing them would cause Optuna to crash with an UnexpectedParameter error.
+    actively suggest_*'d in the new study. Keys that are no longer suggest_*'d
+    (e.g. maml_inner_steps_eval, which is now fixed) are dropped so Optuna does
+    not raise an UnexpectedParameter error when enqueuing.
     """
     return {k: v for k, v in raw_params.items() if k in trial_suggest_keys}
 
 
-# The set of HP keys that are actively suggest_*'d in build_model_from_trial v2.
-# Update this if you add/remove any trial.suggest_* calls above.
-V2_SUGGEST_KEYS = {
+# The set of HP keys actively suggest_*'d in build_model_from_trial v3.
+# NOTE: maml_inner_steps_eval is intentionally absent — it is fixed to 50.
+# NOTE: label_smooth is intentionally absent — it is fixed to 0.05.
+# NOTE: maml_msl_num_epochs uses suggest_int but is only meaningful when
+#       use_maml_msl == 'hybrid'; it is still in the suggest-key set so that
+#       warm-start trials with hybrid can carry their value across.
+V3_SUGGEST_KEYS = {
+    "cnn_base_filters",
+    "lstm_hidden",
     "maml_inner_steps",
-    "maml_inner_steps_eval",
     "maml_alpha_init",
     "maml_alpha_init_eval",
     "outer_lr",
     "wd",
     "groupnorm_num_groups",
-    "use_lslr_at_eval",
+    "use_GlobalAvgPooling",
     "num_experts",
     "MOE_top_k",
     "MOE_gate_temperature",
     "MOE_aux_coeff",
+    "MOE_ctx_out_dim",
+    "MOE_ctx_hidden_dim",
+    "MOE_dropout",
     "MOE_aux_loss_plcmt",
     "episodes_per_epoch_train",
-    "label_smooth",
+    "use_maml_msl",
+    "maml_msl_num_epochs",
+    "maml_use_lslr",
+    "use_lslr_at_eval",
 }
 
 
@@ -729,16 +537,14 @@ def run_study(study_name, storage_path, model_type, n_trials=1):
     time.sleep(random.uniform(0, 10))
 
     # ── TPE Sampler ──────────────────────────────────────────────────────────
-    # TPE is already Optuna's default, but we instantiate it explicitly so we
-    # can control n_startup_trials (how many random trials before TPE kicks in).
-    # Rule of thumb: ~10-20% of total budget, or at least as many as the warm-start
-    # trials so TPE has a real prior before it starts modelling.
+    # n_startup_trials: at least as many as warm-start trials so TPE sees the full
+    # prior before it starts modelling. Rule of thumb: ~10-20% of total budget.
     n_startup = max(20, len(WARM_START_PARAMS))
     sampler = optuna.samplers.TPESampler(
         seed=FIXED_SEED,
-        n_startup_trials=n_startup,   # random exploration before TPE fits a model
-        n_ei_candidates=24,           # candidates sampled per EI evaluation (default 24)
-        multivariate=True,            # model joint HP correlations (better for MoE/MAML)
+        n_startup_trials=n_startup,
+        n_ei_candidates=24,
+        multivariate=True,    # model joint HP correlations (important for MoE/MAML)
     )
 
     study = optuna.create_study(
@@ -749,12 +555,11 @@ def run_study(study_name, storage_path, model_type, n_trials=1):
         sampler=sampler,
     )
 
-    # ── Warm-Start: enqueue top-N trials from the old study ──────────────────
-    # These run first (in order), then TPE uses their results to build its prior.
+    # ── Warm-Start: enqueue top-N trials from the 50-step HPO run ────────────
     if WARM_START_PARAMS and len(study.trials) == 0:
-        print(f"Warm-starting with {len(WARM_START_PARAMS)} trials from old study...")
+        print(f"Warm-starting with {len(WARM_START_PARAMS)} trials from prior study...")
         for i, raw_params in enumerate(WARM_START_PARAMS):
-            filtered = _build_warm_start_params(raw_params, V2_SUGGEST_KEYS)
+            filtered = _build_warm_start_params(raw_params, V3_SUGGEST_KEYS)
             study.enqueue_trial(filtered)
             print(f"  Enqueued warm-start trial {i}: {filtered}")
     elif WARM_START_PARAMS and len(study.trials) > 0:
@@ -765,14 +570,15 @@ def run_study(study_name, storage_path, model_type, n_trials=1):
 
     return study
 
+
 if __name__ == "__main__":
-    # --- Parse Command Line Args ---
-    parser = argparse.ArgumentParser(description="Run MAML++ HPO for a specific model architecture.")
-    parser.add_argument("--model_type", type=str, default="DeepCNNLSTM", 
-                        choices=["MetaCNNLSTM", "DeepCNNLSTM", "TST", "ContrastiveNet", "MOE"],
-                        help="Which model architecture to optimize hyperparameters for.")
+    parser = argparse.ArgumentParser(
+        description="HPO v3: MAML+MoE, 1-shot 3-way, maml_inner_steps_eval=50 (fixed).")
+    parser.add_argument("--model_type", type=str, default="DeepCNNLSTM",
+                        choices=["DeepCNNLSTM"],
+                        help="Model architecture to optimise. Only DeepCNNLSTM is supported.")
     parser.add_argument("--data_dir", type=str)
-    parser.add_argument("--out_dir", type=str)
+    parser.add_argument("--out_dir",  type=str)
     args = parser.parse_args()
 
     db_dir = "/scratch/my13/kai/meta-pers-gest/optuna_dbs"
@@ -783,9 +589,8 @@ if __name__ == "__main__":
     torch.manual_seed(FIXED_SEED)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(FIXED_SEED)
-    
-    # Create a unique database and study name per model architecture!
-    study_name = f"mamlpp_MOE_PAPER_{args.model_type}_1fcv_hpo"
+
+    study_name   = f"mamlpp_MOE_PAPER_{args.model_type}_1fcv_hpo_v3_50step"
     journal_path = os.path.join(db_dir, f"{study_name}.log")
 
     print(f"Starting HPO Study: {study_name}")
@@ -795,5 +600,5 @@ if __name__ == "__main__":
         study_name=study_name,
         storage_path=journal_path,
         model_type=args.model_type,
-        n_trials=N_TRIALS, 
+        n_trials=N_TRIALS,
     )
