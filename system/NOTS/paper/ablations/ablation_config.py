@@ -315,10 +315,15 @@ def replace_head_for_eval(model: torch.nn.Module, config: dict) -> torch.nn.Modu
     The backbone weights are untouched.  Fine-tuning (head_only or full) is
     applied AFTER this replacement by `finetune_and_eval_user`.
 
-    The function inspects `model.head` and replaces the final Linear layer in
-    place, preserving any intermediate MLP layers.  Works for both:
-      - A simple Linear head  (model.head is nn.Linear)
-      - An MLP head           (model.head is nn.Sequential ending in nn.Linear)
+    The function inspects `model.head` and constructs a matching fresh head:
+      - nn.Linear        → fresh nn.Linear(in_features, n_way)
+      - nn.Sequential    → preserve all layers except the terminal Linear,
+                           which is replaced with nn.Linear(in_features, n_way)
+      - MLPHead          → fresh MLPHead(feat_dim, hidden_dim, n_way, dropout)
+                           The entire head is re-initialised (not just the terminal
+                           layer) so that no pretrained head weights survive into
+                           the few-shot task — consistent with the linear and
+                           Sequential protocols above.
 
     Args:
         model  : pretrained model whose .head attribute will be replaced.
@@ -328,6 +333,7 @@ def replace_head_for_eval(model: torch.nn.Module, config: dict) -> torch.nn.Modu
         model with replaced head (same object, modified in-place AND returned).
     """
     import torch.nn as nn
+    from pretraining.pretrain_models import MLPHead
 
     n_way = int(config["n_way"])
     head  = model.head
@@ -338,12 +344,32 @@ def replace_head_for_eval(model: torch.nn.Module, config: dict) -> torch.nn.Modu
         nn.init.xavier_uniform_(model.head.weight)
         nn.init.zeros_(model.head.bias)
 
+    elif isinstance(head, MLPHead):
+        # Reconstruct the same hidden_dim and dropout from the existing head so
+        # the architecture is identical to pretraining, just with n_way outputs.
+        # MLPHead.net is: Linear(feat_dim → hidden_dim), GELU, Dropout, Linear(hidden_dim → n_classes)
+        net_layers  = list(head.net.children())
+        assert isinstance(net_layers[0], nn.Linear), (
+            f"replace_head_for_eval: expected MLPHead.net[0] to be nn.Linear, "
+            f"got {type(net_layers[0])}."
+        )
+        assert isinstance(net_layers[2], nn.Dropout), (
+            f"replace_head_for_eval: expected MLPHead.net[2] to be nn.Dropout, "
+            f"got {type(net_layers[2])}."
+        )
+        feat_dim   = net_layers[0].in_features
+        hidden_dim = net_layers[0].out_features
+        dropout    = net_layers[2].p
+        model.head = MLPHead(feat_dim, hidden_dim, n_way, dropout)
+        # MLPHead uses default PyTorch init (Kaiming uniform for Linear via nn.Linear),
+        # which is fine; no need to re-init manually.
+
     elif isinstance(head, nn.Sequential):
         # Find and replace only the terminal Linear layer
         layers = list(head.children())
         assert isinstance(layers[-1], nn.Linear), (
-            f"Expected the last layer of model.head (Sequential) to be nn.Linear, "
-            f"got {type(layers[-1])}. Add explicit support for this head type."
+            f"replace_head_for_eval: expected the last layer of model.head (Sequential) "
+            f"to be nn.Linear, got {type(layers[-1])}. Add explicit support for this head type."
         )
         in_features  = layers[-1].in_features
         layers[-1]   = nn.Linear(in_features, n_way)
@@ -353,8 +379,8 @@ def replace_head_for_eval(model: torch.nn.Module, config: dict) -> torch.nn.Modu
 
     else:
         raise TypeError(
-            f"replace_head_for_eval: model.head is {type(head)}, expected nn.Linear "
-            f"or nn.Sequential. Add explicit support for this head type."
+            f"replace_head_for_eval: model.head is {type(head)}, expected nn.Linear, "
+            f"MLPHead, or nn.Sequential. Add explicit support for this head type."
         )
 
     model.head.to(next(model.parameters()).device)
@@ -433,7 +459,7 @@ def run_supervised_test_eval(model, config: dict, tensor_dict_path: str,
     Evaluate a non-MAML model using episodic finetune-then-eval.
     ft_mode: 'head_only' | 'full'
     """
-    from MAML.maml_data_pipeline import MetaGestureDataset, maml_mm_collate
+    from MAML.maml_data_pipeline import MetaGestureDataset, maml_mm_collate, reorient_tensor_dict
     from pretraining.pretrain_finetune import finetune_and_eval_user
     import pickle
     from torch.utils.data import DataLoader
@@ -441,7 +467,12 @@ def run_supervised_test_eval(model, config: dict, tensor_dict_path: str,
 
     with open(tensor_dict_path, "rb") as f:
         full_dict   = pickle.load(f)
-    tensor_dict = full_dict["data"]
+    # Reorient tensors from disk layout (trials, T, C) → (trials, C, T) so that
+    # MetaGestureDataset slices yield (C, T) samples, which maml_mm_collate stacks
+    # into (B, C, T) — the channel-first layout expected by all Conv1d / LSTM models.
+    # run_episodic_test_eval already does this; omitting it here caused the
+    # "Expected size 16 but got size 72" RuntimeError in the MOE_encoder cat.
+    tensor_dict = reorient_tensor_dict(full_dict, config)
 
     test_ds = MetaGestureDataset(
         tensor_dict,
