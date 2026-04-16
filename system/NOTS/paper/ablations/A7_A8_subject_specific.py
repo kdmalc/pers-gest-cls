@@ -62,13 +62,27 @@ Instead, we build support/query tensors explicitly. This makes the split
 100% transparent and auditable, with no hidden sampling behavior.
 
 ────────────────────────────────────────────────────────────────────────────────
-Early stopping for A7:
+Train / val / test rep split for A7:
 ────────────────────────────────────────────────────────────────────────────────
-With only 10 training samples (1 rep × 10 classes), val_reps = train_reps
-means early stopping would just measure memorization of the training set, which
-is meaningless. We disable early stopping and run for a fixed number of epochs
-(A7_PRETRAIN_EPOCHS), analogous to A8's fixed inner-loop steps. This makes
-the two ablations directly comparable in terms of training budget.
+We have 10 reps per class. Each seed run assigns:
+
+    train rep  : 1 rep  → used for flat supervised pretraining (1 sample/class)
+    val rep    : 1 rep  → used to monitor pretraining loss / early stopping
+    test reps  : 8 reps → used as the episodic query pool for final eval
+
+The split rotates with seed_idx so that variance from "which rep is train/val"
+is averaged across seeds, symmetric with cross-subject episodic eval:
+
+    seed_idx k:
+        train_trial_idx = k % 10
+        val_trial_idx   = (k + 1) % 10
+        test_trial_indices = all 8 remaining indices
+
+Consequences vs. the old train==val design:
+  - Early stopping on A7 pretraining is now meaningful (val ≠ train).
+  - Test query pool shrinks from 9 → 8 reps. This is the honest trade-off.
+  - The 1-shot information budget is preserved: pretraining still sees exactly
+    1 rep/class. Val is strictly held out from pretraining.
 
 Usage:
     python A7_A8_subject_specific.py --ablation A7
@@ -261,9 +275,12 @@ def build_config_a7() -> dict:
     config["use_MOE"]                = False
     config["batch_size"]             = 10   # exactly the dataset size (1 rep × 10 classes)
 
-    # Fixed training schedule — no early stopping (see module docstring).
-    config["num_epochs"]          = A7_PRETRAIN_EPOCHS
-    config["use_earlystopping"]   = False
+    # Fixed epoch budget. Early stopping is now re-enabled because val ≠ train
+    # (see module docstring). Use a generous patience so the tiny val set (1
+    # sample/class) doesn't trigger a premature stop on noise.
+    config["num_epochs"]              = A7_PRETRAIN_EPOCHS
+    config["use_earlystopping"]       = True
+    config["earlystopping_patience"]  = 20   # generous; val set is only 10 samples
 
     # Head-only fine-tuning at eval. The backbone learned subject-specific
     # features from 10-sample pretraining. Touching the backbone with 3 support
@@ -292,13 +309,20 @@ def run_a7_one_subject(
     we average over the same "which rep is support" variance as cross-subject
     episodic eval. Within a run, support is fixed; task (class subset) varies.
 
+    Rep split:
+        train rep  : 1 rep → flat supervised pretraining (10 samples, 10-class head).
+        val rep    : 1 rep → held out; used for early stopping during pretraining.
+        test reps  : 8 reps → episodic query pool for final eval.
+        Split rotates with seed_idx (see module docstring).
+
     Step 1 — Pretrain backbone:
-        Flat supervised training on the support rep only (10 samples, 10-class head).
+        Flat supervised training on train rep only (10 samples, 10-class head).
+        Early stopping monitors val rep loss (val rep ≠ train rep).
 
     Step 2 — Episodic eval:
         For each episode, sample n_way classes from the 10 gesture classes.
-        Support  = support rep, selected n_way classes (1 sample/class, same as training).
-        Query    = all remaining 9 reps, selected n_way classes (9 samples/class).
+        Support  = train rep, selected n_way classes (1 sample/class = 1-shot budget).
+        Query    = test reps (8 reps), selected n_way classes (8 samples/class).
         Fine-tune head-only on the 3 support samples, then eval on query.
         finetune_and_eval_user handles head replacement internally on each episode.
     """
@@ -306,46 +330,62 @@ def run_a7_one_subject(
     config = copy.deepcopy(config)
     config["seed"] = seed
 
-    # ── Determine which rep is support for this seed run ──────────────────────
-    support_trial_idx  = seed_idx % NUM_REPS
-    query_trial_indices = [i for i in ALL_TRIAL_INDICES_0INDEXED if i != support_trial_idx]
+    # ── Determine train / val / test rep split for this seed run ─────────────
+    # train: 1 rep (the support rep — same data the model "sees" at eval time).
+    # val:   1 rep (the next rep, strictly held out from pretraining).
+    # test:  the remaining 8 reps (the episodic query pool for final eval).
+    train_trial_idx    = seed_idx % NUM_REPS
+    val_trial_idx      = (seed_idx + 1) % NUM_REPS
+    test_trial_indices = [
+        i for i in ALL_TRIAL_INDICES_0INDEXED
+        if i != train_trial_idx and i != val_trial_idx
+    ]
+    assert len(test_trial_indices) == NUM_REPS - 2, (
+        f"Expected {NUM_REPS - 2} test trials, got {len(test_trial_indices)}. "
+        f"train_trial_idx={train_trial_idx}, val_trial_idx={val_trial_idx}"
+    )
 
-    # 1-indexed rep number for logging / pretrain dataloader (which uses 1-indexed rep nums)
-    support_rep_num = support_trial_idx + 1
+    # 1-indexed rep numbers for logging / pretrain dataloader (1-indexed convention)
+    train_rep_num = train_trial_idx + 1
+    val_rep_num   = val_trial_idx   + 1
+
+    # support_trial_idx == train_trial_idx: the rep used for pretraining is also
+    # the 1-shot support rep at eval time (preserving the 1-shot information budget).
+    support_trial_idx = train_trial_idx
 
     print(f"[A7 | {pid} | seed_idx={seed_idx}] "
-          f"Support rep: {support_rep_num} (trial_idx={support_trial_idx}) | "
-          f"Query reps: {[i+1 for i in query_trial_indices]}")
+          f"Train rep: {train_rep_num} (trial_idx={train_trial_idx}) | "
+          f"Val rep:   {val_rep_num}   (trial_idx={val_trial_idx}) | "
+          f"Test reps: {[i+1 for i in test_trial_indices]}")
 
-    # ── Step 1: Flat pretrain on support rep only ─────────────────────────────
-    # train_PIDs and val_PIDs both = [pid] — subject-specific.
-    # val_reps = train_reps = [support_rep_num] because we have no other data
-    # to validate on. Early stopping is disabled (see build_config_a7), so
-    # val loss is only logged for diagnostics and does not affect training.
+    # ── Step 1: Flat pretrain on train rep only ───────────────────────────────
+    # train_PIDs / val_PIDs both = [pid] (subject-specific).
+    # val_reps is now a DISTINCT rep from train_reps so early stopping is
+    # meaningful. The 1-shot budget is preserved: pretraining still sees
+    # exactly 1 rep/class (train_rep_num).
     config["train_PIDs"] = [pid]
     config["val_PIDs"]   = [pid]
-    config["train_reps"] = [support_rep_num]
-    config["val_reps"]   = [support_rep_num]
+    config["train_reps"] = [train_rep_num]
+    config["val_reps"]   = [val_rep_num]
 
     model = build_supervised_no_moe_model(config)
 
     train_dl, val_dl, n_classes = get_pretrain_dataloaders(config, tensor_dict)
     assert len(train_dl.dataset) > 0, (
         f"[A7 | {pid} | seed_idx={seed_idx}] Empty train set. "
-        f"Check that pid={pid} and rep_num={support_rep_num} exist in tensor_dict."
+        f"Check that pid={pid} and rep_num={train_rep_num} exist in tensor_dict."
     )
 
     trained_model, history = pretrain(model, train_dl, val_dl, config)
-    # Load best state. With early stopping disabled this is the final epoch,
-    # but pretrain() still tracks best train loss so we load it for consistency.
 
     # ── Step 2: Episodic eval ─────────────────────────────────────────────────
     # Build episodes explicitly — no MetaGestureDataset — so the support/query
     # rep split is enforced deterministically (see module docstring).
+    # Query pool = test_trial_indices (8 reps). Val rep is strictly excluded.
     episodes = build_ss_eval_episodes(
         tensor_dict, pid, config,
         support_trial_idx   = support_trial_idx,
-        query_trial_indices = query_trial_indices,
+        query_trial_indices = test_trial_indices,
         num_episodes        = NUM_TEST_EPISODES,
         seed                = seed,
     )
@@ -370,13 +410,14 @@ def run_a7_one_subject(
     mean_acc = float(np.mean(episode_accs))
     print(f"[A7 | {pid} | seed_idx={seed_idx}] "
           f"Acc: {mean_acc*100:.2f}%  ({len(episode_accs)} eps, "
-          f"support_rep={support_rep_num})")
+          f"train_rep={train_rep_num}, val_rep={val_rep_num})")
 
     return {
         "pid":               pid,
         "seed":              seed,
         "seed_idx":          seed_idx,
-        "support_rep_num":   support_rep_num,
+        "train_rep_num":     train_rep_num,
+        "val_rep_num":       val_rep_num,
         "mean_acc":          mean_acc,
         "n_episodes":        len(episode_accs),
         "n_params":          count_parameters(model),
@@ -507,7 +548,7 @@ def run_subject_specific_ablation(
             actual_seed = FIXED_SEED + seed_idx
             print(f"\n{'='*70}")
             print(f"[{ablation_id}] PID={pid}  seed_idx={seed_idx+1}/{NUM_FINAL_SEEDS}  "
-                  f"(seed={actual_seed}, support_rep={seed_idx % NUM_REPS + 1})")
+                  f"(seed={actual_seed}, train_rep={seed_idx % NUM_REPS + 1}, val_rep={(seed_idx + 1) % NUM_REPS + 1})")
             print(f"{'='*70}")
             result = subject_runner(
                 pid, seed_idx, actual_seed, config, tensor_dict
@@ -543,8 +584,11 @@ def run_subject_specific_ablation(
     print(f"\n{'='*70}")
     print(f"[{ablation_id}] FINAL across {len(per_subject_mean)} subjects: "
           f"{summary['mean_acc']*100:.2f}% ± {summary['std_acc']*100:.2f}%")
-    print(f"[{ablation_id}] Support rep per seed: "
-          + ", ".join(f"seed{i}→rep{i % NUM_REPS + 1}" for i in range(NUM_FINAL_SEEDS)))
+    print(f"[{ablation_id}] Train/val rep per seed: "
+          + ", ".join(
+              f"seed{i}→train=rep{i % NUM_REPS + 1},val=rep{(i + 1) % NUM_REPS + 1}"
+              for i in range(NUM_FINAL_SEEDS)
+          ))
     print(f"{'='*70}")
 
     return summary
