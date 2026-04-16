@@ -38,8 +38,8 @@ for arg in "$@"; do
     elif [[ "$arg" == "--debug" ]]; then
         DEBUG=true
     elif [[ "$arg" == "all" ]]; then
-        ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A9 A12)
-        # A6, A10, A11 are stubs — not included in "all"
+        ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 A12)
+        # A9, A10 are not included in "all"
     else
         ABLATIONS+=("$arg")
     fi
@@ -47,7 +47,7 @@ done
 
 if [[ ${#ABLATIONS[@]} -eq 0 ]]; then
     echo "ERROR: No ablations specified."
-    echo "Usage: bash ablation_launcher.sh [M0|A1|A2|A3|A4|A5|A7|A8|A9|A12|all] [--dry-run]"
+    echo "Usage: bash ablation_launcher.sh [M0|A1|A2|A3|A4|A5|A7|A8|A9|A10|A11|A12|all] [--dry-run]"
     exit 1
 fi
 
@@ -57,17 +57,17 @@ CPUS=10
 MEM=32G
 ENV_PATH=/projects/my13/kai/meta-pers-gest/envs/fl-torch
 
+# ── Per-ablation resource overrides ───────────────────────────────────────────
+# Format: TIME_<ID>=HH:MM:SS  MEM_<ID>=XG
+# Defaults apply if not overridden.
+TIME_DEFAULT="20:00:00"
+
 # ── Debug mode overrides ───────────────────────────────────────────────────────
 if [[ "$DEBUG" == true ]]; then
     echo "DEBUG MODE: partition=debug, time=00:15:00"
     PARTITION=debug
     TIME_DEFAULT="00:15:00"
 fi
-
-# ── Per-ablation resource overrides ───────────────────────────────────────────
-# Format: TIME_<ID>=HH:MM:SS  MEM_<ID>=XG
-# Defaults apply if not overridden.
-TIME_DEFAULT="20:00:00"
 
 # Time limit on commons is 24 hours I think. So I'm gonan comment all these for now...
 #TIME_M0="24:00:00";  MEM_M0=32G    # 5 seeds × full MAML
@@ -99,8 +99,9 @@ ABLATION_SCRIPT[A5]="A5_expert_count_sweep.py"
 # A6: stub — not launchable yet
 ABLATION_SCRIPT[A7]="A7_A8_subject_specific.py --ablation A7"
 ABLATION_SCRIPT[A8]="A7_A8_subject_specific.py --ablation A8"
-ABLATION_SCRIPT[A9]="A9_modality_encoding.py --variant separate"
-# A10, A11: stubs — not launchable yet
+ABLATION_SCRIPT[A9]="A9_modality_encoding.py --variant separate"  # NOTE: I dont care about this one
+ABLATION_SCRIPT[A10]="A10_A11_A12_meta_pretrained.py --ablation A10"  # NOTE: I dont think we care about the fake zero-shot Meta model either
+ABLATION_SCRIPT[A11]="A10_A11_A12_meta_pretrained.py --ablation A11"
 ABLATION_SCRIPT[A12]="A10_A11_A12_meta_pretrained.py --ablation A12"
 
 # ── Submit each ablation ──────────────────────────────────────────────────────
