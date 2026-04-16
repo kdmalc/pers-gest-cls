@@ -255,10 +255,10 @@ def build_model_from_trial(trial, model_type, base_config=None):
     # Keep some headroom above 30 in case the old v2 {30-40} range was actually fine
     # but just hadn't converged yet with the bad eval setup.
     config["num_experts"] = trial.suggest_categorical(
-        "num_experts", [20, 22, 24, 25, 26, 27, 28, 30, 32, 36])
+        "num_experts", [20, 22, 24, 25, 26, 27, 28, 30, 32, 36, 40, 44])
 
     # New warm-start: top_k ∈ {3,4,5,6,7,8} → match this range.
-    config["MOE_top_k"]   = trial.suggest_categorical("MOE_top_k", [3, 4, 5, 6, 7, 8, 9, 10])
+    config["MOE_top_k"]   = trial.suggest_categorical("MOE_top_k", [4, 5, 6, 7, 8, 9, 10])
     config["top_k"]       = config["MOE_top_k"]
 
     config["MOE_placement"] = "encoder"  # fixed per all studies
