@@ -39,7 +39,7 @@ for arg in "$@"; do
         DEBUG=true
     elif [[ "$arg" == "all" ]]; then
         ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 A12)
-        # A9, A10 are not included in "all"
+        # A6, A9, A10 are not included in "all"
     else
         ABLATIONS+=("$arg")
     fi
