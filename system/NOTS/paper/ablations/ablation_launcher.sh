@@ -8,6 +8,8 @@
 #   bash ablation_launcher.sh A1 A2 A3              # submit multiple
 #   bash ablation_launcher.sh all                   # submit all implemented ablations
 #   bash ablation_launcher.sh A5 --dry-run          # print sbatch command without submitting
+#   bash ablation_launcher.sh A5 --debug            # use debug partition (15 min time limit)
+#   bash ablation_launcher.sh A5 --debug --dry-run  # combine both
 #
 # Each ablation is its own SLURM job (separate log, separate GPU, separate RUN_DIR).
 # A5 (expert count sweep, 8×5=40 training runs) gets extra time and memory.
@@ -28,10 +30,13 @@ mkdir -p "$LOG_DIR"
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 DRY_RUN=false
+DEBUG=false
 ABLATIONS=()
 for arg in "$@"; do
     if [[ "$arg" == "--dry-run" ]]; then
         DRY_RUN=true
+    elif [[ "$arg" == "--debug" ]]; then
+        DEBUG=true
     elif [[ "$arg" == "all" ]]; then
         ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A9 A12)
         # A6, A10, A11 are stubs — not included in "all"
@@ -51,6 +56,13 @@ PARTITION=commons
 CPUS=10
 MEM=32G
 ENV_PATH=/projects/my13/kai/meta-pers-gest/envs/fl-torch
+
+# ── Debug mode overrides ───────────────────────────────────────────────────────
+if [[ "$DEBUG" == true ]]; then
+    echo "DEBUG MODE: partition=debug, time=00:15:00"
+    PARTITION=debug
+    TIME_DEFAULT="00:15:00"
+fi
 
 # ── Per-ablation resource overrides ───────────────────────────────────────────
 # Format: TIME_<ID>=HH:MM:SS  MEM_<ID>=XG
