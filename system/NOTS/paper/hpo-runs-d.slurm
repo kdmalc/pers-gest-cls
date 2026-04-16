@@ -3,9 +3,9 @@
 # Debug HPO launcher — single job, debug partition, 1 Optuna trial.
 #
 # USAGE:
-#   export HPO_SCRIPT="mamlpp/mamlpp_pretr_moe_hpo.py"
-#   export SCRIPT_ARGS="--model_type DeepCNNLSTM"   # optional
-#   sbatch mpp-hpo-debug.slurm
+#    export HPO_SCRIPT="1s3w_maml_moe_hpo.py"
+#    export SCRIPT_ARGS="--model_type DeepCNNLSTM"
+#    sbatch hpo-runs-d.slurm
 #
 # To override time or mem at the call site:
 #   sbatch --time=00:30:00 --mem=20G mpp-hpo-debug.slurm

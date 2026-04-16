@@ -98,7 +98,7 @@ from system.pretraining.pretrain_models import build_model
 current_directory = os.getcwd()
 print(f"The current working directory is: {current_directory}")
 
-timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M")
 
 # ── Collapse detection constants (MoE only) ──────────────────────────────────
 COLLAPSE_MAX_LOAD_THRESHOLD = 0.80
@@ -316,6 +316,10 @@ def build_model_from_trial(trial, model_type, base_config=None):
     config["meta_learning"] = True
     config["num_workers"]   = 8
     config["batch_size"]    = 64
+
+    config["seed"] = FIXED_SEED
+    config["timestamp"] = TIMESTAMP
+    config["available_gesture_classes"] = config["maml_gesture_classes"]
 
     # MULTI-STEP LOSS
     # New warm-start: 'hybrid' in 8/10 trials, False in 2 → sweep both.
