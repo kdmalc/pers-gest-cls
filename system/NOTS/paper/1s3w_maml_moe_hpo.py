@@ -506,7 +506,7 @@ V3_SUGGEST_KEYS = {
     "outer_lr",
     "wd",
     "groupnorm_num_groups",
-    "use_GlobalAvgPooling",
+    #"use_GlobalAvgPooling",  # Commented out since it appears that use_GAP is a unanimous True
     "num_experts",
     "MOE_top_k",
     "MOE_gate_temperature",

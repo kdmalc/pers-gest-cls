@@ -140,12 +140,12 @@ def set_MOE_optimizer(
         raise ValueError(f"Only ADAM, ADAMW, and SGD are supported; got {optimizer_name}")
 
 # ideal entropy for E=6 is log(6) ≈ 1.792
-def gate_stats(usage):  # usage: (E,) on CUDA
-    u = usage.detach().float().cpu().clamp_min(1e-8)
-    E = u.numel()
-    ent = float(-(u * u.log()).sum())              # entropy
-    kl  = float(F.kl_div(u.log(), torch.full_like(u, 1.0/E), reduction='sum'))  # KL(u || uniform)
-    return ent, kl, u.tolist()
+#def gate_stats(usage):  # usage: (E,) on CUDA
+#    u = usage.detach().float().cpu().clamp_min(1e-8)
+#    E = u.numel()
+#    ent = float(-(u * u.log()).sum())              # entropy
+#    kl  = float(F.kl_div(u.log(), torch.full_like(u, 1.0/E), reduction='sum'))  # KL(u || uniform)
+#    return ent, kl, u.tolist()
 
 def accuracy(logits, y):
     pred = logits.argmax(dim=-1)

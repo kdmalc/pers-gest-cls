@@ -204,9 +204,11 @@ class RoutingAnalyzer:
         ideal_fraction = 1/E.  Values far from ideal → over/under-used experts.
         """
         # Fraction of samples where each expert is dominant
-        hard_frac = torch.zeros(self.E)
-        for e in range(self.E):
-            hard_frac[e] = (self.dominant_expert == e).float().mean()
+        #hard_frac = torch.zeros(self.E)
+        #for e in range(self.E):
+        #    hard_frac[e] = (self.dominant_expert == e).float().mean()
+        hard_frac = torch.bincount(self.dominant_expert, minlength=self.E).float() / self.N
+
 
         # Mean soft weight per expert
         soft_frac = self.rec.gate_weights.mean(dim=0)

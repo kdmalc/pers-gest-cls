@@ -521,12 +521,20 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
             print("No val loader found! Skipping during-training val evals")
 
         # ── MOE routing analysis ─────────────────────────────────────────────
+        # THIS IS THE FULL ONE PLUS THE FIGURE!
+        #if use_MOE and MOE_log_every > 0 and ep % MOE_log_every == 0 and episodic_val_loader is not None:
+        #    print(f"\n[MOE] Routing analysis at epoch {ep}...")
+        #    report = _maml_routing_analysis_epoch(
+        #        model, episodic_val_loader, config,
+        #        num_experts=num_experts, model_name=model_name,
+        #        epoch=ep, plot_dir=MOE_plot_dir,
+        #    )
+        #    if report:
+        #        routing_reports.append(report)
         if use_MOE and MOE_log_every > 0 and ep % MOE_log_every == 0 and episodic_val_loader is not None:
-            print(f"\n[MOE] Routing analysis at epoch {ep}...")
-            report = _maml_routing_analysis_epoch(
+            report = _maml_collapse_check_only(
                 model, episodic_val_loader, config,
-                num_experts=num_experts, model_name=model_name,
-                epoch=ep, plot_dir=MOE_plot_dir,
+                num_experts=num_experts, model_name=model_name, epoch=ep,
             )
             if report:
                 routing_reports.append(report)
@@ -550,6 +558,75 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         "best_val_epoch":  best_val_epoch,
         "routing_reports": routing_reports,
     }
+
+
+def _maml_collapse_check_only(model, episodic_val_loader, config,
+                               num_experts, model_name, epoch):
+    """
+    Lightweight routing pass: collects gate_weights over the val loader
+    and returns only the collapse-relevant stats (max_expert_load,
+    expert_hard_fraction). No full RoutingAnalyzer, no prints, no plots.
+    
+    Cost: one forward pass per episode (no inner-loop adapt, no grad).
+    Returns a minimal report dict compatible with _check_moe_collapse().
+    """
+    device     = config['device']
+    multimodal = bool(config.get('multimodal', True))
+
+    # Accumulate dominant-expert counts directly on GPU to avoid repeated
+    # .cpu() transfers per episode.
+    expert_counts = torch.zeros(num_experts, device=device)
+    total_samples = 0
+
+    try:
+        model.eval()
+        with torch.no_grad():
+            for step_item in episodic_val_loader:
+                episodes = _normalize_step_item(step_item)
+                for episode in episodes:
+                    query_batch = episode['query']
+                    qemg = query_batch['emg'].to(device)
+                    qimu = query_batch.get('imu')
+                    if qimu is not None and multimodal:
+                        qimu = qimu.to(device)
+                    else:
+                        qimu = None
+
+                    # No inner-loop adapt — use meta-init params directly.
+                    # We only care about collapse, not adapted accuracy.
+                    out = model(x_emg=qemg, x_imu=qimu, return_routing=True)
+                    if not (isinstance(out, tuple) and len(out) == 2
+                            and isinstance(out[1], dict)):
+                        # Model didn't return routing info — bail out silently.
+                        return None
+                    _, routing_info = out
+                    gate_w = routing_info.get('gate_weights')
+                    if gate_w is None:
+                        return None
+
+                    dominant = gate_w.argmax(dim=-1)   # (B,)
+                    for e in range(num_experts):
+                        expert_counts[e] += (dominant == e).sum()
+                    total_samples += dominant.size(0)
+    finally:
+        model.train()
+
+    if total_samples == 0:
+        return None
+
+    hard_frac = (expert_counts / total_samples).cpu().tolist()
+    max_load  = max(hard_frac)
+
+    report = {
+        'epoch':              epoch,
+        'max_expert_load':    max_load,
+        'expert_hard_fraction': hard_frac,
+        # Stub keys so _check_moe_collapse doesn't KeyError on other paths
+        'routing_reports':    [{'max_expert_load': max_load}],
+    }
+    print(f"[MOE] Epoch {epoch} collapse check: max_load={max_load:.3f} "
+          f"(threshold={0.80:.2f}) — {'COLLAPSED' if max_load > 0.80 else 'OK'}")
+    return report
 
 
 def _maml_routing_analysis_epoch(model, episodic_val_loader, config,
