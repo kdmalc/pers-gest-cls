@@ -58,6 +58,27 @@ Usage:
     python A10_A11_A12_meta_pretrained.py --ablation A11
 """
 
+# Checking if omegaconf exists in our env for Meta A11...
+
+import sys
+import subprocess
+
+print("=== ENVIRONMENT DIAGNOSTICS ===")
+print(f"Python executable: {sys.executable}")
+print(f"Python version: {sys.version}")
+print(f"sys.path: {sys.path}")
+
+# Check if omegaconf is findable and where
+result = subprocess.run(
+    [sys.executable, "-m", "pip", "show", "omegaconf"],
+    capture_output=True, text=True
+)
+print(f"omegaconf pip show:\n{result.stdout or result.stderr}")
+print("================================")
+
+# =============================================================================
+
+
 import os, sys, copy, json, argparse
 import numpy as np
 import torch
@@ -92,7 +113,6 @@ from MAML.mamlpp import mamlpp_pretrain
 print(f"CUDA Available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
-
 
 # =============================================================================
 
