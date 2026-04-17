@@ -660,10 +660,27 @@ def build_config_a12() -> dict:
 
     config = make_base_config(ablation_id="A12")
 
-    config["use_imu"]         = False
-    config["emg_in_ch"]       = EMG_2KHZ_IN_CH
-    config["sequence_length"] = EMG_2KHZ_SEQ_LEN
-    config["dfs_load_path"]   = str(Path(EMG_2KHZ_PKL_PATH).parent) + "/"
+    # ── Modality: EMG-only ────────────────────────────────────────────────────
+    # All three flags must be False — made explicit so a base-config change can
+    # never silently re-enable IMU or demographics for this ablation.
+    config["use_imu"]          = False
+    config["multimodal"]       = False   # base sets True; override explicitly
+    config["use_demographics"] = False
+
+    # ── Input dims for 2kHz EMG-only data ────────────────────────────────────
+    config["emg_in_ch"]        = EMG_2KHZ_IN_CH
+    config["sequence_length"]  = EMG_2KHZ_SEQ_LEN
+    config["dfs_load_path"]    = str(Path(EMG_2KHZ_PKL_PATH).parent) + "/"
+
+    # ── Shared strided front-end ──────────────────────────────────────────────
+    # At 2kHz, T=4300 is ~67× longer than the 64-sample 60Hz windows used by
+    # all other ablations.  A shared stride-20 front-end (matching Meta's 1-layer
+    # CNN with stride=20) reduces T: 4300 → ~215 before the expert CNNs and LSTM
+    # see the signal, making the run feasible on a 32GB GPU.
+    # This is the architecturally correct place to do the downsampling: one
+    # shared conv paid once, rather than striding inside each of the 32 experts.
+    # Mention this design choice explicitly in the paper's A12 description.
+    config["front_end_stride"]     = 20
 
     return config
 

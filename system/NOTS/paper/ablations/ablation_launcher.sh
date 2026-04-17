@@ -161,6 +161,8 @@ which python
 python -c \"import torch; print(f'PyTorch: {torch.__version__}  CUDA: {torch.version.cuda}  GPU: {torch.cuda.is_available()}')\"
 nvidia-smi || true
 
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 python -u $ABLATION_DIR/$SCRIPT $EXTRA_ARGS
 
 echo 'JOB_END date=\$(date)'

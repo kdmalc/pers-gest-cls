@@ -476,10 +476,43 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
 
         in_ch = C_emg + (C_imu if use_imu else 0)
 
+        # ── Optional shared strided front-end ────────────────────────────────
+        # front_end_stride > 0 → a single shared Conv1d with that stride is
+        #   inserted BEFORE the context projector and all expert CNNs.
+        #   Only the front-end strides; the expert CNNs themselves never stride.
+        #   The shared design means we pay the downsampling cost exactly once,
+        #   and all 32 experts see the already-reduced sequence.
+        #   Analogous to Meta's architecture (1 strided conv, stride=20).
+        # front_end_stride == 0 → self.front_end = None; no layer is created,
+        #   no parameters are added, and backbone() is identical to before.
+        #   This is the default for all ablations except A12.
+        front_end_stride = config.get("front_end_stride", 0)
+        assert isinstance(front_end_stride, int) and front_end_stride >= 0, \
+            f"front_end_stride must be a non-negative int, got {front_end_stride}"
+        if front_end_stride > 0:
+            # Kernel = 2*stride so each output timestep's receptive field
+            # covers its full input span without aliasing.
+            front_k = 2 * front_end_stride
+            front_out_ch = max(gn_grps, in_ch)
+            front_out_ch = (front_out_ch // gn_grps) * gn_grps   # GN-compatible
+            self.front_end = nn.Sequential(
+                nn.Conv1d(in_ch, front_out_ch, kernel_size=front_k,
+                          stride=front_end_stride, padding=front_k // 2, bias=False),
+                nn.GroupNorm(gn_grps, front_out_ch),
+                nn.GELU(),
+            )
+            front_end_out_ch = front_out_ch
+        else:
+            self.front_end = None
+            front_end_out_ch = in_ch
+        self.front_end_stride = front_end_stride
+
         # ── Context Projector ────────────────────────────────────────────────
-        # Shallow CNN to extract routing signal without routing on raw x.
+        # Reads the (optionally downsampled) input and produces routing vector r.
+        # When front_end_stride > 0, the projector sees the cheaper downsampled
+        # signal; when front_end_stride == 0 it sees the raw input as before.
         self.ctx_proj = ContextProjector(
-            in_ch=in_ch, hidden_dim=ctx_hidden, out_dim=ctx_out,
+            in_ch=front_end_out_ch, hidden_dim=ctx_hidden, out_dim=ctx_out,
             use_conv=True, conv_kernel=k, gn_groups=gn_grps, dropout=MOE_drop,
         )
 
@@ -487,14 +520,14 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         expert_cnns = []
         for _ in range(E):
             cnn, cnn_out_ch = _build_cnn_block(
-                in_ch=in_ch, base_filters=base_f, n_layers=n_layers,
+                in_ch=front_end_out_ch, base_filters=base_f, n_layers=n_layers,
                 kernel=k, gn_groups=gn_grps, dropout=MOE_drop,
                 width_mult=width_mult,
             )
             expert_cnns.append(cnn)
         self.expert_cnns = nn.ModuleList(expert_cnns)
         # cnn_out_ch is the same for all experts (same width_mult)
-        _, cnn_out_ch = _build_cnn_block(in_ch, base_f, n_layers, k, gn_grps, drop, width_mult)
+        _, cnn_out_ch = _build_cnn_block(front_end_out_ch, base_f, n_layers, k, gn_grps, drop, width_mult)
 
         # ── Gating ──────────────────────────────────────────────────────────
         self.gate = MOEGate(ctx_out, E, top_k=top_k, temperature=gate_temp)
@@ -525,17 +558,22 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         if self.use_imu and x_imu is not None:
             x = torch.cat([x, x_imu], dim=1)
 
-        # Routing
+        # 0. Optional shared strided front-end (only present when front_end_stride > 0).
+        #    Downsamples T once, shared across the context projector and all experts.
+        if self.front_end is not None:
+            x = self.front_end(x)                             # (B, front_out_ch, T/stride)
+
+        # 1. Routing vector from lightweight context projector
         r = self.ctx_proj(x)
         w_hard, w_soft = self.gate(r)                              # each (B, E)
 
-        # Expert CNNs
+        # 2. Expert CNNs (all see the downsampled x)
         expert_feats = [exp(x) for exp in self.expert_cnns]       # each (B, C, T')
         stacked = torch.stack(expert_feats, dim=1)                 # (B, E, C, T')
         w_4d    = w_hard.unsqueeze(-1).unsqueeze(-1)               # (B, E, 1, 1)
         h       = (stacked * w_4d).sum(dim=1)                      # (B, C, T')
 
-        # LSTM
+        # 3. LSTM
         h = h.permute(0, 2, 1)
         h1, _ = self.lstm1(h);  h1 = self.lstm_dropout(h1)
         h2, _ = self.lstm2(h1); h2 = self.lstm_dropout(h2)

@@ -147,9 +147,21 @@ def make_base_config(ablation_id: str) -> dict:
     config["use_batch_norm"]       = False
     config["dropout"]              = 0.1
     config["head_type"]            = "mlp"
-    config["emg_stride"]           = 1
-    config["imu_stride"]           = 1
+    # emg_stride / imu_stride: originally intended as per-expert-CNN stride knobs
+    # but were never wired into any model — left here as dead config keys.
+    # Commented out so they don't mislead anyone into thinking they do something.
+    # config["emg_stride"] = 1
+    # config["imu_stride"] = 1
     config["padding"]              = 0
+
+    # ── Shared strided front-end (DeepCNNLSTM_EncoderMOE only) ───────────────
+    # front_end_stride > 0  → a single shared Conv1d with that stride is
+    #   prepended to the model BEFORE the context projector and expert CNNs.
+    #   Both the projector and all experts then see the downsampled signal.
+    # front_end_stride == 0 → no front-end layer is created (default; all other
+    #   ablations leave this at 0).
+    # Only A12 sets this to 20 to handle 2kHz data on a 32GB GPU.
+    config["front_end_stride"]     = 0
 
     # ── Best hyperparameters (from HPO warm-start analysis) ───────────────────
     config["learning_rate"]  = 3e-4      # outer_lr
