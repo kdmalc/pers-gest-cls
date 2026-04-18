@@ -432,7 +432,9 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
 ## This is just the MAML training stage
 # -----------------------------
 def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=None,
-                    collapse_abort_threshold: float = 0.80):
+                    collapse_abort_threshold: float = 0.80,
+                    collapse_grace_epochs: int = 10,
+                    collapse_consecutive_checks: int = 2):
     device = config["device"]
     model.to(device)
 
@@ -467,6 +469,7 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
     routing_reports = []
     num_epochs = int(config["num_epochs"])
     moe_collapsed = False
+    consecutive_collapse_count = 0  # number of back-to-back checks above threshold
 
     # Epoch 0 baseline: before ANY MAML training
     if episodic_val_loader is not None:
@@ -541,11 +544,32 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
             if report:
                 routing_reports.append(report)
                 max_load = report.get('max_expert_load', 0.0)
-                if max_load > collapse_abort_threshold:
-                    print(f"[MOE] Epoch {ep}: collapse detected (max_load={max_load:.3f} > "
-                          f"{collapse_abort_threshold:.2f}). Aborting training early.")
-                    moe_collapsed = True
-                    break
+
+                # Grace period: don't abort during early chaotic training.
+                # Before collapse_grace_epochs, routing is often transiently
+                # imbalanced and can self-correct once aux loss kicks in.
+                if ep < collapse_grace_epochs:
+                    if max_load > collapse_abort_threshold:
+                        print(f"[MOE] Epoch {ep}: max_load={max_load:.3f} exceeds threshold "
+                              f"but within grace period (< epoch {collapse_grace_epochs}). "
+                              f"Watching but not aborting.")
+                    consecutive_collapse_count = 0  # reset — grace period doesn't count
+                elif max_load > collapse_abort_threshold:
+                    consecutive_collapse_count += 1
+                    print(f"[MOE] Epoch {ep}: collapse check {consecutive_collapse_count}/"
+                          f"{collapse_consecutive_checks} (max_load={max_load:.3f}).")
+                    if consecutive_collapse_count >= collapse_consecutive_checks:
+                        print(f"[MOE] Epoch {ep}: sustained collapse confirmed over "
+                              f"{collapse_consecutive_checks} consecutive checks. "
+                              f"Aborting training early.")
+                        moe_collapsed = True
+                        break
+                else:
+                    # Recovered — reset the streak
+                    if consecutive_collapse_count > 0:
+                        print(f"[MOE] Epoch {ep}: max_load={max_load:.3f} recovered below "
+                              f"threshold. Resetting collapse counter.")
+                    consecutive_collapse_count = 0
 
         if scheduler: scheduler.step()
         print(f"Epoch completed in {time.time() - epoch_start_time:.2f}s\n")

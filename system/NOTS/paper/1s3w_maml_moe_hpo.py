@@ -101,8 +101,12 @@ print(f"The current working directory is: {current_directory}")
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M")
 
 # ── Collapse detection constants (MoE only) ──────────────────────────────────
-COLLAPSE_MAX_LOAD_THRESHOLD = 0.80
-COLLAPSE_PENALTY            = 0.0
+COLLAPSE_MAX_LOAD_THRESHOLD  = 0.80   # max_expert_load above which a check counts as collapsed
+COLLAPSE_GRACE_EPOCHS        = 10     # don't abort before this epoch — early routing is chaotic
+COLLAPSE_CONSECUTIVE_CHECKS  = 2      # require this many back-to-back collapsed checks to abort
+                                      # with MOE_log_every=5 this means 10 epochs of sustained
+                                      # collapse before we give up (checks at ep 10 + ep 15)
+COLLAPSE_PENALTY             = 0.0    # Optuna objective value returned for collapsed trials
 
 #############################################################
 
@@ -410,6 +414,8 @@ def objective(trial, model_type):
             episodic_train_loader,
             episodic_val_loader=episodic_val_loader,
             collapse_abort_threshold=COLLAPSE_MAX_LOAD_THRESHOLD,
+            collapse_grace_epochs=COLLAPSE_GRACE_EPOCHS,
+            collapse_consecutive_checks=COLLAPSE_CONSECUTIVE_CHECKS,
         )
         best_val_acc = pretrain_res_dict["best_val_acc"]
         best_state   = pretrain_res_dict["best_state"]
