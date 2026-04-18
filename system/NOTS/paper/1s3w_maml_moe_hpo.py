@@ -579,7 +579,7 @@ if __name__ == "__main__":
         description="HPO v3: MAML+MoE, 1-shot 3-way, maml_inner_steps_eval=50 (fixed).")
     parser.add_argument("--model_type", type=str, default="DeepCNNLSTM",
                         choices=["DeepCNNLSTM"],
-                        help="Model architecture to optimise. Only DeepCNNLSTM is supported.")
+                        help="Model architecture to optimize. Only DeepCNNLSTM is supported.")
     parser.add_argument("--data_dir", type=str)
     parser.add_argument("--out_dir",  type=str)
     args = parser.parse_args()
@@ -593,7 +593,7 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(FIXED_SEED)
 
-    study_name   = f"mamlpp_MOE_PAPER_{args.model_type}_1fcv_hpo_v3_50step"
+    study_name   = f"mamlpp_MOE_PAPER_{args.model_type}_1fcv_50step_hpo"
     journal_path = os.path.join(db_dir, f"{study_name}.log")
 
     print(f"Starting HPO Study: {study_name}")
