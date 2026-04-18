@@ -409,6 +409,7 @@ def objective(trial, model_type):
             config,
             episodic_train_loader,
             episodic_val_loader=episodic_val_loader,
+            collapse_abort_threshold=COLLAPSE_MAX_LOAD_THRESHOLD,
         )
         best_val_acc = pretrain_res_dict["best_val_acc"]
         best_state   = pretrain_res_dict["best_state"]
@@ -417,13 +418,18 @@ def objective(trial, model_type):
         print(f"[Trial {trial.number} | Fold {fold_idx}] Meta-training done. Best val acc = {best_val_acc:.4f}")
 
         # ---- MoE collapse detection ----
+        # Check the mid-training abort flag first (set if collapse was caught during training).
+        # Fall back to the post-hoc check on the final routing report for any collapse
+        # that slipped through (e.g. if MOE_log_every is large and collapse happened
+        # between two routing checkpoints).
         if config.get("use_MOE", False):
+            collapsed_mid_training = pretrain_res_dict.get("moe_collapsed", False)
             max_load = _check_moe_collapse(pretrain_res_dict, num_experts=config["num_experts"])
             trial.set_user_attr("final_max_expert_load",
                                 max_load if max_load is not None else -1.0)
-            if max_load is not None and max_load > COLLAPSE_MAX_LOAD_THRESHOLD:
+            if collapsed_mid_training or (max_load is not None and max_load > COLLAPSE_MAX_LOAD_THRESHOLD):
                 print(f"  [Trial {trial.number} | Fold {fold_idx}] MoE COLLAPSED "
-                      f"(max_load={max_load:.2f}). Penalising.")
+                      f"(mid_training={collapsed_mid_training}, max_load={max_load}). Penalising.")
                 return COLLAPSE_PENALTY
 
         # ---- Save checkpoint ----
@@ -579,7 +585,7 @@ if __name__ == "__main__":
         description="HPO v3: MAML+MoE, 1-shot 3-way, maml_inner_steps_eval=50 (fixed).")
     parser.add_argument("--model_type", type=str, default="DeepCNNLSTM",
                         choices=["DeepCNNLSTM"],
-                        help="Model architecture to optimize. Only DeepCNNLSTM is supported.")
+                        help="Model architecture to optimise. Only DeepCNNLSTM is supported.")
     parser.add_argument("--data_dir", type=str)
     parser.add_argument("--out_dir",  type=str)
     args = parser.parse_args()
@@ -593,7 +599,7 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(FIXED_SEED)
 
-    study_name   = f"mamlpp_MOE_PAPER_{args.model_type}_1fcv_50step_hpo"
+    study_name   = f"mamlpp_MOE_PAPER_{args.model_type}_1fcv_hpo_v3_50step"
     journal_path = os.path.join(db_dir, f"{study_name}.log")
 
     print(f"Starting HPO Study: {study_name}")

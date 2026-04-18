@@ -431,7 +431,8 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
 # Pretrain: this handles the full training (ie all epochs for inner and outer loops)
 ## This is just the MAML training stage
 # -----------------------------
-def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=None):
+def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=None,
+                    collapse_abort_threshold: float = 0.80):
     device = config["device"]
     model.to(device)
 
@@ -465,6 +466,7 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
     train_loss_log, train_acc_log, val_loss_log, val_acc_log = [], [], [], []
     routing_reports = []
     num_epochs = int(config["num_epochs"])
+    moe_collapsed = False
 
     # Epoch 0 baseline: before ANY MAML training
     if episodic_val_loader is not None:
@@ -538,6 +540,12 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
             )
             if report:
                 routing_reports.append(report)
+                max_load = report.get('max_expert_load', 0.0)
+                if max_load > collapse_abort_threshold:
+                    print(f"[MOE] Epoch {ep}: collapse detected (max_load={max_load:.3f} > "
+                          f"{collapse_abort_threshold:.2f}). Aborting training early.")
+                    moe_collapsed = True
+                    break
 
         if scheduler: scheduler.step()
         print(f"Epoch completed in {time.time() - epoch_start_time:.2f}s\n")
@@ -557,6 +565,7 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         "best_val_acc":    best_val_acc,
         "best_val_epoch":  best_val_epoch,
         "routing_reports": routing_reports,
+        "moe_collapsed":   moe_collapsed,
     }
 
 
