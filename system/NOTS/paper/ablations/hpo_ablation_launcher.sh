@@ -102,7 +102,7 @@ fi
 PARTITION=commons
 CPUS=10
 MEM_DEFAULT=32G
-TIME_DEFAULT="06:00:00"    # 6h per trial is generous; MAML+MoE typically ~3-4h
+TIME_DEFAULT="07:00:00"    # 7h per trial is generous; MAML+MoE typically ~3-4h
 
 # Debug overrides:
 #   - Single non-array job (N_TRIALS forced to 1, --array flag suppressed below)
@@ -121,14 +121,14 @@ fi
 # (comment these back in and adjust if you have per-ablation time data)
 # =============================================================================
 # TIME_M0="06:00:00";  MEM_M0=32G    # full MAML+MoE: ~3-4h
-# TIME_A1="04:00:00";  MEM_A1=24G    # supervised MoE: faster
-# TIME_A2="03:00:00";  MEM_A2=16G    # supervised, no MoE: lightest
+TIME_A1="00:35:00";  MEM_A1=24G    # supervised MoE: fast (~15 min observed)
+TIME_A2="00:35:00";  MEM_A2=16G    # supervised, no MoE: fast (~15 min observed)
 # TIME_A3="04:00:00";  MEM_A3=24G    # MAML, no MoE
 # TIME_A4="04:00:00";  MEM_A4=24G    # MAML, no MoE, wider
 # TIME_A5="06:00:00";  MEM_A5=32G    # same as M0
-# TIME_A7="03:00:00";  MEM_A7=16G    # subject-specific supervised (1 user at a time)
+TIME_A7="00:35:00";  MEM_A7=16G    # subject-specific supervised: fast (~15 min observed)
 # TIME_A8="06:00:00";  MEM_A8=32G    # subject-specific MAML+MoE
-# TIME_A11="02:00:00"; MEM_A11=16G   # Meta pretrained, ft_lr only
+TIME_A11="00:35:00"; MEM_A11=24G   # Meta pretrained, ft_lr only: fast (~15 min observed)
 # TIME_A12="06:00:00"; MEM_A12=32G   # Our model on 2kHz data
 
 get_resource() {
