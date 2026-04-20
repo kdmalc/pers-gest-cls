@@ -104,18 +104,6 @@ CPUS=10
 MEM_DEFAULT=32G
 TIME_DEFAULT="07:00:00"    # 7h per trial is generous; MAML+MoE typically ~3-4h
 
-# Debug overrides:
-#   - Single non-array job (N_TRIALS forced to 1, --array flag suppressed below)
-#   - HPO_USE_JOURNAL=0 so nothing is written to the shared Optuna journal
-#   - Warm-start params are still enqueued (InMemoryStorage supports enqueue_trial)
-#   - Log file pattern uses %x_%j.out (no %a task suffix — no array)
-if [[ "$DEBUG" == true ]]; then
-    echo "DEBUG MODE: partition=debug, time=00:15:00, single trial, no journal write"
-    PARTITION=debug
-    TIME_DEFAULT="00:15:00"
-    N_TRIALS=1
-fi
-
 # =============================================================================
 # Per-ablation resource overrides
 # (comment these back in and adjust if you have per-ablation time data)
@@ -130,6 +118,19 @@ TIME_A7="00:35:00";  MEM_A7=16G    # subject-specific supervised: fast (~15 min 
 # TIME_A8="06:00:00";  MEM_A8=32G    # subject-specific MAML+MoE
 TIME_A11="00:35:00"; MEM_A11=24G   # Meta pretrained, ft_lr only: fast (~15 min observed)
 # TIME_A12="06:00:00"; MEM_A12=32G   # Our model on 2kHz data
+
+# Debug overrides:
+#   - Single non-array job (N_TRIALS forced to 1, --array flag suppressed below)
+#   - HPO_USE_JOURNAL=0 so nothing is written to the shared Optuna journal
+#   - Warm-start params are still enqueued (InMemoryStorage supports enqueue_trial)
+#   - Log file pattern uses %x_%j.out (no %a task suffix — no array)
+if [[ "$DEBUG" == true ]]; then
+    echo "DEBUG MODE: partition=debug, time=00:15:00, single trial, no journal write"
+    PARTITION=debug
+    TIME_DEFAULT="00:15:00"
+    N_TRIALS=1
+fi
+# ^ I hardcoded this in later so I think this does nothing now? Might as well leave it
 
 get_resource() {
     # get_resource TIME M0 "06:00:00"  →  value of $TIME_M0, or default
@@ -208,7 +209,7 @@ for ABLATION in "${ABLATIONS[@]}"; do
             --ntasks=1
             --cpus-per-task="$CPUS"
             --mem="$MEM"
-            --time="$TIME"
+            --time="00:15:00"
             --gres=gpu:1
             --output="$LOG_DIR/%x_%j.out"
             --export="ALL,\
