@@ -1044,10 +1044,36 @@ def run_study(ablation_id: str, profile: dict, n_trials: int = 1) -> optuna.Stud
     suggest_keys = _get_suggest_keys_for_profile(ablation_id, profile)
 
     warm_start = M0_WARM_START_PARAMS if ablation_id in ABLATIONS_WITH_M0_WARMSTART else []
-    n_startup  = max(20, len(warm_start))
+
+    # n_startup_trials: how many trials TPE runs as pure random search before
+    # fitting its surrogate model. With warm_start disabled (empty list) and
+    # concurrency %5, 10 is sufficient — it's roughly one full wave of workers,
+    # so by the time wave 2 starts sampling, TPE has real results to model.
+    # Previously this was max(20, len(warm_start)) = 20, which meant the first
+    # TWO full waves (20 trials at %10 concurrency) were random — expensive and
+    # it amplified the duplicate-sampling problem below.
+    n_startup = 10
+
+    # Per-worker TPE seed — CRITICAL for avoiding duplicate configs.
+    # Root cause of the all-identical-trials bug: every array task is a fresh
+    # process that independently initialises TPESampler(seed=FIXED_SEED=42).
+    # During the n_startup random phase, each worker draws the same sequence
+    # of random configs from that seed before any results are written to the
+    # journal (trials take ~40min; the 0-10s stagger is irrelevant at that
+    # scale). Result: all concurrent workers sample trial #1 identically.
+    # Fix: derive a unique seed per worker from SLURM_ARRAY_TASK_ID so that
+    # concurrent startup trials explore different regions of the search space.
+    # We still mix with FIXED_SEED so that a re-run of the same task index
+    # (e.g. after a preemption) produces the same config for reproducibility.
+    import hashlib as _hashlib
+    _task_id = int(os.environ.get("SLURM_ARRAY_TASK_ID", "0"))
+    _worker_seed = int(
+        _hashlib.md5(f"{_task_id}_{FIXED_SEED}".encode()).hexdigest()[:8], 16
+    )
+    print(f"TPE worker seed: {_worker_seed} (task_id={_task_id}, fixed_seed={FIXED_SEED})")
 
     sampler = optuna.samplers.TPESampler(
-        seed=FIXED_SEED,
+        seed=_worker_seed,
         n_startup_trials=n_startup,
         n_ei_candidates=24,
         multivariate=True,
