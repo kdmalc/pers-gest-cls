@@ -175,97 +175,62 @@ META_CHECKPOINT_PATH = Path("/rhf/allocations/my13/emg_models/discrete_gestures/
 # =============================================================================
 
 ABLATION_PROFILES: dict[str, dict] = {
-    # ── M0: Full model — num_experts and top_k are HPO'd freely ──────────────
     "M0": dict(
         use_maml=True,  use_moe=True,  use_sup_ft=False, is_a11=False, fix_arch=False,
-        fix_moe_arch=False,   # M0 is the source of truth — HPO determines num_experts / top_k
         eval_mode="episodic",
         script="M0_full_model.py",
         note="Full model: MAML + MoE",
     ),
-    # ── A1: Supervised + MoE — MoE arch FIXED to M0 best values ─────────────
     "A1": dict(
         use_maml=False, use_moe=True,  use_sup_ft=True,  is_a11=False, fix_arch=False,
-        fix_moe_arch=True,    # num_experts / top_k frozen to M0 best — holds arch constant
         eval_mode="supervised",
         script="A1_no_maml_moe.py",
         note="Supervised MoE (no MAML)",
     ),
-    # ── A2: No MAML, no MoE — fix_moe_arch irrelevant (use_moe=False) ───────
     "A2": dict(
         use_maml=False, use_moe=False, use_sup_ft=True,  is_a11=False, fix_arch=False,
-        fix_moe_arch=False,   # no MoE — field unused
         eval_mode="supervised",
         script="A2_no_maml_no_moe.py",
         note="Vanilla supervised CNN-LSTM (no MAML, no MoE)",
     ),
-    # ── A3/A4: MAML, no MoE — fix_moe_arch irrelevant (use_moe=False) ───────
     "A3": dict(
         use_maml=True,  use_moe=False, use_sup_ft=False, is_a11=False, fix_arch=False,
-        fix_moe_arch=False,   # no MoE — field unused
         eval_mode="episodic",
         script="A3_A4_maml_no_moe.py",
         note="MAML, no MoE, original width",
     ),
     "A4": dict(
         use_maml=True,  use_moe=False, use_sup_ft=False, is_a11=False, fix_arch=True,
-        fix_moe_arch=False,   # no MoE — field unused
         eval_mode="episodic",
         script="A3_A4_maml_no_moe.py",
         note="MAML, no MoE, param-matched encoder (arch dims FIXED — not HPO'd)",
     ),
-    # ── A5: Expert-count sweep — each sub-study fixes num_experts + top_k ────
-    # One entry per expert count. num_experts and top_k are FIXED per entry
-    # (not HPO'd); all other HPs are tuned freely. This gives each point on the
-    # mountain curve its own best training config, which is what a reviewer needs
-    # to see: "we gave each expert count its fair shot."
-    #
-    # top_k = round(num_experts / 3) per spec. These are set in
-    # _suggest_moe_hps when fix_moe_arch=True for A5_E* entries.
-    #
-    # TODO: After running M0 HPO — if any of these expert counts fall far
-    # outside the M0 optimal range, consider trimming the sweep. But do NOT
-    # remove counts just because they perform badly — that's the point of the curve.
-    **{
-        f"A5_E{k}": dict(
-            use_maml=True,  use_moe=True, use_sup_ft=False, is_a11=False, fix_arch=False,
-            fix_moe_arch=True,   # num_experts and top_k FIXED per entry (see A5_EXPERT_CONFIGS)
-            a5_num_experts=k,
-            a5_top_k=max(1, round(k / 3)),
-            eval_mode="episodic",
-            script="A5_expert_count_sweep.py",
-            note=f"Expert-count sweep: num_experts={k}, top_k={max(1, round(k/3))}",
-        )
-        for k in [4, 8, 12, 16, 20, 24, 32, 40]
-    },
-    # ── A7: Subject-specific supervised — no MoE ─────────────────────────────
+    "A5": dict(
+        use_maml=True,  use_moe=True,  use_sup_ft=False, is_a11=False, fix_arch=False,
+        eval_mode="episodic",
+        script="A5_expert_count_sweep.py",
+        note="Expert-count sweep (same HP space as M0; num_experts matched to sweep values)",
+    ),
     "A7": dict(
         use_maml=False, use_moe=False, use_sup_ft=True,  is_a11=False, fix_arch=False,
-        fix_moe_arch=False,   # no MoE — field unused
         eval_mode="supervised",
         script="A7_A8_subject_specific.py",
         note="Subject-specific supervised baseline",
     ),
-    # ── A8: Subject-specific MAML+MoE — MoE arch FIXED to M0 best values ────
     "A8": dict(
         use_maml=True,  use_moe=True,  use_sup_ft=False, is_a11=False, fix_arch=False,
-        fix_moe_arch=True,    # num_experts / top_k frozen to M0 best — holds arch constant
         eval_mode="episodic",
         script="A7_A8_subject_specific.py",
         note="Subject-specific MAML+MoE",
     ),
-    # ── A11: Meta pretrained fine-tuning — no MoE ────────────────────────────
     "A11": dict(
         use_maml=False, use_moe=False, use_sup_ft=False, is_a11=True,  fix_arch=False,
-        fix_moe_arch=False,   # no MoE — field unused
         eval_mode="a11",
         script="A10_A11_A12_meta_pretrained.py",
         note="Meta pretrained, 1-shot fine-tune (ft_lr + ft_steps only)",
     ),
-    # ── A12: Our model on 2kHz EMG-only data — MoE arch FIXED to M0 best ────
     "A12": dict(
         use_maml=True,  use_moe=True,  use_sup_ft=False, is_a11=False, fix_arch=False,
-        fix_moe_arch=True,    # num_experts / top_k frozen to M0 best — holds arch constant
         eval_mode="episodic",
         script="A10_A11_A12_meta_pretrained.py",
         note="Our MAML+MoE on 2kHz EMG-only data",
@@ -298,30 +263,27 @@ ABLATION_PROFILES: dict[str, dict] = {
 #     {"cnn_base_filters": 64,  "lstm_hidden": 256, "maml_inner_steps": 7,  "maml_alpha_init": 0.0022409316363444297, "maml_alpha_init_eval": 0.07980284866764323,  "outer_lr": 0.00027288242632654975, "wd": 0.0006233783942107558, "groupnorm_num_groups": 8,  "num_experts": 27, "MOE_top_k": 6,  "MOE_gate_temperature": 1.9588295665204578, "MOE_aux_coeff": 0.2274257229744778,  "MOE_ctx_out_dim": 128, "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.06693040779691198,  "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 500, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 27, "maml_use_lslr": False, "use_lslr_at_eval": True},
 #     {"cnn_base_filters": 64,  "lstm_hidden": 64,  "maml_inner_steps": 7,  "maml_alpha_init": 0.0010018043002410384, "maml_alpha_init_eval": 0.006165059688105781,  "outer_lr": 0.00015557309153358813, "wd": 0.0003484429564449149, "groupnorm_num_groups": 8,  "num_experts": 29, "MOE_top_k": 5,  "MOE_gate_temperature": 0.7058908557205739, "MOE_aux_coeff": 0.0971830179235051,  "MOE_ctx_out_dim": 16,  "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.09089303028735389,  "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 100, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 33, "maml_use_lslr": True,  "use_lslr_at_eval": True},
 # ]
-# =============================================================================
-# M0 best MoE architecture — used to FREEZE num_experts / top_k for all
-# non-M0 MoE ablations (A1, A8, A12) and for each A5_E* entry (which instead
-# use their own per-entry a5_num_experts / a5_top_k from the profile table).
-#
-# TODO: Fill these in after M0 HPO completes.
-#   1. Load the best trial: study.best_trial.params
-#   2. Copy "num_experts" and "MOE_top_k" here.
-#   3. Re-run HPO for A1, A8, A12 (A5_E* entries are independent).
-# =============================================================================
-M0_BEST_NUM_EXPERTS: int | None = None   # TODO: set from M0 HPO best trial
-M0_BEST_TOP_K:       int | None = None   # TODO: set from M0 HPO best trial
+# Top-10 trials from the first clean matched-step HPO run (v4, maml_inner_steps_eval
+# = maml_inner_steps). These are valid priors — not contaminated by the old
+# 50/100-step eval mismatch. All 10 have maml_inner_steps=10, which is a strong
+# signal that TPE should explore 10 first; the other HPs vary meaningfully.
+# Note: maml_msl_num_epochs is absent from trials where use_maml_msl=False —
+# _filter_warm_start_params handles this correctly (missing keys are ignored).
+M0_WARM_START_PARAMS: list[dict] = [
+    {"outer_lr": 0.00010093304999603776, "wd": 0.0008325426470137959, "maml_inner_steps": 10, "maml_alpha_init": 0.0009888781900907544, "maml_alpha_init_eval": 0.006717556958813548, "maml_use_lslr": True,  "use_lslr_at_eval": False, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 39, "episodes_per_epoch_train": 250, "num_experts": 24, "MOE_top_k": 7, "MOE_gate_temperature": 1.1879664247660187, "MOE_aux_coeff": 0.08672942143224953, "MOE_ctx_out_dim": 64,  "MOE_ctx_hidden_dim": 32, "MOE_dropout": 0.022501513050004283,  "MOE_aux_loss_plcmt": "outer"},
+    {"outer_lr": 0.00017135506539036396, "wd": 0.0007191575466293857, "maml_inner_steps": 10, "maml_alpha_init": 0.002234186564248213,  "maml_alpha_init_eval": 0.00874438550866414,  "maml_use_lslr": True,  "use_lslr_at_eval": True,  "use_maml_msl": "hybrid", "maml_msl_num_epochs": 36, "episodes_per_epoch_train": 250, "num_experts": 24, "MOE_top_k": 9, "MOE_gate_temperature": 0.6909206767846876, "MOE_aux_coeff": 0.16382789345409485, "MOE_ctx_out_dim": 64,  "MOE_ctx_hidden_dim": 32, "MOE_dropout": 0.0009733575106648108, "MOE_aux_loss_plcmt": "both"},
+    {"outer_lr": 0.00021994946057480355, "wd": 0.0005215426795904579, "maml_inner_steps": 10, "maml_alpha_init": 0.0005880651085620183,  "maml_alpha_init_eval": 0.00829671572377371,  "maml_use_lslr": True,  "use_lslr_at_eval": False, "use_maml_msl": False,                                  "episodes_per_epoch_train": 250, "num_experts": 36, "MOE_top_k": 7, "MOE_gate_temperature": 0.8873092963668456, "MOE_aux_coeff": 0.10530573719633897, "MOE_ctx_out_dim": 16,  "MOE_ctx_hidden_dim": 32, "MOE_dropout": 0.01349711067656777,   "MOE_aux_loss_plcmt": "both"},
+    {"outer_lr": 0.0003129502130691339,  "wd": 0.000566622424313277,  "maml_inner_steps": 10, "maml_alpha_init": 0.00062284162048662,    "maml_alpha_init_eval": 0.007208099016837116, "maml_use_lslr": True,  "use_lslr_at_eval": False, "use_maml_msl": False,                                  "episodes_per_epoch_train": 250, "num_experts": 36, "MOE_top_k": 4, "MOE_gate_temperature": 0.8829499397705474, "MOE_aux_coeff": 0.0633848330361091,  "MOE_ctx_out_dim": 16,  "MOE_ctx_hidden_dim": 32, "MOE_dropout": 0.020923944663650867,  "MOE_aux_loss_plcmt": "both"},
+    {"outer_lr": 0.00015159006650537128, "wd": 0.0006326809984503553, "maml_inner_steps": 10, "maml_alpha_init": 0.0005221987619876876,  "maml_alpha_init_eval": 0.02290821144458453,  "maml_use_lslr": True,  "use_lslr_at_eval": True,  "use_maml_msl": "hybrid", "maml_msl_num_epochs": 29, "episodes_per_epoch_train": 250, "num_experts": 24, "MOE_top_k": 7, "MOE_gate_temperature": 0.6699581483015503, "MOE_aux_coeff": 0.20333779607170907, "MOE_ctx_out_dim": 64,  "MOE_ctx_hidden_dim": 32, "MOE_dropout": 0.0006350844285118065, "MOE_aux_loss_plcmt": "outer"},
+    {"outer_lr": 9.081232239899435e-05,  "wd": 0.000598810693758293,  "maml_inner_steps": 10, "maml_alpha_init": 0.007684897507390702,   "maml_alpha_init_eval": 0.011275020201139066, "maml_use_lslr": False, "use_lslr_at_eval": False, "use_maml_msl": False,                                  "episodes_per_epoch_train": 250, "num_experts": 36, "MOE_top_k": 4, "MOE_gate_temperature": 0.7428752741091442, "MOE_aux_coeff": 0.07275053149515735, "MOE_ctx_out_dim": 16,  "MOE_ctx_hidden_dim": 32, "MOE_dropout": 0.07423475742353443,  "MOE_aux_loss_plcmt": "both"},
+    {"outer_lr": 5.2401901969035514e-05, "wd": 0.0006349931134657805, "maml_inner_steps": 10, "maml_alpha_init": 0.012181889668758774,   "maml_alpha_init_eval": 0.009865480491952098, "maml_use_lslr": False, "use_lslr_at_eval": False, "use_maml_msl": False,                                  "episodes_per_epoch_train": 250, "num_experts": 36, "MOE_top_k": 4, "MOE_gate_temperature": 0.7757263694819606, "MOE_aux_coeff": 0.1010586963942683,  "MOE_ctx_out_dim": 16,  "MOE_ctx_hidden_dim": 32, "MOE_dropout": 0.08307471046993736,  "MOE_aux_loss_plcmt": "both"},
+    {"outer_lr": 0.00019259251729666585, "wd": 0.000658782978177928,  "maml_inner_steps": 10, "maml_alpha_init": 0.0012414887370832365,  "maml_alpha_init_eval": 0.004905374028039118, "maml_use_lslr": True,  "use_lslr_at_eval": False, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 33, "episodes_per_epoch_train": 250, "num_experts": 24, "MOE_top_k": 7, "MOE_gate_temperature": 0.7082721548137876, "MOE_aux_coeff": 0.13263549328844307, "MOE_ctx_out_dim": 64,  "MOE_ctx_hidden_dim": 64, "MOE_dropout": 0.001715561171357145,  "MOE_aux_loss_plcmt": "outer"},
+    {"outer_lr": 0.00029009258072038404, "wd": 0.0006248440745542929, "maml_inner_steps": 10, "maml_alpha_init": 0.0007385074738619472,  "maml_alpha_init_eval": 0.009986812917974252, "maml_use_lslr": True,  "use_lslr_at_eval": False, "use_maml_msl": False,                                  "episodes_per_epoch_train": 250, "num_experts": 32, "MOE_top_k": 4, "MOE_gate_temperature": 0.9607888023002135, "MOE_aux_coeff": 0.08675368517371769, "MOE_ctx_out_dim": 16,  "MOE_ctx_hidden_dim": 32, "MOE_dropout": 0.016488864331757783,  "MOE_aux_loss_plcmt": "both"},
+    {"outer_lr": 0.00016110242483204413, "wd": 0.0007362654428714762, "maml_inner_steps": 10, "maml_alpha_init": 0.0006150553191724497,  "maml_alpha_init_eval": 0.005317262590552643, "maml_use_lslr": True,  "use_lslr_at_eval": False, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 8,  "episodes_per_epoch_train": 250, "num_experts": 24, "MOE_top_k": 7, "MOE_gate_temperature": 0.948431969634207,  "MOE_aux_coeff": 0.15415159207685789, "MOE_ctx_out_dim": 64,  "MOE_ctx_hidden_dim": 32, "MOE_dropout": 0.003427874209772072,  "MOE_aux_loss_plcmt": "outer"},
+]
 
-# Ablations that receive the M0 warm-start (identical HP space to M0's v3 study).
-# A5_E* studies have a smaller HP space (num_experts / top_k are fixed), so
-# warm-start params that include those keys are filtered by _filter_warm_start_params
-# anyway. We still include them here so they benefit from the MAML/gate priors.
-# A8 and A12 now have fix_moe_arch=True so their num_experts / top_k warm-start
-# values will also be silently dropped by _filter_warm_start_params — correct.
-ABLATIONS_WITH_M0_WARMSTART = {
-    "M0",
-    "A8", "A12",
-    *(f"A5_E{k}" for k in [4, 8, 12, 16, 20, 24, 32, 40]),
-}
+# Ablations that receive the M0 warm-start (identical HP space to M0's v3 study)
+ABLATIONS_WITH_M0_WARMSTART = {"M0", "A5", "A8", "A12"}
 
 # =============================================================================
 # HP suggestion helpers
@@ -421,65 +383,27 @@ def _suggest_maml_hps(trial: optuna.Trial, config: dict) -> dict:
     return config
 
 
-def _suggest_moe_hps(trial: optuna.Trial, config: dict, ablation_id: str, profile: dict) -> dict:
+def _suggest_moe_hps(trial: optuna.Trial, config: dict, ablation_id: str) -> dict:
     """
     Suggest MoE-specific HPs. Only called when use_moe=True.
 
-    Three cases:
-
-    1. M0 (fix_moe_arch=False):
-       HPO over num_experts and top_k freely. This is the source of truth for
-       the MoE architecture used by all other ablations.
-
-    2. A5_E* (fix_moe_arch=True, a5_num_experts set in profile):
-       num_experts and top_k are FIXED to the per-entry values from the profile
-       table (top_k = round(num_experts/3) per spec). All other MoE HPs are
-       tuned freely. This gives each point on the mountain curve its own best
-       training config — which is what a NeurIPS reviewer needs to trust the curve.
-
-    3. All other MoE ablations (A1, A8, A12 — fix_moe_arch=True, no a5_num_experts):
-       num_experts and top_k are FIXED to M0_BEST_NUM_EXPERTS / M0_BEST_TOP_K.
-       All other MoE HPs are tuned freely. Holds MoE architecture constant so
-       that accuracy differences are attributable to the ablated component, not
-       model size.
+    For A5 (expert-count sweep), num_experts is drawn from the same discrete
+    set used by the sweep script so HPO explores the full mountain-curve range.
+    For all other ablations, num_experts is drawn from the HPO-friendly
+    coarser grid.
     """
-    if profile.get("fix_moe_arch", False):
-        if "a5_num_experts" in profile:
-            # ── A5_E* path: fix to this entry's expert count ─────────────────
-            num_experts = profile["a5_num_experts"]
-            top_k       = profile["a5_top_k"]
-            print(f"  [A5_E{num_experts}] MoE arch FIXED: "
-                  f"num_experts={num_experts}, top_k={top_k} (= round({num_experts}/3))")
-        else:
-            # ── A1 / A8 / A12 path: fix to M0 best ───────────────────────────
-            assert M0_BEST_NUM_EXPERTS is not None, (
-                "M0_BEST_NUM_EXPERTS is None. Run M0 HPO first, then fill in the "
-                "M0_BEST_NUM_EXPERTS and M0_BEST_TOP_K constants at the top of this file."
-            )
-            assert M0_BEST_TOP_K is not None, (
-                "M0_BEST_TOP_K is None. Run M0 HPO first, then fill in the "
-                "M0_BEST_NUM_EXPERTS and M0_BEST_TOP_K constants at the top of this file."
-            )
-            num_experts = M0_BEST_NUM_EXPERTS
-            top_k       = M0_BEST_TOP_K
-            print(f"  [{ablation_id}] MoE arch FIXED to M0 best: "
-                  f"num_experts={num_experts}, top_k={top_k}")
-
-        config["num_experts"] = num_experts
-        config["MOE_top_k"]   = top_k
-        config["top_k"]       = top_k
-        # num_experts and top_k are NOT passed to trial.suggest_* here — they
-        # are fixed constants, invisible to Optuna's sampler.
-
+    if ablation_id == "A5":
+        # Match the sweep values exactly — HPO finds the best overall config
+        # within this range; the sweep script then fixes num_experts to each
+        # value and reuses the rest of the best config.
+        config["num_experts"] = trial.suggest_categorical(
+            "num_experts", [4, 8, 12, 16, 20, 24, 32, 40])
     else:
-        # ── M0 path: free HPO over num_experts and top_k ─────────────────────
         config["num_experts"] = trial.suggest_categorical(
             "num_experts", [20, 22, 24, 25, 26, 27, 28, 30, 32, 36, 40, 44])
-        config["MOE_top_k"]   = trial.suggest_categorical(
-            "MOE_top_k", [4, 5, 6, 7, 8, 9, 10])
-        config["top_k"]       = config["MOE_top_k"]
 
-    # ── MoE training HPs — always tuned when use_moe=True ────────────────────
+    config["MOE_top_k"]     = trial.suggest_categorical("MOE_top_k", [4, 5, 6, 7, 8, 9, 10])
+    config["top_k"]         = config["MOE_top_k"]
     config["MOE_gate_temperature"] = trial.suggest_float(
         "MOE_gate_temperature", 0.3, 2.5, log=True)
     config["MOE_aux_coeff"]       = trial.suggest_float("MOE_aux_coeff", 0.02, 0.25, log=True)
@@ -635,7 +559,7 @@ def build_config_from_trial(
         _suggest_no_maml_fixed(config)
 
     if profile["use_moe"]:
-        _suggest_moe_hps(trial, config, ablation_id=ablation_id, profile=profile)
+        _suggest_moe_hps(trial, config, ablation_id=ablation_id)
     else:
         _suggest_no_moe_fixed(config)
 
@@ -1082,10 +1006,6 @@ def _get_suggest_keys_for_profile(ablation_id: str, profile: dict) -> set[str]:
     this set — they are fixed constants, never passed to trial.suggest_*.
     Warm-start dicts that contain these keys will have them silently dropped
     by _filter_warm_start_params, which is correct behaviour.
-
-    For ablations with fix_moe_arch=True (A1, A5_E*, A8, A12), num_experts and
-    MOE_top_k are also NOT in the suggest set — they are fixed constants that
-    bypass Optuna entirely, so warm-start values for those keys are dropped too.
     """
     if profile["is_a11"]:
         return {"ft_lr", "ft_steps"}
@@ -1100,14 +1020,11 @@ def _get_suggest_keys_for_profile(ablation_id: str, profile: dict) -> set[str]:
             "episodes_per_epoch_train",
         }
     if profile["use_moe"]:
-        # MoE training HPs — always tuned when use_moe=True
         keys |= {
-            "MOE_gate_temperature", "MOE_aux_coeff", "MOE_ctx_out_dim",
-            "MOE_ctx_hidden_dim", "MOE_dropout", "MOE_aux_loss_plcmt",
+            "num_experts", "MOE_top_k", "MOE_gate_temperature",
+            "MOE_aux_coeff", "MOE_ctx_out_dim", "MOE_ctx_hidden_dim",
+            "MOE_dropout", "MOE_aux_loss_plcmt",
         }
-        if not profile.get("fix_moe_arch", False):
-            # Only M0 HPOs over the MoE architecture itself
-            keys |= {"num_experts", "MOE_top_k"}
     if profile["use_sup_ft"]:
         keys |= {"ft_lr", "label_smooth"}
 
@@ -1145,26 +1062,25 @@ def run_study(ablation_id: str, profile: dict, n_trials: int = 1) -> optuna.Stud
 
     warm_start = M0_WARM_START_PARAMS if ablation_id in ABLATIONS_WITH_M0_WARMSTART else []
 
-    # n_startup_trials: how many trials TPE runs as pure random search before
-    # fitting its surrogate model. With warm_start disabled (empty list) and
-    # concurrency %5, 10 is sufficient — it's roughly one full wave of workers,
-    # so by the time wave 2 starts sampling, TPE has real results to model.
-    # Previously this was max(20, len(warm_start)) = 20, which meant the first
-    # TWO full waves (20 trials at %10 concurrency) were random — expensive and
-    # it amplified the duplicate-sampling problem below.
-    n_startup = 10
+    # n_startup_trials: TPE runs pure random search for this many trials before
+    # fitting its surrogate model. Set to max(10, len(warm_start)) so TPE waits
+    # until all enqueued warm-start points have been evaluated before modelling.
+    # With 10 warm-starts and %5 concurrency (~40min trials), wave 1 runs the
+    # warm-starts, finishes, and writes to the journal before wave 2 samples —
+    # so TPE has real posteriors when it starts suggesting new configs.
+    # Previously max(20, len(warm_start)) = 20 burned two full waves on random
+    # search and amplified the duplicate-sampling problem.
+    n_startup = max(10, len(warm_start))
 
     # Per-worker TPE seed — CRITICAL for avoiding duplicate configs.
     # Root cause of the all-identical-trials bug: every array task is a fresh
     # process that independently initialises TPESampler(seed=FIXED_SEED=42).
     # During the n_startup random phase, each worker draws the same sequence
-    # of random configs from that seed before any results are written to the
-    # journal (trials take ~40min; the 0-10s stagger is irrelevant at that
-    # scale). Result: all concurrent workers sample trial #1 identically.
+    # of random configs from that seed before any results are in the journal
+    # (trials take ~40min; the 0-10s stagger is irrelevant at that scale).
     # Fix: derive a unique seed per worker from SLURM_ARRAY_TASK_ID so that
     # concurrent startup trials explore different regions of the search space.
-    # We still mix with FIXED_SEED so that a re-run of the same task index
-    # (e.g. after a preemption) produces the same config for reproducibility.
+    # Mixing with FIXED_SEED means a preempted task reruns deterministically.
     import hashlib as _hashlib
     _task_id = int(os.environ.get("SLURM_ARRAY_TASK_ID", "0"))
     _worker_seed = int(
@@ -1214,12 +1130,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ablation", type=str, required=True,
         choices=sorted(ABLATION_PROFILES.keys()),
-        help=(
-            "Ablation ID to HPO (e.g. M0, A1, A3, A5_E4, A5_E8, ...). "
-            "Run M0 first, then fill in M0_BEST_NUM_EXPERTS / M0_BEST_TOP_K "
-            "before launching A1, A8, A12. A5_E* entries are independent of "
-            "M0_BEST_* — they fix num_experts per their profile entry."
-        ),
+        help="Ablation ID to HPO (e.g. M0, A1, A3).",
     )
     parser.add_argument("--data_dir", type=str, default=None,
                         help="Override DATA_DIR env var.")
