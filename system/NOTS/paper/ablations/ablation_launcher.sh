@@ -1,148 +1,176 @@
 #!/bin/bash
-# ablation_launcher.sh
-# ====================
-# Submit one or more ablation jobs to the cluster.
+# hpo_ablation_launcher.sh
+# ========================
+# Submit Optuna HPO array jobs for one or more ablation IDs.
+#
+# Each ablation gets its own SLURM array job (100 tasks by default, 1 trial
+# per task). All tasks for the same ablation share one Optuna journal file,
+# so TPE can use results from already-finished tasks to guide later ones.
 #
 # Usage:
-#   bash ablation_launcher.sh M0                    # submit M0
-#   bash ablation_launcher.sh A1 A2 A3              # submit multiple
-#   bash ablation_launcher.sh all                   # submit all implemented ablations
-#   bash ablation_launcher.sh A5 --dry-run          # print sbatch command without submitting
-#   bash ablation_launcher.sh A5 --debug            # use debug partition (15 min time limit)
-#   bash ablation_launcher.sh A5 --debug --dry-run  # combine both
+#   bash hpo_ablation_launcher.sh M0                      # HPO for M0
+#   bash hpo_ablation_launcher.sh A1 A2 A3                # multiple ablations
+#   bash hpo_ablation_launcher.sh all                     # all HPO-able ablations
+#   bash hpo_ablation_launcher.sh M0 --dry-run            # print without submitting
+#   bash hpo_ablation_launcher.sh A1 --debug              # single trial, debug partition,
+#                                                          # no journal write, warm-start enqueued
+#   bash hpo_ablation_launcher.sh A3 --n-trials 50        # custom trial count
 #
-# Each ablation is its own SLURM job (separate log, separate GPU, separate RUN_DIR).
-# A5 (expert count sweep, 8×5=40 training runs) gets extra time and memory.
-# A7/A8 (per-subject, all subjects × 5 seeds) get the most time.
+# Output layout:
+#   Optuna journals : $HPO_DB_DIR/ablation_<ID>_1s3w_hpo_v1.log
+#   Trial checkpts  : $HPO_OUT_BASE/<ID>/trial_<array_task_id>/
+#   SLURM logs      : $LOG_DIR/<jobname>_<jobid>_<taskid>.out
 #
-# All jobs write logs to: /scratch/my13/kai/runs/paper/ablations/logs/
-# All jobs write outputs to: /scratch/my13/kai/runs/paper/ablations/<ABLATION_ID>/
+# A10 is intentionally excluded: zero-shot protocol, no HPs to tune.
+# A6  is intentionally excluded: not yet implemented.
+# A9  is intentionally excluded: not needed for paper (per ablation_launcher.sh).
 
 set -euo pipefail
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
+# =============================================================================
+# Paths — edit these for your cluster layout
+# =============================================================================
 CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
-ABLATION_DIR="$CODE_DIR/system/NOTS/paper/ablations"
-LOG_DIR=/scratch/my13/kai/runs/paper/ablations/logs
-OUTPUT_BASE=/scratch/my13/kai/runs/paper/ablations
+DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
+HPO_SCRIPT_PATH="$CODE_DIR/system/NOTS/paper/ablations/ablation_hpo.py"
+HPO_DB_DIR=/scratch/my13/kai/meta-pers-gest/optuna_dbs
+HPO_OUT_BASE=/scratch/my13/kai/runs/paper/ablations/hpo
+LOG_DIR=/scratch/my13/kai/runs/paper/ablations/hpo/logs
 
-mkdir -p "$LOG_DIR"
+ENV_PATH=/projects/my13/kai/meta-pers-gest/envs/fl-torch
 
-# ── Parse args ────────────────────────────────────────────────────────────────
+mkdir -p "$HPO_DB_DIR" "$HPO_OUT_BASE" "$LOG_DIR"
+
+# =============================================================================
+# Parse args
+# =============================================================================
 DRY_RUN=false
 DEBUG=false
+N_TRIALS=100       # total Optuna trials per ablation (= number of array tasks)
 ABLATIONS=()
+
 for arg in "$@"; do
-    if [[ "$arg" == "--dry-run" ]]; then
-        DRY_RUN=true
-    elif [[ "$arg" == "--debug" ]]; then
-        DEBUG=true
-    elif [[ "$arg" == "all" ]]; then
-        ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 A12)
-        # A6, A9, A10 are not included in "all"
-    else
-        ABLATIONS+=("$arg")
-    fi
+    case "$arg" in
+        --dry-run)   DRY_RUN=true ;;
+        --debug)     DEBUG=true ;;
+        --n-trials)  shift; N_TRIALS="$1" ;;   # handled below via positional
+        all)
+            # All HPO-able ablations.
+            # A5 is replaced by per-expert-count sub-studies (A5_E4 … A5_E40).
+            # A10 excluded: zero-shot. A6/A9 excluded: not needed.
+            # NOTE: Run M0 first, then fill M0_BEST_NUM_EXPERTS / M0_BEST_TOP_K
+            # in ablation_hpo.py before submitting A1, A8, A12.
+            # A5_E* can run in parallel with M0 (they don't depend on M0_BEST_*).
+            ABLATIONS=(M0 A1 A2 A3 A4 A5_E4 A5_E8 A5_E12 A5_E16 A5_E20 A5_E24 A5_E32 A5_E40 A7 A8 A11 A12)
+            ;;
+        --*)
+            # Handle --n-trials N as a two-token arg
+            if [[ "$arg" == "--n-trials" ]]; then
+                : # value consumed in next iteration — handled by shift logic below
+            fi
+            ;;
+        *)
+            ABLATIONS+=("$arg")
+            ;;
+    esac
+done
+
+# Re-parse cleanly to handle --n-trials N
+ABLATIONS=()
+DRY_RUN=false
+DEBUG=false
+N_TRIALS=100
+i=0
+args_array=("$@")
+while [[ $i -lt ${#args_array[@]} ]]; do
+    arg="${args_array[$i]}"
+    case "$arg" in
+        --dry-run)    DRY_RUN=true ;;
+        --debug)      DEBUG=true ;;
+        --n-trials)   i=$((i+1)); N_TRIALS="${args_array[$i]}" ;;
+        all)          ABLATIONS=(M0 A1 A2 A3 A4 A5_E4 A5_E8 A5_E12 A5_E16 A5_E20 A5_E24 A5_E32 A5_E40 A7 A8 A11 A12) ;;
+        -*)           echo "WARNING: Unknown flag '$arg' — ignoring." ;;
+        *)            ABLATIONS+=("$arg") ;;
+    esac
+    i=$((i+1))
 done
 
 if [[ ${#ABLATIONS[@]} -eq 0 ]]; then
     echo "ERROR: No ablations specified."
-    echo "Usage: bash ablation_launcher.sh [M0|A1|A2|A3|A4|A5|A7|A8|A9|A10|A11|A12|all] [--dry-run]"
+    echo "Usage: bash hpo_ablation_launcher.sh [M0|A1|A2|A3|A4|A5_E4|A5_E8|A5_E12|A5_E16|A5_E20|A5_E24|A5_E32|A5_E40|A7|A8|A11|A12|all] [--dry-run] [--debug] [--n-trials N]"
     exit 1
 fi
 
-# ── Shared sbatch defaults ─────────────────────────────────────────────────────
+# =============================================================================
+# Cluster defaults
+# =============================================================================
 PARTITION=commons
 CPUS=10
-MEM=32G
-ENV_PATH=/projects/my13/kai/meta-pers-gest/envs/fl-torch
+MEM_DEFAULT=32G
+TIME_DEFAULT="07:00:00"    # 7h per trial is generous; MAML+MoE typically ~3-4h
 
-# ── Per-ablation resource overrides ───────────────────────────────────────────
-# Format: TIME_<ID>=HH:MM:SS  MEM_<ID>=XG
-# Defaults apply if not overridden.
-TIME_DEFAULT="20:00:00"
+# =============================================================================
+# Per-ablation resource overrides
+# (comment these back in and adjust if you have per-ablation time data)
+# =============================================================================
+# TIME_M0="06:00:00";  MEM_M0=32G    # full MAML+MoE: ~3-4h
+TIME_A1="00:35:00";  MEM_A1=24G    # supervised MoE: fast (~15 min observed)
+TIME_A2="00:35:00";  MEM_A2=16G    # supervised, no MoE: fast (~15 min observed)
+# TIME_A3="04:00:00";  MEM_A3=24G    # MAML, no MoE
+# TIME_A4="04:00:00";  MEM_A4=24G    # MAML, no MoE, wider
+# TIME_A5_E4="03:00:00";  MEM_A5_E4=24G    # MAML+MoE, 4 experts: faster than M0
+# TIME_A5_E8="04:00:00";  MEM_A5_E8=24G
+# TIME_A5_E12="04:00:00"; MEM_A5_E12=28G
+# TIME_A5_E16="05:00:00"; MEM_A5_E16=28G
+# TIME_A5_E20="05:00:00"; MEM_A5_E20=32G
+# TIME_A5_E24="06:00:00"; MEM_A5_E24=32G
+# TIME_A5_E32="07:00:00"; MEM_A5_E32=32G   # large expert banks — use full budget
+# TIME_A5_E40="07:00:00"; MEM_A5_E40=40G
+TIME_A7="00:35:00";  MEM_A7=16G    # subject-specific supervised: fast (~15 min observed)
+# TIME_A8="06:00:00";  MEM_A8=32G    # subject-specific MAML+MoE
+TIME_A11="00:35:00"; MEM_A11=24G   # Meta pretrained, ft_lr only: fast (~15 min observed)
+# TIME_A12="06:00:00"; MEM_A12=32G   # Our model on 2kHz data
 
-# ── Debug mode overrides ───────────────────────────────────────────────────────
+# Debug overrides:
+#   - Single non-array job (N_TRIALS forced to 1, --array flag suppressed below)
+#   - HPO_USE_JOURNAL=0 so nothing is written to the shared Optuna journal
+#   - Warm-start params are still enqueued (InMemoryStorage supports enqueue_trial)
+#   - Log file pattern uses %x_%j.out (no %a task suffix — no array)
 if [[ "$DEBUG" == true ]]; then
-    echo "DEBUG MODE: partition=debug, time=00:15:00"
+    echo "DEBUG MODE: partition=debug, time=00:15:00, single trial, no journal write"
     PARTITION=debug
     TIME_DEFAULT="00:15:00"
+    N_TRIALS=1
 fi
+# ^ I hardcoded this in later so I think this does nothing now? Might as well leave it
 
-# Time limit on commons is 24 hours I think. So I'm gonan comment all these for now...
-#TIME_M0="24:00:00";  MEM_M0=32G    # 5 seeds × full MAML
-#TIME_A1="16:00:00";  MEM_A1=24G    # 5 seeds × supervised (faster)
-#TIME_A2="12:00:00";  MEM_A2=24G    # 5 seeds × supervised, no MoE
-#TIME_A3="24:00:00";  MEM_A3=32G    # 5 seeds × MAML, no MoE
-#TIME_A4="24:00:00";  MEM_A4=32G    # 5 seeds × MAML, wider encoder
-#TIME_A5="72:00:00";  MEM_A5=48G    # 8 expert counts × 5 seeds × full MAML — HEAVY
-#TIME_A7="48:00:00";  MEM_A7=32G    # N_subjects × 5 seeds × supervised per-subject
-#TIME_A8="72:00:00";  MEM_A8=48G    # N_subjects × 5 seeds × full MAML per-subject — HEAVY
-#TIME_A9="24:00:00";  MEM_A9=32G    # 5 seeds × MAML + separate modality experts
-#TIME_A12="24:00:00"; MEM_A12=32G   # 5 seeds × full MAML, different data
-
-# ── Helper to get resource value ──────────────────────────────────────────────
 get_resource() {
-    local varname="${1}_${2}"   # e.g. TIME_M0
-    echo "${!varname:-$3}"      # use default $3 if not set
+    # get_resource TIME M0 "06:00:00"  →  value of $TIME_M0, or default
+    local varname="${1}_${2}"
+    echo "${!varname:-$3}"
 }
 
-# ── Per-ablation script and extra args ────────────────────────────────────────
-# Format: script_name [extra_args]
-declare -A ABLATION_SCRIPT
-ABLATION_SCRIPT[M0]="M0_full_model.py"
-ABLATION_SCRIPT[A1]="A1_no_maml_moe.py"
-ABLATION_SCRIPT[A2]="A2_no_maml_no_moe.py"
-ABLATION_SCRIPT[A3]="A3_A4_maml_no_moe.py --ablation A3"
-ABLATION_SCRIPT[A4]="A3_A4_maml_no_moe.py --ablation A4"
-ABLATION_SCRIPT[A5]="A5_expert_count_sweep.py"
-# A6: stub — not launchable yet
-ABLATION_SCRIPT[A7]="A7_A8_subject_specific.py --ablation A7"
-ABLATION_SCRIPT[A8]="A7_A8_subject_specific.py --ablation A8"
-ABLATION_SCRIPT[A9]="A9_modality_encoding.py --variant separate"  # NOTE: I dont care about this one
-ABLATION_SCRIPT[A10]="A10_A11_A12_meta_pretrained.py --ablation A10"  # NOTE: I dont think we care about the fake zero-shot Meta model either
-ABLATION_SCRIPT[A11]="A10_A11_A12_meta_pretrained.py --ablation A11"
-ABLATION_SCRIPT[A12]="A10_A11_A12_meta_pretrained.py --ablation A12"
+# =============================================================================
+# Submit each ablation
+# =============================================================================
+ARRAY_END=$((N_TRIALS - 1))   # 0-indexed: 0..N_TRIALS-1
 
-# ── Submit each ablation ──────────────────────────────────────────────────────
-for ABLATION in "${ABLATIONS[@]}"; do
-    if [[ -z "${ABLATION_SCRIPT[$ABLATION]+_}" ]]; then
-        echo "WARNING: '$ABLATION' is not a launchable ablation (stub or unknown). Skipping."
-        continue
+# Shared wrap script body — identical for both debug and production.
+# Uses shell variables that are set per-ablation in the loop below.
+_make_wrap_body() {
+    local out_dir="$1"
+    local ablation="$2"
+    local use_task_id="$3"   # "true" = production array (use SLURM_ARRAY_TASK_ID),
+                              # "false" = debug single job (use SLURM_JOB_ID)
+    if [[ "$use_task_id" == "true" ]]; then
+        local run_dir_line="export RUN_DIR=$out_dir/trial_\${SLURM_ARRAY_TASK_ID}"
+        local job_echo='echo '"'"'JOB_START host=$(hostname) date=$(date) jobid=${SLURM_JOB_ID} task=${SLURM_ARRAY_TASK_ID}'"'"
+    else
+        local run_dir_line="export RUN_DIR=$out_dir/debug_trial_\${SLURM_JOB_ID}"
+        local job_echo='echo '"'"'JOB_START host=$(hostname) date=$(date) jobid=${SLURM_JOB_ID} [debug-single]'"'"
     fi
 
-    SCRIPT_AND_ARGS="${ABLATION_SCRIPT[$ABLATION]}"
-    SCRIPT=$(echo "$SCRIPT_AND_ARGS" | awk '{print $1}')
-    EXTRA_ARGS=$(echo "$SCRIPT_AND_ARGS" | cut -d' ' -f2-)
-    [[ "$EXTRA_ARGS" == "$SCRIPT" ]] && EXTRA_ARGS=""   # no extra args
-
-    TIME=$(get_resource TIME "$ABLATION" "$TIME_DEFAULT")
-    MEM=$(get_resource MEM  "$ABLATION" "$MEM")
-
-    OUT_DIR="$OUTPUT_BASE/$ABLATION"
-    mkdir -p "$OUT_DIR"
-
-    JOB_NAME="abl_${ABLATION}"
-
-    SBATCH_CMD=(
-        sbatch
-        --job-name="$JOB_NAME"
-        --partition="$PARTITION"
-        --nodes=1
-        --ntasks=1
-        --cpus-per-task="$CPUS"
-        --mem="$MEM"
-        --time="$TIME"
-        --gres=gpu:1
-        --output="$LOG_DIR/%x_%j.out"
-        --export="ALL,\
-CODE_DIR=$CODE_DIR,\
-DATA_DIR=/scratch/my13/kai/meta-pers-gest/data,\
-RUN_DIR=$OUT_DIR,\
-MAML_DIR=$CODE_DIR/system/MAML,\
-MOE_DIR=$CODE_DIR/system/MOE,\
-PYTHONPATH=$CODE_DIR:$CODE_DIR/system/MAML:$CODE_DIR/system/MOE:${PYTHONPATH:-}"
-        --wrap="
+    cat <<WRAPEOF
 source /etc/profile.d/modules.sh
 module purge
 module load Mamba/23.11.0-0
@@ -150,34 +178,112 @@ source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/conda.sh
 source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/mamba.sh
 mamba activate $ENV_PATH
 
-echo 'JOB_START host=\$(hostname) date=\$(date) jobid=\${SLURM_JOB_ID}'
-echo 'CODE_DIR : $CODE_DIR'
-echo 'RUN_DIR  : $OUT_DIR'
-echo 'ABLATION : $ABLATION'
-echo 'SCRIPT   : $SCRIPT'
-echo 'EXTRA    : $EXTRA_ARGS'
-
-which python
-python -c \"import torch; print(f'PyTorch: {torch.__version__}  CUDA: {torch.version.cuda}  GPU: {torch.cuda.is_available()}')\"
-nvidia-smi || true
+$run_dir_line
+mkdir -p "\$RUN_DIR"
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-python -u $ABLATION_DIR/$SCRIPT $EXTRA_ARGS
+$job_echo
+echo 'ABLATION  : $ablation'
+echo 'RUN_DIR   : '"\$RUN_DIR"
+echo 'HPO_DB_DIR: $HPO_DB_DIR'
+
+which python
+python -c "import torch; print(f'PyTorch: {torch.__version__}  CUDA: {torch.version.cuda}  GPU: {torch.cuda.is_available()}')"
+nvidia-smi || true
+
+python -u $HPO_SCRIPT_PATH --ablation $ablation
 
 echo 'JOB_END date=\$(date)'
-"
-    )
+WRAPEOF
+}
 
-    echo ""
-    echo "════════════════════════════════════════════════════"
-    echo "  Ablation : $ABLATION"
-    echo "  Script   : $SCRIPT $EXTRA_ARGS"
-    echo "  Time     : $TIME"
-    echo "  Mem      : $MEM"
-    echo "  Output   : $OUT_DIR"
-    echo "  Log      : $LOG_DIR/${JOB_NAME}_<jobid>.out"
-    echo "════════════════════════════════════════════════════"
+for ABLATION in "${ABLATIONS[@]}"; do
+    TIME=$(get_resource TIME "$ABLATION" "$TIME_DEFAULT")
+    MEM=$(get_resource  MEM  "$ABLATION" "$MEM_DEFAULT")
+
+    JOB_NAME="hpo_${ABLATION}"
+    OUT_DIR="$HPO_OUT_BASE/$ABLATION"
+    mkdir -p "$OUT_DIR"
+
+    if [[ "$DEBUG" == true ]]; then
+        # ── Debug: single non-array job, no journal write ─────────────────────
+        # HPO_USE_JOURNAL=0  → InMemoryStorage (results discarded after job ends)
+        # N_TRIALS=1         → run exactly one trial
+        # No --array flag    → single job, log uses %x_%j.out (no %a suffix)
+        # Warm-start is still enqueued in InMemoryStorage so the first trial
+        # exercises the warm-start code path.
+        SBATCH_CMD=(
+            sbatch
+            --job-name="$JOB_NAME"
+            --partition="$PARTITION"
+            --nodes=1
+            --ntasks=1
+            --cpus-per-task="$CPUS"
+            --mem="$MEM"
+            --time="00:15:00"
+            --gres=gpu:1
+            --output="$LOG_DIR/%x_%j.out"
+            --export="ALL,\
+CODE_DIR=$CODE_DIR,\
+DATA_DIR=$DATA_DIR,\
+HPO_DB_DIR=$HPO_DB_DIR,\
+HPO_USE_JOURNAL=0,\
+N_TRIALS=1,\
+MAML_DIR=$CODE_DIR/system/MAML,\
+MOE_DIR=$CODE_DIR/system/MOE,\
+PYTHONPATH=$CODE_DIR:$CODE_DIR/system/MAML:$CODE_DIR/system/MOE:${PYTHONPATH:-}"
+            --wrap="$(_make_wrap_body "$OUT_DIR" "$ABLATION" "false")"
+        )
+
+        echo ""
+        echo "════════════════════════════════════════════════════"
+        echo "  Ablation   : $ABLATION  [DEBUG]"
+        echo "  Mode       : single job, 1 trial, no journal write"
+        echo "  Partition  : $PARTITION"
+        echo "  Time       : $TIME"
+        echo "  Memory     : $MEM"
+        echo "  Output dir : $OUT_DIR"
+        echo "  Log        : $LOG_DIR/${JOB_NAME}_<jobid>.out"
+        echo "════════════════════════════════════════════════════"
+
+    else
+        # ── Production: array job, journal enabled ────────────────────────────
+        SBATCH_CMD=(
+            sbatch
+            --job-name="$JOB_NAME"
+            --partition="$PARTITION"
+            --nodes=1
+            --ntasks=1
+            --cpus-per-task="$CPUS"
+            --mem="$MEM"
+            --time="$TIME"
+            --gres=gpu:1
+            --array="0-${ARRAY_END}%10"
+            --output="$LOG_DIR/%x_%A_%a.out"
+            --export="ALL,\
+CODE_DIR=$CODE_DIR,\
+DATA_DIR=$DATA_DIR,\
+HPO_DB_DIR=$HPO_DB_DIR,\
+HPO_USE_JOURNAL=1,\
+N_TRIALS=1,\
+MAML_DIR=$CODE_DIR/system/MAML,\
+MOE_DIR=$CODE_DIR/system/MOE,\
+PYTHONPATH=$CODE_DIR:$CODE_DIR/system/MAML:$CODE_DIR/system/MOE:${PYTHONPATH:-}"
+            --wrap="$(_make_wrap_body "$OUT_DIR" "$ABLATION" "true")"
+        )
+
+        echo ""
+        echo "════════════════════════════════════════════════════"
+        echo "  Ablation   : $ABLATION"
+        echo "  Trials     : $N_TRIALS  (array 0-${ARRAY_END}, max 10 concurrent)"
+        echo "  Time/trial : $TIME"
+        echo "  Memory     : $MEM"
+        echo "  Output dir : $OUT_DIR"
+        echo "  Optuna DB  : $HPO_DB_DIR/ablation_${ABLATION}_1s3w_hpo_v1.log"
+        echo "  Log dir    : $LOG_DIR"
+        echo "════════════════════════════════════════════════════"
+    fi
 
     if [[ "$DRY_RUN" == true ]]; then
         echo "  [DRY RUN] Would submit:"
@@ -189,5 +295,19 @@ echo 'JOB_END date=\$(date)'
 done
 
 echo ""
-echo "Done. Check job status with: squeue -u \$USER"
-echo "Logs: $LOG_DIR/"
+echo "Done. Monitor with:"
+echo "  squeue -u \$USER"
+echo ""
+echo "Log locations:"
+echo "  Production (array) : $LOG_DIR/hpo_<ABLATION>_<arrayjobid>_<taskid>.out"
+echo "  Debug (single job) : $LOG_DIR/hpo_<ABLATION>_<jobid>.out"
+echo "  tail example       : tail -f $LOG_DIR/hpo_M0_<jobid>.out"
+echo ""
+echo "Inspect results with Optuna:"
+echo "  python -c \""
+echo "    import optuna"
+echo "    from optuna.storages.journal import JournalStorage, JournalFileBackend"
+echo "    storage = JournalStorage(JournalFileBackend('$HPO_DB_DIR/ablation_<ID>_1s3w_hpo_v1.log'))"
+echo "    study = optuna.load_study(study_name='ablation_<ID>_1s3w_hpo_v1', storage=storage)"
+echo "    print(study.best_trial)"
+echo "  \""
