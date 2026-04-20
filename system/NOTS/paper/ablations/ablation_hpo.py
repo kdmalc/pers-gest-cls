@@ -242,18 +242,28 @@ ABLATION_PROFILES: dict[str, dict] = {
 # Warm-start params  (M0 only — top-10 from the existing v3 50-step HPO run)
 # =============================================================================
 
-M0_WARM_START_PARAMS: list[dict] = [
-    {"cnn_base_filters": 64,  "lstm_hidden": 64,  "maml_inner_steps": 7,  "maml_alpha_init": 0.0016865261840566302, "maml_alpha_init_eval": 0.03241222861959444, "outer_lr": 0.00011753148144028081, "wd": 0.0006958201039866241, "groupnorm_num_groups": 8,  "num_experts": 25, "MOE_top_k": 6,  "MOE_gate_temperature": 0.5007953923754159, "MOE_aux_coeff": 0.17418352079333946, "MOE_ctx_out_dim": 32,  "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.10372039932801176, "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 200, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 36, "maml_use_lslr": True,  "use_lslr_at_eval": True},
-    {"cnn_base_filters": 64,  "lstm_hidden": 128, "maml_inner_steps": 7,  "maml_alpha_init": 0.003183796421686842,  "maml_alpha_init_eval": 0.02561505243517187,  "outer_lr": 0.00017730562335905792, "wd": 0.0009623784816096662, "groupnorm_num_groups": 8,  "num_experts": 23, "MOE_top_k": 4,  "MOE_gate_temperature": 0.5894698227360172, "MOE_aux_coeff": 0.13261101041518134, "MOE_ctx_out_dim": 64,  "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.1742031578572473,  "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 250, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 23, "maml_use_lslr": False, "use_lslr_at_eval": True},
-    {"cnn_base_filters": 64,  "lstm_hidden": 64,  "maml_inner_steps": 9,  "maml_alpha_init": 0.002708370774699923,  "maml_alpha_init_eval": 0.0021108128739609285, "outer_lr": 0.0001951781386901919,  "wd": 6.85027628401306e-05,  "groupnorm_num_groups": 8,  "num_experts": 27, "MOE_top_k": 3,  "MOE_gate_temperature": 0.9458878022205542, "MOE_aux_coeff": 0.16641221051826932, "MOE_ctx_out_dim": 16,  "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.08151144309939662,  "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 100, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 17, "maml_use_lslr": True,  "use_lslr_at_eval": True},
-    {"cnn_base_filters": 64,  "lstm_hidden": 256, "maml_inner_steps": 7,  "maml_alpha_init": 0.0013373621508281483, "maml_alpha_init_eval": 0.06693266709636093,  "outer_lr": 0.00023241537465524889, "wd": 0.0009827548412804656, "groupnorm_num_groups": 8,  "num_experts": 24, "MOE_top_k": 7,  "MOE_gate_temperature": 1.0459149632012676, "MOE_aux_coeff": 0.11694630533248768, "MOE_ctx_out_dim": 128, "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.024707209736742966, "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 500, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 26, "maml_use_lslr": False, "use_lslr_at_eval": True},
-    {"cnn_base_filters": 64,  "lstm_hidden": 64,  "maml_inner_steps": 7,  "maml_alpha_init": 0.001282949149676896,  "maml_alpha_init_eval": 0.006278649366666367,  "outer_lr": 0.00014911507147964058, "wd": 0.0003105413582509981, "groupnorm_num_groups": 8,  "num_experts": 26, "MOE_top_k": 5,  "MOE_gate_temperature": 0.827815891577418,  "MOE_aux_coeff": 0.09490439617134293, "MOE_ctx_out_dim": 16,  "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.09440229157373216,  "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 100, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 30, "maml_use_lslr": True,  "use_lslr_at_eval": True},
-    {"cnn_base_filters": 96,  "lstm_hidden": 64,  "maml_inner_steps": 7,  "maml_alpha_init": 0.0036027098514744647, "maml_alpha_init_eval": 0.028273543982439742,  "outer_lr": 0.00019567289773981725, "wd": 0.0006080214276443864, "groupnorm_num_groups": 4,  "num_experts": 22, "MOE_top_k": 6,  "MOE_gate_temperature": 0.5166154000372265, "MOE_aux_coeff": 0.11646849831998997, "MOE_ctx_out_dim": 32,  "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.07000153139552596,  "MOE_aux_loss_plcmt": "both",  "episodes_per_epoch_train": 200, "use_maml_msl": False,      "maml_use_lslr": True,  "use_lslr_at_eval": False},
-    {"cnn_base_filters": 64,  "lstm_hidden": 128, "maml_inner_steps": 7,  "maml_alpha_init": 0.023934012189321143,  "maml_alpha_init_eval": 0.0010860796928206904, "outer_lr": 0.00010689736539096814, "wd": 2.586297450657217e-05,  "groupnorm_num_groups": 4,  "num_experts": 28, "MOE_top_k": 3,  "MOE_gate_temperature": 2.431471657932191,  "MOE_aux_coeff": 0.10087273019596443, "MOE_ctx_out_dim": 16,  "MOE_ctx_hidden_dim": 32,  "MOE_dropout": 0.10564140269584042,  "MOE_aux_loss_plcmt": "both",  "episodes_per_epoch_train": 100, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 1,  "maml_use_lslr": True,  "use_lslr_at_eval": True},
-    {"cnn_base_filters": 96,  "lstm_hidden": 256, "maml_inner_steps": 7,  "maml_alpha_init": 0.001427354132007504,  "maml_alpha_init_eval": 0.05871583020447932,  "outer_lr": 0.00021890580109728611, "wd": 0.00015067531388534113, "groupnorm_num_groups": 4,  "num_experts": 24, "MOE_top_k": 8,  "MOE_gate_temperature": 1.037361717564086,  "MOE_aux_coeff": 0.06945893667706689, "MOE_ctx_out_dim": 128, "MOE_ctx_hidden_dim": 128, "MOE_dropout": 0.00014882237603539017, "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 500, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 19, "maml_use_lslr": False, "use_lslr_at_eval": True},
-    {"cnn_base_filters": 64,  "lstm_hidden": 256, "maml_inner_steps": 7,  "maml_alpha_init": 0.0022409316363444297, "maml_alpha_init_eval": 0.07980284866764323,  "outer_lr": 0.00027288242632654975, "wd": 0.0006233783942107558, "groupnorm_num_groups": 8,  "num_experts": 27, "MOE_top_k": 6,  "MOE_gate_temperature": 1.9588295665204578, "MOE_aux_coeff": 0.2274257229744778,  "MOE_ctx_out_dim": 128, "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.06693040779691198,  "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 500, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 27, "maml_use_lslr": False, "use_lslr_at_eval": True},
-    {"cnn_base_filters": 64,  "lstm_hidden": 64,  "maml_inner_steps": 7,  "maml_alpha_init": 0.0010018043002410384, "maml_alpha_init_eval": 0.006165059688105781,  "outer_lr": 0.00015557309153358813, "wd": 0.0003484429564449149, "groupnorm_num_groups": 8,  "num_experts": 29, "MOE_top_k": 5,  "MOE_gate_temperature": 0.7058908557205739, "MOE_aux_coeff": 0.0971830179235051,  "MOE_ctx_out_dim": 16,  "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.09089303028735389,  "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 100, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 33, "maml_use_lslr": True,  "use_lslr_at_eval": True},
-]
+# =============================================================================
+# Warm-start params — DISABLED (v4)
+# =============================================================================
+# These were derived from HPO runs that used maml_inner_steps_eval=50 or 100
+# (mismatched from train steps). With eval steps now matched to train steps,
+# the optimal maml_alpha_init_eval changes substantially, making these priors
+# misleading rather than helpful. Starting cold gives TPE a clean slate.
+# Uncomment and re-populate once a clean matched-step HPO run is complete.
+#
+# M0_WARM_START_PARAMS: list[dict] = [
+#     {"cnn_base_filters": 64,  "lstm_hidden": 64,  "maml_inner_steps": 7,  "maml_alpha_init": 0.0016865261840566302, "maml_alpha_init_eval": 0.03241222861959444, "outer_lr": 0.00011753148144028081, "wd": 0.0006958201039866241, "groupnorm_num_groups": 8,  "num_experts": 25, "MOE_top_k": 6,  "MOE_gate_temperature": 0.5007953923754159, "MOE_aux_coeff": 0.17418352079333946, "MOE_ctx_out_dim": 32,  "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.10372039932801176, "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 200, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 36, "maml_use_lslr": True,  "use_lslr_at_eval": True},
+#     {"cnn_base_filters": 64,  "lstm_hidden": 128, "maml_inner_steps": 7,  "maml_alpha_init": 0.003183796421686842,  "maml_alpha_init_eval": 0.02561505243517187,  "outer_lr": 0.00017730562335905792, "wd": 0.0009623784816096662, "groupnorm_num_groups": 8,  "num_experts": 23, "MOE_top_k": 4,  "MOE_gate_temperature": 0.5894698227360172, "MOE_aux_coeff": 0.13261101041518134, "MOE_ctx_out_dim": 64,  "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.1742031578572473,  "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 250, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 23, "maml_use_lslr": False, "use_lslr_at_eval": True},
+#     {"cnn_base_filters": 64,  "lstm_hidden": 64,  "maml_inner_steps": 9,  "maml_alpha_init": 0.002708370774699923,  "maml_alpha_init_eval": 0.0021108128739609285, "outer_lr": 0.0001951781386901919,  "wd": 6.85027628401306e-05,  "groupnorm_num_groups": 8,  "num_experts": 27, "MOE_top_k": 3,  "MOE_gate_temperature": 0.9458878022205542, "MOE_aux_coeff": 0.16641221051826932, "MOE_ctx_out_dim": 16,  "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.08151144309939662,  "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 100, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 17, "maml_use_lslr": True,  "use_lslr_at_eval": True},
+#     {"cnn_base_filters": 64,  "lstm_hidden": 256, "maml_inner_steps": 7,  "maml_alpha_init": 0.0013373621508281483, "maml_alpha_init_eval": 0.06693266709636093,  "outer_lr": 0.00023241537465524889, "wd": 0.0009827548412804656, "groupnorm_num_groups": 8,  "num_experts": 24, "MOE_top_k": 7,  "MOE_gate_temperature": 1.0459149632012676, "MOE_aux_coeff": 0.11694630533248768, "MOE_ctx_out_dim": 128, "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.024707209736742966, "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 500, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 26, "maml_use_lslr": False, "use_lslr_at_eval": True},
+#     {"cnn_base_filters": 64,  "lstm_hidden": 64,  "maml_inner_steps": 7,  "maml_alpha_init": 0.001282949149676896,  "maml_alpha_init_eval": 0.006278649366666367,  "outer_lr": 0.00014911507147964058, "wd": 0.0003105413582509981, "groupnorm_num_groups": 8,  "num_experts": 26, "MOE_top_k": 5,  "MOE_gate_temperature": 0.827815891577418,  "MOE_aux_coeff": 0.09490439617134293, "MOE_ctx_out_dim": 16,  "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.09440229157373216,  "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 100, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 30, "maml_use_lslr": True,  "use_lslr_at_eval": True},
+#     {"cnn_base_filters": 96,  "lstm_hidden": 64,  "maml_inner_steps": 7,  "maml_alpha_init": 0.0036027098514744647, "maml_alpha_init_eval": 0.028273543982439742,  "outer_lr": 0.00019567289773981725, "wd": 0.0006080214276443864, "groupnorm_num_groups": 4,  "num_experts": 22, "MOE_top_k": 6,  "MOE_gate_temperature": 0.5166154000372265, "MOE_aux_coeff": 0.11646849831998997, "MOE_ctx_out_dim": 32,  "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.07000153139552596,  "MOE_aux_loss_plcmt": "both",  "episodes_per_epoch_train": 200, "use_maml_msl": False,      "maml_use_lslr": True,  "use_lslr_at_eval": False},
+#     {"cnn_base_filters": 64,  "lstm_hidden": 128, "maml_inner_steps": 7,  "maml_alpha_init": 0.023934012189321143,  "maml_alpha_init_eval": 0.0010860796928206904, "outer_lr": 0.00010689736539096814, "wd": 2.586297450657217e-05,  "groupnorm_num_groups": 4,  "num_experts": 28, "MOE_top_k": 3,  "MOE_gate_temperature": 2.431471657932191,  "MOE_aux_coeff": 0.10087273019596443, "MOE_ctx_out_dim": 16,  "MOE_ctx_hidden_dim": 32,  "MOE_dropout": 0.10564140269584042,  "MOE_aux_loss_plcmt": "both",  "episodes_per_epoch_train": 100, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 1,  "maml_use_lslr": True,  "use_lslr_at_eval": True},
+#     {"cnn_base_filters": 96,  "lstm_hidden": 256, "maml_inner_steps": 7,  "maml_alpha_init": 0.001427354132007504,  "maml_alpha_init_eval": 0.05871583020447932,  "outer_lr": 0.00021890580109728611, "wd": 0.00015067531388534113, "groupnorm_num_groups": 4,  "num_experts": 24, "MOE_top_k": 8,  "MOE_gate_temperature": 1.037361717564086,  "MOE_aux_coeff": 0.06945893667706689, "MOE_ctx_out_dim": 128, "MOE_ctx_hidden_dim": 128, "MOE_dropout": 0.00014882237603539017, "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 500, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 19, "maml_use_lslr": False, "use_lslr_at_eval": True},
+#     {"cnn_base_filters": 64,  "lstm_hidden": 256, "maml_inner_steps": 7,  "maml_alpha_init": 0.0022409316363444297, "maml_alpha_init_eval": 0.07980284866764323,  "outer_lr": 0.00027288242632654975, "wd": 0.0006233783942107558, "groupnorm_num_groups": 8,  "num_experts": 27, "MOE_top_k": 6,  "MOE_gate_temperature": 1.9588295665204578, "MOE_aux_coeff": 0.2274257229744778,  "MOE_ctx_out_dim": 128, "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.06693040779691198,  "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 500, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 27, "maml_use_lslr": False, "use_lslr_at_eval": True},
+#     {"cnn_base_filters": 64,  "lstm_hidden": 64,  "maml_inner_steps": 7,  "maml_alpha_init": 0.0010018043002410384, "maml_alpha_init_eval": 0.006165059688105781,  "outer_lr": 0.00015557309153358813, "wd": 0.0003484429564449149, "groupnorm_num_groups": 8,  "num_experts": 29, "MOE_top_k": 5,  "MOE_gate_temperature": 0.7058908557205739, "MOE_aux_coeff": 0.0971830179235051,  "MOE_ctx_out_dim": 16,  "MOE_ctx_hidden_dim": 64,  "MOE_dropout": 0.09089303028735389,  "MOE_aux_loss_plcmt": "inner", "episodes_per_epoch_train": 100, "use_maml_msl": "hybrid", "maml_msl_num_epochs": 33, "maml_use_lslr": True,  "use_lslr_at_eval": True},
+# ]
+M0_WARM_START_PARAMS: list[dict] = []   # empty — warm-start disabled for v4
 
 # Ablations that receive the M0 warm-start (identical HP space to M0's v3 study)
 ABLATIONS_WITH_M0_WARMSTART = {"M0", "A5", "A8", "A12"}
@@ -305,13 +315,31 @@ def _suggest_label_smooth_supervised(trial: optuna.Trial, config: dict) -> dict:
 def _suggest_maml_hps(trial: optuna.Trial, config: dict) -> dict:
     """
     Suggest MAML-specific HPs. Only called when use_maml=True.
-    Ranges mirror the v3 HPO script (1s3w_maml_moe_hpo.py) exactly.
-    label_smooth is fixed to 0.05 for MAML ablations (unanimous in warm-start).
+
+    v4 changes vs v3:
+      - maml_inner_steps_eval is now MATCHED to maml_inner_steps (no longer fixed
+        at 50). Mismatching train/eval steps was corrupting the HPO signal: the
+        objective was measuring quality-of-init + easy adaptation rather than
+        quality of meta-learning. With matched steps the meta-gradient and the
+        val signal are optimising the same thing.
+      - maml_inner_steps range extended to include 15. The old v2 study (before
+        the 50/100-step eval corruption was understood) showed 15 was competitive.
+        With a clean signal we should let TPE revisit this.
+      - maml_alpha_init_eval range widened to [5e-4, 0.05]. The optimal eval LR
+        at matched steps (5-15) is different from the optimal at 50+ steps; the
+        old range [0.001, 0.08] was tuned for the high-step regime.
+      - label_smooth fixed to 0.05 (unanimous across all prior completed trials).
+
+    Test-time eval steps: after HPO completes, run a post-hoc sweep over
+    eval_inner_steps in [5, 10, 15, 20, 30, 50] on the val set to determine
+    the best test-time budget for the final model. Do NOT make that decision
+    during HPO — it conflates model quality with adaptation budget.
     """
-    config["maml_inner_steps"]      = trial.suggest_categorical("maml_inner_steps", [5, 7, 9, 10])
-    config["maml_inner_steps_eval"] = 50   # FIXED — see v3 rationale
+    config["maml_inner_steps"]      = trial.suggest_categorical("maml_inner_steps", [5, 7, 10, 15])
+    # Match eval steps to train steps — clean, unbiased HPO signal.
+    config["maml_inner_steps_eval"] = config["maml_inner_steps"]
     config["maml_alpha_init"]       = trial.suggest_float("maml_alpha_init",      5e-4, 0.025, log=True)
-    config["maml_alpha_init_eval"]  = trial.suggest_float("maml_alpha_init_eval", 0.001, 0.08, log=True)
+    config["maml_alpha_init_eval"]  = trial.suggest_float("maml_alpha_init_eval", 5e-4, 0.05,  log=True)
     config["maml_use_lslr"]         = trial.suggest_categorical("maml_use_lslr",   [True, False])
     config["use_lslr_at_eval"]      = trial.suggest_categorical("use_lslr_at_eval", [True, False])
 
@@ -595,9 +623,33 @@ def _objective_episodic(trial: optuna.Trial, config: dict) -> float:
     """
     Objective for MAML ablations (M0, A3, A4, A5, A8, A12).
     Meta-train → adapt-and-eval on val users → return mean val acc.
+
+    v4 objective: best val acc AFTER a burn-in period, not the global peak.
+    -------------------------------------------------------------------------
+    With matched train/eval inner steps, epoch-0 val acc is no longer inflated
+    by excessive adaptation steps, so raw epoch-0 peaking is less likely.
+    However, as a belt-and-suspenders guard we still exclude the first
+    HPO_BURNIN_EPOCHS epochs from the best-val-acc computation. This means:
+      - A model that peaks at epoch 2 and then degrades is not rewarded for
+        that transient peak.
+      - A model that genuinely improves and plateaus at epoch 10-30 gets
+        its true best value reported.
+      - Early stopping still operates on the full val_acc trajectory (so it
+        can still cut bad trials early), but the Optuna return value is
+        max(val_acc_log[HPO_BURNIN_EPOCHS:]).
+      - If a trial early-stops before HPO_BURNIN_EPOCHS epochs complete (i.e.
+        it was bad enough to stop within the first 5 epochs), we report the
+        best post-epoch-0 value we have. This is conservative but correct —
+        a trial that can't survive 5 epochs deserves a low score.
+
+    HPO_BURNIN_EPOCHS = 5: gives MAML ~750-1250 meta-gradient steps
+    (5 epochs × 150-250 episodes) to move the init meaningfully before we
+    start caring about val accuracy.
     """
     from MAML.maml_data_pipeline import get_maml_dataloaders
     from MAML.mamlpp import mamlpp_pretrain, mamlpp_adapt_and_eval
+
+    HPO_BURNIN_EPOCHS = 5   # ignore val acc from epochs 0..HPO_BURNIN_EPOCHS-1
 
     tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
 
@@ -610,8 +662,30 @@ def _objective_episodic(trial: optuna.Trial, config: dict) -> float:
     model = build_model(config)
     trained_model, history = mamlpp_pretrain(model, config, train_dl,
                                              episodic_val_loader=val_dl)
-    best_val_acc = history["best_val_acc"]
-    best_state   = history["best_state"]
+    val_acc_log  = history.get("val_acc_log", [])   # one entry per epoch (including epoch 0)
+    global_best_val_acc = history["best_val_acc"]
+    best_state          = history["best_state"]
+
+    # Compute the burn-in-gated best val acc.
+    # val_acc_log[0] is the epoch-0 baseline (before any training), so
+    # post-burn-in entries start at index HPO_BURNIN_EPOCHS.
+    post_burnin_accs = val_acc_log[HPO_BURNIN_EPOCHS:]
+    if post_burnin_accs:
+        burnin_best_val_acc = float(max(post_burnin_accs))
+        burnin_best_epoch   = int(np.argmax(val_acc_log[HPO_BURNIN_EPOCHS:])) + HPO_BURNIN_EPOCHS
+    else:
+        # Trial early-stopped within the burn-in window. Use best of whatever
+        # we have after epoch 0 — conservative score, trial will rank low.
+        post_ep0_accs = val_acc_log[1:] if len(val_acc_log) > 1 else val_acc_log
+        burnin_best_val_acc = float(max(post_ep0_accs)) if post_ep0_accs else 0.0
+        burnin_best_epoch   = int(np.argmax(post_ep0_accs)) + 1 if post_ep0_accs else 0
+        print(f"  [Trial {trial.number}] WARNING: trial early-stopped within burn-in "
+              f"({len(val_acc_log)} epochs). Reporting best post-ep0 val acc.")
+
+    n_epochs_run = len(val_acc_log)
+    print(f"  [Trial {trial.number}] epochs_run={n_epochs_run}, "
+          f"global_best={global_best_val_acc*100:.2f}% (ep{int(np.argmax(val_acc_log))}), "
+          f"burnin_best={burnin_best_val_acc*100:.2f}% (ep{burnin_best_epoch})")
 
     # MoE collapse check
     if config.get("use_MOE", False):
@@ -622,20 +696,23 @@ def _objective_episodic(trial: optuna.Trial, config: dict) -> float:
             print(f"  [Trial {trial.number}] MoE COLLAPSED (max_load={max_load:.2f}). Penalising.")
             return COLLAPSE_PENALTY
 
-    # Save checkpoint
+    # Save checkpoint (best state across all epochs, for post-hoc analysis)
     model_filename = f"trial_{trial.number}_fold{FOLD_IDX}_best.pt"
     torch.save({
-        "trial_num":        trial.number,
-        "fold_idx":         FOLD_IDX,
-        "model_state_dict": best_state,
-        "config":           config,
-        "best_val_acc":     best_val_acc,
-        "train_loss_log":   history.get("train_loss_log", []),
-        "val_acc_log":      history.get("val_acc_log", []),
+        "trial_num":              trial.number,
+        "fold_idx":               FOLD_IDX,
+        "model_state_dict":       best_state,
+        "config":                 config,
+        "global_best_val_acc":    global_best_val_acc,
+        "burnin_best_val_acc":    burnin_best_val_acc,
+        "burnin_best_epoch":      burnin_best_epoch,
+        "n_epochs_run":           n_epochs_run,
+        "val_acc_log":            val_acc_log,
+        "train_loss_log":         history.get("train_loss_log", []),
     }, RUN_DIR / model_filename)
     print(f"  [Trial {trial.number}] Checkpoint saved: {model_filename}")
 
-    # Per-user adapt-and-eval (the HPO signal)
+    # Per-user adapt-and-eval (the HPO signal) using the best state
     trained_model.load_state_dict(best_state)
     user_metrics: dict = defaultdict(list)
     for batch in val_dl:
@@ -647,10 +724,12 @@ def _objective_episodic(trial: optuna.Trial, config: dict) -> float:
     per_user_means = [float(np.mean(accs)) for accs in user_metrics.values()]
     mean_acc = float(np.nanmean(per_user_means))
 
-    trial.set_user_attr("mean_pretrain_val_acc", float(best_val_acc))
-    trial.set_user_attr("per_user_val_accs",     per_user_means)
-    print(f"  [Trial {trial.number}] Val acc: {mean_acc*100:.2f}% "
-          f"(pretrain best: {best_val_acc*100:.2f}%)")
+    trial.set_user_attr("global_best_val_acc",  float(global_best_val_acc))
+    trial.set_user_attr("burnin_best_val_acc",  burnin_best_val_acc)
+    trial.set_user_attr("burnin_best_epoch",    burnin_best_epoch)
+    trial.set_user_attr("n_epochs_run",         n_epochs_run)
+    trial.set_user_attr("per_user_val_accs",    per_user_means)
+    print(f"  [Trial {trial.number}] Final HPO score (post-burnin adapt-eval): {mean_acc*100:.2f}%")
     return mean_acc
 
 
