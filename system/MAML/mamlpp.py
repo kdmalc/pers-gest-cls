@@ -676,7 +676,8 @@ def _maml_routing_analysis_epoch(model, episodic_val_loader, config,
 
     device     = config['device']
     multimodal = bool(config.get('multimodal', True))
-    # TODO: what the heck is this, demo_dim_labels definitely does not exist in the config...
+    # TODO: So it doesnt check config.get('use_demographics')? It just assumes demographics were passed through...
+    # TODO: UNDEFINED! Demo_labels needs to be the strings corresponding with each field in the demographic vector so the plotter can label it semantically
     demo_labels = config.get('demo_dim_labels', None)
 
     collector = RoutingCollector(num_experts=num_experts, model_name=f"{model_name}_maml_val")
