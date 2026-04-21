@@ -1,0 +1,44 @@
+Best HPO Configs + Models
+
+A2_best.pt  A4_best.pt  A7_best.pt  M0_best.pt
+[km82@loginx3 best_models]$ pwd
+/scratch/my13/kai/runs/paper/ablations/hpo/best_models
+
+------------------------------------------------------------
+
+A2_CONFIG = {
+    'outer_lr': 1.75e-4,
+    'wd': 4.0e-5,
+    'ft_lr': 2.5e-3,
+    'label_smooth': 0.17,
+}
+--> Best trial "193"
+/scratch/my13/kai/runs/paper/ablations/hpo/A2/trial_94/trial_193_fold0_best.pt
+
+A4_CONFIG = {
+    'outer_lr': 6.8e-5,
+    'wd': 2.2e-4,
+    'maml_inner_steps': 15,
+    'maml_alpha_init': 0.019,
+    'maml_alpha_init_eval': 0.033,
+    'maml_use_lslr': False,
+    'use_lslr_at_eval': True,
+    'use_maml_msl': 'hybrid',
+    'maml_msl_num_epochs': 24,
+    'episodes_per_epoch_train': 100,
+}
+--> Best trial 82
+/scratch/my13/kai/runs/paper/ablations/hpo/A4/trial_82/trial_82_fold0_best.pt
+
+A7_CONFIG = {
+    'outer_lr': 3.9e-4,
+    'wd': 3.6e-5,
+    'ft_lr': 2.4e-3,
+    'label_smooth': 0.42,
+}
+--> Best trial 94
+/scratch/my13/kai/runs/paper/ablations/hpo/A7/trial_94/trial_94_fold0_best.pt
+
+M0
+/scratch/my13/kai/runs/paper/ablations/hpo/M0/trial_25/trial_64_fold0_best.pt
+
