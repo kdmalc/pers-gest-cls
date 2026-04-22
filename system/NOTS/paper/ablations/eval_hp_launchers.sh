@@ -1,40 +1,41 @@
 #!/bin/bash
 # eval_hp_launchers.sh
 # ====================
-# SLURM launchers for two post-training eval HP jobs:
+# SLURM launchers for all four eval HP jobs.
 #
-#   1) A11 extended eval HPO (a11_eval_hpo_extended.py)
-#      Fixes the boundary-hitting problem in the original A11 HPO by widening
-#      the search ranges for ft_lr and ft_steps.
-#      Runs as a SLURM array job (one trial per task), same pattern as
-#      hpo_ablation_launcher.sh. Uses a NEW Optuna study name so there is
-#      zero collision with the existing A11 v1 study.
+# Four modes (run in this order):
 #
-#   2) M0 (and optionally A12) eval HP sweep (maml_eval_hp_sweep.py)
-#      Sweeps maml_inner_steps_eval x maml_alpha_init_eval jointly on the
-#      val set given a trained checkpoint. Single job, no Optuna needed.
+#   A11          Extended A11 eval HPO — finds best ft_lr and ft_steps.
+#                Array job, one trial per task.
 #
-# Usage:
-#   # A11 extended HPO (50 trials):
-#   bash eval_hp_launchers.sh a11 --n-trials 50
+#   A11_CURVE    A11 paper figure curve — sweeps ft_steps at fixed best ft_lr.
+#                Single job. Run after A11 HPO completes.
 #
-#   # M0 eval sweep (steps only — fast):
-#   bash eval_hp_launchers.sh m0_sweep --checkpoint /path/to/checkpoint.pt
+#   M0_SWEEP     M0 2D eval sweep — finds best (maml_inner_steps_eval, alpha).
+#                Single job. Run in parallel with A11 if cluster allows.
 #
-#   # M0 eval sweep (steps + alpha — recommended):
-#   bash eval_hp_launchers.sh m0_sweep --checkpoint /path/to/checkpoint.pt --sweep-alpha
+#   M0_CURVE     M0 paper figure curve — sweeps steps at fixed best alpha.
+#                Single job. Run after M0_SWEEP completes.
 #
-#   # A12 eval sweep (reuses the same script, pass --ablation-id A12):
-#   bash eval_hp_launchers.sh m0_sweep \
-#       --checkpoint /path/to/A12_checkpoint.pt \
-#       --ablation-id A12 --sweep-alpha
+# Full workflow:
+#   bash eval_hp_launchers.sh A11 --n-trials 50
+#   bash eval_hp_launchers.sh M0_SWEEP --checkpoint /path/to/ckpt.pt --sweep-alpha
+#   # ... wait for both to finish, inspect JSONs for best ft_lr and best alpha ...
+#   bash eval_hp_launchers.sh A11_CURVE --ft-lr <best_ft_lr>
+#   bash eval_hp_launchers.sh M0_CURVE  --checkpoint /path/to/ckpt.pt --alpha <best_alpha>
 #
-#   # Dry run:
-#   bash eval_hp_launchers.sh a11 --n-trials 50 --dry-run
-#   bash eval_hp_launchers.sh m0_sweep --checkpoint /path/to/checkpoint.pt --dry-run
+# A12 uses the M0 paper curve result directly — no separate sweep needed.
+# If you want to verify, pass --ablation-id A12 to M0_SWEEP / M0_CURVE.
 #
-#   # Debug (single trial, debug partition, no journal write):
-#   bash eval_hp_launchers.sh a11 --debug
+# Usage examples:
+#   bash eval_hp_launchers.sh A11 --n-trials 50
+#   bash eval_hp_launchers.sh A11 --n-trials 50 --dry-run
+#   bash eval_hp_launchers.sh A11 --debug
+#   bash eval_hp_launchers.sh A11_CURVE --ft-lr 0.05
+#   bash eval_hp_launchers.sh M0_SWEEP --checkpoint /path/to/ckpt.pt --sweep-alpha
+#   bash eval_hp_launchers.sh M0_CURVE  --checkpoint /path/to/ckpt.pt --alpha 0.005
+#   bash eval_hp_launchers.sh M0_SWEEP  --checkpoint /path/to/A12_ckpt.pt \
+#                                        --ablation-id A12 --sweep-alpha
 
 set -euo pipefail
 
@@ -47,11 +48,9 @@ HPO_DB_DIR=/scratch/my13/kai/meta-pers-gest/optuna_dbs
 LOG_DIR=/scratch/my13/kai/runs/paper/ablations/eval_hp/logs
 ENV_PATH=/projects/my13/kai/meta-pers-gest/envs/fl-torch
 
-# Script paths
-A11_HPO_SCRIPT="$CODE_DIR/system/NOTS/paper/ablations/a11_eval_hpo_extended.py"
+A11_HPO_SCRIPT="$CODE_DIR/system/NOTS/paper/ablations/A11_eval_hpo_extended.py"
 M0_SWEEP_SCRIPT="$CODE_DIR/system/NOTS/paper/ablations/maml_eval_hp_sweep.py"
 
-# Output dirs
 A11_OUT_BASE=/scratch/my13/kai/runs/paper/ablations/eval_hp/A11_v2
 M0_SWEEP_OUT=/scratch/my13/kai/runs/paper/ablations/eval_hp/M0_sweep
 
@@ -60,42 +59,51 @@ mkdir -p "$HPO_DB_DIR" "$LOG_DIR" "$A11_OUT_BASE" "$M0_SWEEP_OUT"
 # =============================================================================
 # Parse arguments
 # =============================================================================
-MODE=""             # "a11" or "m0_sweep"
+MODE=""
 DRY_RUN=false
 DEBUG=false
-N_TRIALS=50         # Default for A11 HPO
-CHECKPOINT=""       # Required for m0_sweep
+N_TRIALS=50
+CHECKPOINT=""
 SWEEP_ALPHA=false
-ABLATION_ID="M0"    # For m0_sweep; can be overridden to A12
+ABLATION_ID="M0"
+BEST_FT_LR=""
+BEST_ALPHA=""
 
 i=0
 args_array=("$@")
 while [[ $i -lt ${#args_array[@]} ]]; do
     arg="${args_array[$i]}"
     case "$arg" in
-        a11)          MODE="a11" ;;
-        m0_sweep)     MODE="m0_sweep" ;;
+        A11)          MODE="A11" ;;
+        A11_CURVE)    MODE="A11_CURVE" ;;
+        M0_SWEEP)     MODE="M0_SWEEP" ;;
+        M0_CURVE)     MODE="M0_CURVE" ;;
         --dry-run)    DRY_RUN=true ;;
         --debug)      DEBUG=true ;;
         --sweep-alpha) SWEEP_ALPHA=true ;;
         --n-trials)    i=$((i+1)); N_TRIALS="${args_array[$i]}" ;;
         --checkpoint)  i=$((i+1)); CHECKPOINT="${args_array[$i]}" ;;
         --ablation-id) i=$((i+1)); ABLATION_ID="${args_array[$i]}" ;;
+        --ft-lr)       i=$((i+1)); BEST_FT_LR="${args_array[$i]}" ;;
+        --alpha)       i=$((i+1)); BEST_ALPHA="${args_array[$i]}" ;;
         *) echo "WARNING: Unknown argument '$arg' — ignoring." ;;
     esac
     i=$((i+1))
 done
 
 if [[ -z "$MODE" ]]; then
-    echo "ERROR: Must specify mode: 'a11' or 'm0_sweep'."
+    echo "ERROR: Must specify mode: A11, A11_CURVE, M0_SWEEP, or M0_CURVE."
+    echo ""
     echo "Usage:"
-    echo "  bash eval_hp_launchers.sh a11 [--n-trials N] [--dry-run] [--debug]"
-    echo "  bash eval_hp_launchers.sh m0_sweep --checkpoint /path/to/ckpt.pt [--sweep-alpha] [--ablation-id A12] [--dry-run]"
+    echo "  bash eval_hp_launchers.sh A11       [--n-trials N] [--dry-run] [--debug]"
+    echo "  bash eval_hp_launchers.sh A11_CURVE --ft-lr <value> [--dry-run]"
+    echo "  bash eval_hp_launchers.sh M0_SWEEP  --checkpoint /path/to/ckpt.pt --sweep-alpha [--ablation-id A12] [--dry-run]"
+    echo "  bash eval_hp_launchers.sh M0_CURVE  --checkpoint /path/to/ckpt.pt --alpha <value> [--ablation-id A12] [--dry-run]"
     exit 1
 fi
 
 # =============================================================================
-# Shared environment setup (written into --wrap for both modes)
+# Shared environment setup snippet
 # =============================================================================
 _env_setup() {
     cat <<'ENVEOF'
@@ -107,98 +115,75 @@ source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/mamba.sh
 ENVEOF
 }
 
+_common_exports() {
+    echo "CODE_DIR=$CODE_DIR,DATA_DIR=$DATA_DIR,\
+HPO_DB_DIR=$HPO_DB_DIR,\
+MAML_DIR=$CODE_DIR/system/MAML,MOE_DIR=$CODE_DIR/system/MOE,\
+PYTHONPATH=$CODE_DIR:$CODE_DIR/system/MAML:$CODE_DIR/system/MOE:${PYTHONPATH:-}"
+}
+
 # =============================================================================
-# Mode: A11 extended HPO
+# MODE: A11 — extended HPO array job
 # =============================================================================
-if [[ "$MODE" == "a11" ]]; then
+if [[ "$MODE" == "A11" ]]; then
 
     PARTITION=commons
-    TIME="00:35:00"      # head-only FT is fast; 35 min is generous per trial
+    TIME="00:35:00"
     MEM=24G
     CPUS=10
     JOB_NAME="eval_hpo_A11_v2"
 
     if [[ "$DEBUG" == true ]]; then
-        PARTITION=debug
-        TIME="00:15:00"
-        N_TRIALS=1
+        PARTITION=debug; TIME="00:15:00"; N_TRIALS=1
         echo "DEBUG MODE: partition=debug, 1 trial, no journal write"
     fi
 
     ARRAY_END=$((N_TRIALS - 1))
 
-    _make_a11_wrap() {
-        local use_task_id="$1"   # "true" = array, "false" = debug single
+    _make_wrap() {
+        local use_task_id="$1"
         if [[ "$use_task_id" == "true" ]]; then
             local run_dir_line="export RUN_DIR=$A11_OUT_BASE/trial_\${SLURM_ARRAY_TASK_ID}"
-            local echo_line='echo "JOB_START host=$(hostname) date=$(date) jobid=${SLURM_JOB_ID} task=${SLURM_ARRAY_TASK_ID}"'
+            local echo_line='echo "JOB_START jobid=${SLURM_JOB_ID} task=${SLURM_ARRAY_TASK_ID} host=$(hostname)"'
         else
-            local run_dir_line="export RUN_DIR=$A11_OUT_BASE/debug_trial_\${SLURM_JOB_ID}"
-            local echo_line='echo "JOB_START host=$(hostname) date=$(date) jobid=${SLURM_JOB_ID} [debug]"'
+            local run_dir_line="export RUN_DIR=$A11_OUT_BASE/debug_\${SLURM_JOB_ID}"
+            local echo_line='echo "JOB_START jobid=${SLURM_JOB_ID} [debug] host=$(hostname)"'
         fi
         cat <<WRAPEOF
 $(_env_setup)
 mamba activate $ENV_PATH
-
 $run_dir_line
 mkdir -p "\$RUN_DIR"
-
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 $echo_line
-echo "SCRIPT : $A11_HPO_SCRIPT"
-
 which python
-python -c "import torch; print(f'PyTorch: {torch.__version__}  CUDA: {torch.version.cuda}  GPU: {torch.cuda.is_available()}')"
+python -c "import torch; print(f'PyTorch: {torch.__version__}  GPU: {torch.cuda.is_available()}')"
 nvidia-smi || true
-
 python -u $A11_HPO_SCRIPT
-
 echo "JOB_END date=\$(date)"
 WRAPEOF
     }
 
     if [[ "$DEBUG" == true ]]; then
-        SBATCH_CMD=(
-            sbatch
-            --job-name="$JOB_NAME"
-            --partition="$PARTITION"
-            --nodes=1 --ntasks=1
-            --cpus-per-task="$CPUS"
-            --mem="$MEM"
-            --time="$TIME"
-            --gres=gpu:1
+        SBATCH_CMD=(sbatch --job-name="$JOB_NAME" --partition="$PARTITION"
+            --nodes=1 --ntasks=1 --cpus-per-task="$CPUS" --mem="$MEM"
+            --time="$TIME" --gres=gpu:1
             --output="$LOG_DIR/%x_%j.out"
-            --export="ALL,\
-CODE_DIR=$CODE_DIR,DATA_DIR=$DATA_DIR,\
-HPO_DB_DIR=$HPO_DB_DIR,HPO_USE_JOURNAL=0,N_TRIALS=1,\
-MAML_DIR=$CODE_DIR/system/MAML,MOE_DIR=$CODE_DIR/system/MOE,\
-PYTHONPATH=$CODE_DIR:$CODE_DIR/system/MAML:$CODE_DIR/system/MOE:${PYTHONPATH:-}"
-            --wrap="$(_make_a11_wrap false)"
-        )
+            --export="ALL,$(_common_exports),HPO_USE_JOURNAL=0,N_TRIALS=1"
+            --wrap="$(_make_wrap false)")
     else
-        SBATCH_CMD=(
-            sbatch
-            --job-name="$JOB_NAME"
-            --partition="$PARTITION"
-            --nodes=1 --ntasks=1
-            --cpus-per-task="$CPUS"
-            --mem="$MEM"
-            --time="$TIME"
-            --gres=gpu:1
+        SBATCH_CMD=(sbatch --job-name="$JOB_NAME" --partition="$PARTITION"
+            --nodes=1 --ntasks=1 --cpus-per-task="$CPUS" --mem="$MEM"
+            --time="$TIME" --gres=gpu:1
             --array="0-${ARRAY_END}%10"
             --output="$LOG_DIR/%x_%A_%a.out"
-            --export="ALL,\
-CODE_DIR=$CODE_DIR,DATA_DIR=$DATA_DIR,\
-HPO_DB_DIR=$HPO_DB_DIR,HPO_USE_JOURNAL=1,N_TRIALS=1,\
-MAML_DIR=$CODE_DIR/system/MAML,MOE_DIR=$CODE_DIR/system/MOE,\
-PYTHONPATH=$CODE_DIR:$CODE_DIR/system/MAML:$CODE_DIR/system/MOE:${PYTHONPATH:-}"
-            --wrap="$(_make_a11_wrap true)"
-        )
+            --export="ALL,$(_common_exports),HPO_USE_JOURNAL=1,N_TRIALS=1"
+            --wrap="$(_make_wrap true)")
     fi
 
     echo ""
     echo "════════════════════════════════════════════════════"
-    echo "  Job        : A11 Extended Eval HPO (v2)"
+    echo "  Mode       : A11 Extended Eval HPO"
     echo "  Trials     : $N_TRIALS"
     echo "  Partition  : $PARTITION"
     echo "  Time/trial : $TIME"
@@ -206,126 +191,211 @@ PYTHONPATH=$CODE_DIR:$CODE_DIR/system/MAML:$CODE_DIR/system/MOE:${PYTHONPATH:-}"
     echo "  Study name : ablation_A11_eval_hpo_v2"
     echo "  Journal    : $HPO_DB_DIR/ablation_A11_eval_hpo_v2.log"
     echo "  Output dir : $A11_OUT_BASE"
-    echo "  Log dir    : $LOG_DIR"
     echo "════════════════════════════════════════════════════"
 
-    if [[ "$DRY_RUN" == true ]]; then
-        echo "  [DRY RUN] Would submit: ${SBATCH_CMD[*]}"
-    else
-        JOB_ID=$("${SBATCH_CMD[@]}")
-        echo "  Submitted: $JOB_ID"
-    fi
-
 # =============================================================================
-# Mode: M0 (or A12) eval HP sweep
+# MODE: A11_CURVE — paper figure curve at fixed ft_lr
 # =============================================================================
-elif [[ "$MODE" == "m0_sweep" ]]; then
+elif [[ "$MODE" == "A11_CURVE" ]]; then
 
-    if [[ -z "$CHECKPOINT" ]]; then
-        echo "ERROR: --checkpoint is required for m0_sweep mode."
+    if [[ -z "$BEST_FT_LR" ]]; then
+        echo "ERROR: --ft-lr is required for A11_CURVE mode."
         exit 1
     fi
 
     PARTITION=commons
-    # 2D sweep: 16 step values × 9 alpha values = 144 configs × ~1 min each ≈ 2.5h
-    # Steps-only sweep: 16 configs × ~1 min each ≈ 20 min
-    if [[ "$SWEEP_ALPHA" == true ]]; then
-        TIME="03:00:00"
-    else
-        TIME="00:45:00"
-    fi
-    MEM=32G
+    TIME="00:45:00"
+    MEM=24G
     CPUS=10
-    JOB_NAME="eval_sweep_${ABLATION_ID}"
+    JOB_NAME="A11_paper_curve"
+    OUT_DIR="$A11_OUT_BASE/paper_curve"
+    mkdir -p "$OUT_DIR"
 
-    ALPHA_FLAG=""
-    if [[ "$SWEEP_ALPHA" == true ]]; then
-        ALPHA_FLAG="--sweep_alpha"
-    fi
-
-    if [[ "$DEBUG" == true ]]; then
-        PARTITION=debug
-        TIME="00:15:00"
-        echo "DEBUG MODE: partition=debug"
-    fi
-
-    SWEEP_WRAP=$(cat <<WRAPEOF
+    WRAP=$(cat <<WRAPEOF
 $(_env_setup)
 mamba activate $ENV_PATH
-
-export RUN_DIR=$M0_SWEEP_OUT/${ABLATION_ID}
-mkdir -p "\$RUN_DIR"
-
+export RUN_DIR=$OUT_DIR
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-echo "JOB_START host=\$(hostname) date=\$(date) jobid=\${SLURM_JOB_ID}"
-echo "ABLATION  : $ABLATION_ID"
-echo "CHECKPOINT: $CHECKPOINT"
-echo "SWEEP_ALPHA: $SWEEP_ALPHA"
-
+echo "JOB_START jobid=\${SLURM_JOB_ID} host=\$(hostname)"
+echo "A11 paper curve at ft_lr=$BEST_FT_LR"
 which python
-python -c "import torch; print(f'PyTorch: {torch.__version__}  CUDA: {torch.version.cuda}  GPU: {torch.cuda.is_available()}')"
+python -c "import torch; print(f'PyTorch: {torch.__version__}  GPU: {torch.cuda.is_available()}')"
 nvidia-smi || true
-
-python -u $M0_SWEEP_SCRIPT \\
-    --checkpoint $CHECKPOINT \\
-    --ablation_id $ABLATION_ID \\
-    --out_dir \$RUN_DIR \\
-    $ALPHA_FLAG
-
+python -u $A11_HPO_SCRIPT \\
+    --paper-curve \\
+    --ft-lr $BEST_FT_LR \\
+    --out-dir $OUT_DIR
 echo "JOB_END date=\$(date)"
 WRAPEOF
 )
 
-    SBATCH_CMD=(
-        sbatch
-        --job-name="$JOB_NAME"
-        --partition="$PARTITION"
-        --nodes=1 --ntasks=1
-        --cpus-per-task="$CPUS"
-        --mem="$MEM"
-        --time="$TIME"
-        --gres=gpu:1
+    SBATCH_CMD=(sbatch --job-name="$JOB_NAME" --partition="$PARTITION"
+        --nodes=1 --ntasks=1 --cpus-per-task="$CPUS" --mem="$MEM"
+        --time="$TIME" --gres=gpu:1
         --output="$LOG_DIR/%x_%j.out"
-        --export="ALL,\
-CODE_DIR=$CODE_DIR,DATA_DIR=$DATA_DIR,\
-MAML_DIR=$CODE_DIR/system/MAML,MOE_DIR=$CODE_DIR/system/MOE,\
-PYTHONPATH=$CODE_DIR:$CODE_DIR/system/MAML:$CODE_DIR/system/MOE:${PYTHONPATH:-}"
-        --wrap="$SWEEP_WRAP"
-    )
+        --export="ALL,$(_common_exports)"
+        --wrap="$WRAP")
 
     echo ""
     echo "════════════════════════════════════════════════════"
-    echo "  Job         : ${ABLATION_ID} Eval HP Sweep"
-    echo "  Checkpoint  : $CHECKPOINT"
-    echo "  Sweep alpha : $SWEEP_ALPHA"
-    echo "  Partition   : $PARTITION"
-    echo "  Time        : $TIME"
-    echo "  Memory      : $MEM"
-    echo "  Output dir  : $M0_SWEEP_OUT/$ABLATION_ID"
-    echo "  Log dir     : $LOG_DIR"
+    echo "  Mode       : A11 Paper Curve"
+    echo "  ft_lr      : $BEST_FT_LR"
+    echo "  Steps grid : 1 3 5 10 15 25 50 100 150 200"
+    echo "  Partition  : $PARTITION"
+    echo "  Time       : $TIME"
+    echo "  Output dir : $OUT_DIR"
     echo "════════════════════════════════════════════════════"
 
-    if [[ "$DRY_RUN" == true ]]; then
-        echo "  [DRY RUN] Would submit: ${SBATCH_CMD[*]}"
-    else
-        JOB_ID=$("${SBATCH_CMD[@]}")
-        echo "  Submitted: $JOB_ID"
+# =============================================================================
+# MODE: M0_SWEEP — 2D eval sweep (find best steps + alpha)
+# =============================================================================
+elif [[ "$MODE" == "M0_SWEEP" ]]; then
+
+    if [[ -z "$CHECKPOINT" ]]; then
+        echo "ERROR: --checkpoint is required for M0_SWEEP mode."
+        exit 1
     fi
+    if [[ "$SWEEP_ALPHA" != "true" ]]; then
+        echo "ERROR: --sweep-alpha is required for M0_SWEEP mode."
+        exit 1
+    fi
+
+    PARTITION=commons
+    TIME="03:30:00"   # 8 steps x 9 alphas x ~2 min + buffer
+    MEM=32G
+    CPUS=10
+    JOB_NAME="eval_sweep_${ABLATION_ID}"
+    OUT_DIR="$M0_SWEEP_OUT/${ABLATION_ID}"
+    mkdir -p "$OUT_DIR"
+
+    WRAP=$(cat <<WRAPEOF
+$(_env_setup)
+mamba activate $ENV_PATH
+export RUN_DIR=$OUT_DIR
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+echo "JOB_START jobid=\${SLURM_JOB_ID} host=\$(hostname)"
+echo "M0 2D sweep: checkpoint=$CHECKPOINT  ablation=$ABLATION_ID"
+which python
+python -c "import torch; print(f'PyTorch: {torch.__version__}  GPU: {torch.cuda.is_available()}')"
+nvidia-smi || true
+python -u $M0_SWEEP_SCRIPT \\
+    --checkpoint $CHECKPOINT \\
+    --ablation-id $ABLATION_ID \\
+    --sweep-alpha \\
+    --out-dir $OUT_DIR
+echo "JOB_END date=\$(date)"
+WRAPEOF
+)
+
+    SBATCH_CMD=(sbatch --job-name="$JOB_NAME" --partition="$PARTITION"
+        --nodes=1 --ntasks=1 --cpus-per-task="$CPUS" --mem="$MEM"
+        --time="$TIME" --gres=gpu:1
+        --output="$LOG_DIR/%x_%j.out"
+        --export="ALL,$(_common_exports)"
+        --wrap="$WRAP")
+
+    echo ""
+    echo "════════════════════════════════════════════════════"
+    echo "  Mode        : ${ABLATION_ID} 2D Eval Sweep"
+    echo "  Checkpoint  : $CHECKPOINT"
+    echo "  Steps grid  : 50 75 100 125 150 175 200 250"
+    echo "  Alpha grid  : 0.001 0.002 0.003 0.005 0.007 0.010 0.015 0.020 0.030"
+    echo "  Configs     : 72 total"
+    echo "  Partition   : $PARTITION"
+    echo "  Time        : $TIME"
+    echo "  Output dir  : $OUT_DIR"
+    echo "════════════════════════════════════════════════════"
+
+# =============================================================================
+# MODE: M0_CURVE — paper figure curve at fixed alpha
+# =============================================================================
+elif [[ "$MODE" == "M0_CURVE" ]]; then
+
+    if [[ -z "$CHECKPOINT" ]]; then
+        echo "ERROR: --checkpoint is required for M0_CURVE mode."
+        exit 1
+    fi
+    if [[ -z "$BEST_ALPHA" ]]; then
+        echo "ERROR: --alpha is required for M0_CURVE mode."
+        exit 1
+    fi
+
+    PARTITION=commons
+    TIME="00:45:00"   # 10 steps x ~2-3 min each
+    MEM=32G
+    CPUS=10
+    JOB_NAME="${ABLATION_ID}_paper_curve"
+    OUT_DIR="$M0_SWEEP_OUT/${ABLATION_ID}_paper_curve"
+    mkdir -p "$OUT_DIR"
+
+    WRAP=$(cat <<WRAPEOF
+$(_env_setup)
+mamba activate $ENV_PATH
+export RUN_DIR=$OUT_DIR
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+echo "JOB_START jobid=\${SLURM_JOB_ID} host=\$(hostname)"
+echo "${ABLATION_ID} paper curve: alpha=$BEST_ALPHA  checkpoint=$CHECKPOINT"
+which python
+python -c "import torch; print(f'PyTorch: {torch.__version__}  GPU: {torch.cuda.is_available()}')"
+nvidia-smi || true
+python -u $M0_SWEEP_SCRIPT \\
+    --checkpoint $CHECKPOINT \\
+    --ablation-id $ABLATION_ID \\
+    --paper-curve \\
+    --alpha $BEST_ALPHA \\
+    --out-dir $OUT_DIR
+echo "JOB_END date=\$(date)"
+WRAPEOF
+)
+
+    SBATCH_CMD=(sbatch --job-name="$JOB_NAME" --partition="$PARTITION"
+        --nodes=1 --ntasks=1 --cpus-per-task="$CPUS" --mem="$MEM"
+        --time="$TIME" --gres=gpu:1
+        --output="$LOG_DIR/%x_%j.out"
+        --export="ALL,$(_common_exports)"
+        --wrap="$WRAP")
+
+    echo ""
+    echo "════════════════════════════════════════════════════"
+    echo "  Mode        : ${ABLATION_ID} Paper Curve"
+    echo "  Checkpoint  : $CHECKPOINT"
+    echo "  Alpha       : $BEST_ALPHA"
+    echo "  Steps grid  : 1 3 5 10 15 25 50 100 150 200"
+    echo "  Partition   : $PARTITION"
+    echo "  Time        : $TIME"
+    echo "  Output dir  : $OUT_DIR"
+    echo "════════════════════════════════════════════════════"
 
 fi
 
+# =============================================================================
+# Submit or dry-run
+# =============================================================================
+if [[ "$DRY_RUN" == true ]]; then
+    echo "  [DRY RUN] Would submit: ${SBATCH_CMD[*]}"
+else
+    JOB_ID=$("${SBATCH_CMD[@]}")
+    echo "  Submitted: $JOB_ID"
+fi
+
 echo ""
-echo "Monitor with:  squeue -u \$USER"
-echo "Logs:          $LOG_DIR"
+echo "Monitor:  squeue -u \$USER"
+echo "Logs:     $LOG_DIR"
 echo ""
-echo "Inspect A11 v2 results:"
+echo "After A11 HPO completes — inspect best trial:"
 echo "  python -c \""
 echo "    import optuna"
 echo "    from optuna.storages.journal import JournalStorage, JournalFileBackend"
-echo "    storage = JournalStorage(JournalFileBackend('$HPO_DB_DIR/ablation_A11_eval_hpo_v2.log'))"
-echo "    study = optuna.load_study(study_name='ablation_A11_eval_hpo_v2', storage=storage)"
-echo "    print(study.best_trial)"
+echo "    s = JournalStorage(JournalFileBackend('$HPO_DB_DIR/ablation_A11_eval_hpo_v2.log'))"
+echo "    study = optuna.load_study(study_name='ablation_A11_eval_hpo_v2', storage=s)"
+echo "    t = study.best_trial"
+echo "    print(f'best ft_lr={t.params[\"ft_lr\"]:.4e}  ft_steps={t.params[\"ft_steps\"]}  acc={t.value*100:.2f}%')"
 echo "  \""
 echo ""
-echo "Inspect M0 sweep results:"
-echo "  cat $M0_SWEEP_OUT/M0/eval_hp_sweep_M0_*.json | python -m json.tool | grep -A3 best"
+echo "After M0_SWEEP completes — inspect best (steps, alpha):"
+echo "  python -c \""
+echo "    import json, glob"
+echo "    f = sorted(glob.glob('$M0_SWEEP_OUT/M0/*.json'))[-1]"
+echo "    d = json.load(open(f))"
+echo "    print(f'best_steps={d[\"best_steps_so_far\"]}  best_alpha={d[\"best_alpha_so_far\"]}  acc={d[\"best_mean_acc_so_far\"]*100:.2f}%')"
+echo "  \""
