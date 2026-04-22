@@ -486,7 +486,8 @@ def build_config_from_trial(
       3. Apply A12-specific overrides (2kHz data, no IMU, front_end_stride).
       4. Apply fixed values for HP groups that are NOT being searched.
     """
-    from ablation_config import make_base_config
+    sys.path.append(os.path.join(os.path.dirname(__file__), 'test_eval_files'))
+    from ablation_config import make_base_config, replace_head_for_eval
 
     config = make_base_config(ablation_id=ablation_id)
 
@@ -774,7 +775,6 @@ def _objective_supervised(trial: optuna.Trial, config: dict) -> float:
     from MAML.maml_data_pipeline import (
         MetaGestureDataset, maml_mm_collate, reorient_tensor_dict)
     from torch.utils.data import DataLoader
-    from ablation_config import replace_head_for_eval
 
     # ── Load tensor_dict once — reuse for both the flat DL and episodic eval ─
     tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
@@ -902,6 +902,8 @@ def _objective_a11(trial: optuna.Trial) -> float:
         "NEUROMOTOR_REPO",
         "/projects/my13/div-emg/generic-neuromotor-interface"
     )).resolve()))
+    # This is the same dir as ablation_config FYI
+    sys.path.append(os.path.join(os.path.dirname(__file__), 'test_eval_files'))
     from A10_A11_A12_meta_pretrained import MetaEMGWrapper
     model = MetaEMGWrapper(META_CHECKPOINT_PATH, freeze_backbone=True)
     model.to(device)

@@ -78,7 +78,8 @@ print(f"OUT_DIR : {OUT_DIR}")
 # =============================================================================
 # Config — exactly as trial 64 ran, verified against the SLURM log
 # =============================================================================
-from ablation_config import make_base_config, VAL_PIDS, FIXED_SEED
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'test_eval_files'))
+from ablation_config import make_base_config, VAL_PIDS, FIXED_SEED, build_maml_moe_model, count_parameters
 
 def build_config() -> dict:
     config = make_base_config(ablation_id="M0")
@@ -148,7 +149,6 @@ for k in ["cnn_base_filters", "lstm_hidden", "groupnorm_num_groups",
 # =============================================================================
 # Build model & load checkpoint
 # =============================================================================
-from ablation_config import build_maml_moe_model, count_parameters
 from MAML.mamlpp import PerParamPerStepLSLR, named_param_dict
 
 model = build_maml_moe_model(config)
