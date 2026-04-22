@@ -126,6 +126,12 @@ def make_base_config(ablation_id: str) -> dict:
     config["use_demographics"] = False
     config["use_film_x_demo"]  = False
     config["FILM_on_context_or_demo"] = "context"
+    # I dont think this is used at all yet?
+    ## Also, for the figure at least, we should probably drop ET, Left, and Man from this since otherwise we have 15 cols instead of 12
+    #config["demo_dim_labels"] = ["time_disabled", "age", "BMI", "DASH_score", "disability_coding_ET", "disability_coding_MD", 
+    # "disability_coding_No_Disability", "disability_coding_PN", "disability_coding_SCI", "disability_coding_other", "handedness_Left",
+    # "handedness_Right", "gender_Man", "gender_Non-binary", "gender_Woman",
+    #]
 
     # ── Task setup ────────────────────────────────────────────────────────────
     config["n_way"]      = 3    # eval/finetuning: 3-way classification
