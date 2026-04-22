@@ -97,7 +97,7 @@ def make_base_config(ablation_id: str) -> dict:
     config["model_type"]   = "DeepCNNLSTM"   # default; override for special cases
 
     # ── Paths ─────────────────────────────────────────────────────────────────
-    config["user_split_json_filepath"] = str(USER_SPLIT_JSON)
+    config["user_split_json_filepath"] = str(USER_SPLIT_JSON)  # NOTE: This was only used with HPO. Testing does L2SO
     config["results_save_dir"]         = str(RUN_DIR)
     config["models_save_dir"]          = str(RUN_DIR)
     config["emg_imu_pkl_full_path"]    = str(DATA_DIR / "filtered_datasets"
@@ -107,9 +107,12 @@ def make_base_config(ablation_id: str) -> dict:
     config["NOTS"] = True   # cluster run flag (keeps old local-path logic from triggering)
 
     # ── User splits ───────────────────────────────────────────────────────────
+    # TODO: Confirm that this is getting overwritten during L2SO
     config["train_PIDs"] = TRAIN_PIDS
     config["val_PIDs"]   = VAL_PIDS
     config["test_PIDs"]  = TEST_PIDS
+    config["all_PIDs"]  = TRAIN_PIDS + VAL_PIDS + TEST_PIDS
+    config["test_procedure"] = 'hpo_test_split'  # Either 'hpo_test_split' or "L2SO"
 
     # ── Input dimensions (FIXED per spec) ─────────────────────────────────────
     config["sequence_length"] = 64
