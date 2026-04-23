@@ -60,6 +60,207 @@ import torch
 import optuna
 from optuna.storages.journal import JournalStorage, JournalFileBackend
 
+#####################################################################
+# COPIED FROM WHERE IT IS DEFINED IN A10_A11_A12 file...
+import torch.nn as nn
+
+class MetaEMGWrapper(nn.Module):
+    """
+    Wraps Meta's DiscreteGesturesArchitecture so it slots into our ablation
+    eval pipeline (pretrain_finetune.py + ablation_config.py).
+
+    What this wrapper does:
+      1. Loads the pretrained weights from the Lightning checkpoint (stripping
+         the "network." key prefix added by Lightning's LightningModule).
+      2. Exposes a .head attribute (aliased to network.projection) so that
+         replace_head_for_eval() works without any changes.
+      3. Adapts the forward signature to (x_emg, x_imu=None, demographics=None)
+         to match the interface expected by finetune_and_eval_user().
+      4. Pools the frame-level output (B, n_classes, T_out) → (B, n_classes)
+         via mean pooling over time, giving one logit vector per window.
+
+    After construction the backbone is frozen. For A11 (fine-tuning),
+    finetune_and_eval_user() handles unfreezing via the mode argument.
+
+    Args:
+        checkpoint_path : path to the Lightning .ckpt file
+        freeze_backbone : if True (default), freeze all params except .head
+                          Set to False for full fine-tuning (A11 full mode).
+                          NOTE: finetune_and_eval_user manages freezing itself,
+                          so you can leave this True here.
+    """
+
+    def __init__(self, checkpoint_path: Path, freeze_backbone: bool = True):
+        super().__init__()
+
+        # ── Import Meta's architecture class ─────────────────────────────────
+        # We import here (not at module level) so the script can be imported
+        # even if the neuromotor repo isn't on the path yet.
+        try:
+            # NOTE: I installed their repo as a package on the cluster, so this should work? We'll see
+            from generic_neuromotor_interface.networks import DiscreteGesturesArchitecture
+        except ImportError as e:
+            raise ImportError(
+                f"Could not import DiscreteGesturesArchitecture from the Meta repo. "
+                f"Check that NEUROMOTOR_REPO is set correctly and the repo is installed.\n"
+                f"Original error: {e}"
+            )
+
+        # ── Instantiate the architecture (default params match the checkpoint) ─
+        self.network = DiscreteGesturesArchitecture(
+            input_channels=16,
+            conv_output_channels=512,
+            kernel_width=21,
+            stride=10,
+            lstm_hidden_size=512,
+            lstm_num_layers=3,
+            output_channels=9,   # original 9-class head; replaced at eval time
+        )
+
+        # ── Load pretrained weights ───────────────────────────────────────────
+        self._load_checkpoint(checkpoint_path)
+
+        # ── Expose .head so replace_head_for_eval() works ─────────────────────
+        # replace_head_for_eval() does: model.head = nn.Linear(in_features, n_way)
+        # We make .head a property-like alias by storing a reference here.
+        # After replace_head_for_eval runs, self.head and self.network.projection
+        # will point to different objects — that is intentional and correct.
+        # forward() uses self.head (not self.network.projection) after replacement.
+        self.head = self.network.projection  # Linear(512, 9) initially
+
+        # ── Optionally freeze backbone ────────────────────────────────────────
+        if freeze_backbone:
+            self._freeze_backbone()
+
+    # ── Checkpoint loading ────────────────────────────────────────────────────
+
+    def _load_checkpoint(self, checkpoint_path: Path):
+        """
+        Load a Lightning checkpoint, strip the "network." prefix from keys,
+        and load into self.network.
+        """
+        checkpoint_path = Path(checkpoint_path)
+        assert checkpoint_path.exists(), (
+            f"Checkpoint not found: {checkpoint_path}\n"
+            f"Run: python -m generic_neuromotor_interface.scripts.download_models "
+            f"--task discrete_gestures --output-dir ~/emg_models"
+        )
+
+        ckpt = torch.load(checkpoint_path, map_location="cpu")
+        assert "state_dict" in ckpt, (
+            f"Expected 'state_dict' key in checkpoint. Got keys: {list(ckpt.keys())}"
+        )
+
+        raw_sd = ckpt["state_dict"]
+
+        # Lightning prefixes everything with "network." — strip it.
+        PREFIX = "network."
+        stripped_sd = {}
+        for k, v in raw_sd.items():
+            assert k.startswith(PREFIX), (
+                f"Unexpected key in checkpoint (does not start with '{PREFIX}'): {k!r}\n"
+                f"If Meta changed their Lightning module structure, update PREFIX."
+            )
+            stripped_sd[k[len(PREFIX):]] = v
+
+        missing, unexpected = self.network.load_state_dict(stripped_sd, strict=True)
+        # strict=True: any mismatch is a hard error — we want to know immediately.
+        assert len(missing) == 0, f"Missing keys after load: {missing}"
+        assert len(unexpected) == 0, f"Unexpected keys after load: {unexpected}"
+
+        print(f"[MetaEMGWrapper] Loaded pretrained weights from {checkpoint_path}")
+
+    # ── Backbone freezing ─────────────────────────────────────────────────────
+
+    def _freeze_backbone(self):
+        """Freeze everything in self.network except self.head (projection layer)."""
+        for name, param in self.network.named_parameters():
+            # Freeze all params. finetune_and_eval_user() will selectively
+            # unfreeze via mode='head_only' or mode='full'.
+            param.requires_grad_(False)
+        print("[MetaEMGWrapper] Backbone frozen.")
+
+    # ── Forward pass ──────────────────────────────────────────────────────────
+
+    def forward(
+        self,
+        x_emg: torch.Tensor,
+        x_imu=None,          # ignored — Meta's model is EMG-only
+        demographics=None,   # ignored
+    ) -> torch.Tensor:
+        """
+        Args:
+            x_emg : (B, C, T) — channel-first, 2kHz raw EMG, C=16
+                     Must satisfy T >= 21 (Conv1d kernel width).
+
+        Returns:
+            logits : (B, n_classes) — mean-pooled over time dimension.
+                     n_classes = 9 initially; changes to n_way after
+                     replace_head_for_eval() swaps self.head.
+        """
+        # ── Backbone forward (everything up to but not including the head) ────
+        # We call backbone() rather than self.network() so we can intercept
+        # before self.head (which may have been replaced by replace_head_for_eval).
+        features = self._backbone_forward(x_emg)  # (B, T_out, 512)
+
+        # ── Head (may be the original projection or the replaced n_way head) ──
+        # self.head is a Linear(512, n_classes).
+        # features: (B, T_out, 512) → logits_per_frame: (B, T_out, n_classes)
+        logits_per_frame = self.head(features)     # (B, T_out, n_classes)
+
+        # ── Aggregate: mean-pool over time → single logit vector per window ───
+        logits = logits_per_frame.mean(dim=1)      # (B, n_classes)
+
+        return logits
+
+    def _backbone_forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Run everything in self.network EXCEPT the final projection layer,
+        returning the post-LSTM-LayerNorm feature tensor of shape (B, T_out, 512).
+
+        This is called by forward() and also directly by
+        _extract_features_for_prototypical() for zero-shot eval.
+        """
+        net = self.network
+
+        # Reinhard compression
+        x = net.compression(x)          # (B, 16, T)
+
+        # Conv1d + ReLU + Dropout
+        x = net.conv_layer(x)           # (B, 512, T_out)
+        x = net.relu(x)
+        x = net.dropout(x)
+
+        # LayerNorm expects (B, T_out, 512)
+        x = x.transpose(1, 2)           # (B, T_out, 512)
+        x = net.post_conv_layer_norm(x)
+
+        # Stacked LSTM
+        x, _ = net.lstm(x)              # (B, T_out, 512)
+
+        # Post-LSTM LayerNorm
+        x = net.post_lstm_layer_norm(x) # (B, T_out, 512)
+
+        return x  # (B, T_out, 512)
+
+    def get_pooled_features(self, x_emg: torch.Tensor) -> torch.Tensor:
+        """
+        Extract mean-pooled backbone features for prototypical zero-shot eval.
+
+        Args:
+            x_emg : (B, C, T)
+
+        Returns:
+            features : (B, 512) — mean-pooled over time, L2-normalised.
+                        L2 normalisation is standard for prototypical networks
+                        and cosine-distance nearest-neighbour classifiers.
+        """
+        with torch.no_grad():
+            feats = self._backbone_forward(x_emg)  # (B, T_out, 512)
+            feats = feats.mean(dim=1)               # (B, 512)
+            feats = nn.functional.normalize(feats, dim=-1)  # L2 normalise
+        return feats
+
 # =============================================================================
 # Environment / paths
 # =============================================================================
@@ -464,204 +665,3 @@ if __name__ == "__main__":
         print(f"    ft_steps : {{50, 100, 150, 200, 250, 300}}")
         print(f"{'='*70}\n")
         run_study(n_trials=args.n_trials)
-
-#####################################################################
-# COPIED FROM WHERE IT IS DEFINED IN A10_A11_A12 file...
-import torch.nn as nn
-
-class MetaEMGWrapper(nn.Module):
-    """
-    Wraps Meta's DiscreteGesturesArchitecture so it slots into our ablation
-    eval pipeline (pretrain_finetune.py + ablation_config.py).
-
-    What this wrapper does:
-      1. Loads the pretrained weights from the Lightning checkpoint (stripping
-         the "network." key prefix added by Lightning's LightningModule).
-      2. Exposes a .head attribute (aliased to network.projection) so that
-         replace_head_for_eval() works without any changes.
-      3. Adapts the forward signature to (x_emg, x_imu=None, demographics=None)
-         to match the interface expected by finetune_and_eval_user().
-      4. Pools the frame-level output (B, n_classes, T_out) → (B, n_classes)
-         via mean pooling over time, giving one logit vector per window.
-
-    After construction the backbone is frozen. For A11 (fine-tuning),
-    finetune_and_eval_user() handles unfreezing via the mode argument.
-
-    Args:
-        checkpoint_path : path to the Lightning .ckpt file
-        freeze_backbone : if True (default), freeze all params except .head
-                          Set to False for full fine-tuning (A11 full mode).
-                          NOTE: finetune_and_eval_user manages freezing itself,
-                          so you can leave this True here.
-    """
-
-    def __init__(self, checkpoint_path: Path, freeze_backbone: bool = True):
-        super().__init__()
-
-        # ── Import Meta's architecture class ─────────────────────────────────
-        # We import here (not at module level) so the script can be imported
-        # even if the neuromotor repo isn't on the path yet.
-        try:
-            # NOTE: I installed their repo as a package on the cluster, so this should work? We'll see
-            from generic_neuromotor_interface.networks import DiscreteGesturesArchitecture
-        except ImportError as e:
-            raise ImportError(
-                f"Could not import DiscreteGesturesArchitecture from the Meta repo. "
-                f"Check that NEUROMOTOR_REPO is set correctly and the repo is installed.\n"
-                f"Original error: {e}"
-            )
-
-        # ── Instantiate the architecture (default params match the checkpoint) ─
-        self.network = DiscreteGesturesArchitecture(
-            input_channels=16,
-            conv_output_channels=512,
-            kernel_width=21,
-            stride=10,
-            lstm_hidden_size=512,
-            lstm_num_layers=3,
-            output_channels=9,   # original 9-class head; replaced at eval time
-        )
-
-        # ── Load pretrained weights ───────────────────────────────────────────
-        self._load_checkpoint(checkpoint_path)
-
-        # ── Expose .head so replace_head_for_eval() works ─────────────────────
-        # replace_head_for_eval() does: model.head = nn.Linear(in_features, n_way)
-        # We make .head a property-like alias by storing a reference here.
-        # After replace_head_for_eval runs, self.head and self.network.projection
-        # will point to different objects — that is intentional and correct.
-        # forward() uses self.head (not self.network.projection) after replacement.
-        self.head = self.network.projection  # Linear(512, 9) initially
-
-        # ── Optionally freeze backbone ────────────────────────────────────────
-        if freeze_backbone:
-            self._freeze_backbone()
-
-    # ── Checkpoint loading ────────────────────────────────────────────────────
-
-    def _load_checkpoint(self, checkpoint_path: Path):
-        """
-        Load a Lightning checkpoint, strip the "network." prefix from keys,
-        and load into self.network.
-        """
-        checkpoint_path = Path(checkpoint_path)
-        assert checkpoint_path.exists(), (
-            f"Checkpoint not found: {checkpoint_path}\n"
-            f"Run: python -m generic_neuromotor_interface.scripts.download_models "
-            f"--task discrete_gestures --output-dir ~/emg_models"
-        )
-
-        ckpt = torch.load(checkpoint_path, map_location="cpu")
-        assert "state_dict" in ckpt, (
-            f"Expected 'state_dict' key in checkpoint. Got keys: {list(ckpt.keys())}"
-        )
-
-        raw_sd = ckpt["state_dict"]
-
-        # Lightning prefixes everything with "network." — strip it.
-        PREFIX = "network."
-        stripped_sd = {}
-        for k, v in raw_sd.items():
-            assert k.startswith(PREFIX), (
-                f"Unexpected key in checkpoint (does not start with '{PREFIX}'): {k!r}\n"
-                f"If Meta changed their Lightning module structure, update PREFIX."
-            )
-            stripped_sd[k[len(PREFIX):]] = v
-
-        missing, unexpected = self.network.load_state_dict(stripped_sd, strict=True)
-        # strict=True: any mismatch is a hard error — we want to know immediately.
-        assert len(missing) == 0, f"Missing keys after load: {missing}"
-        assert len(unexpected) == 0, f"Unexpected keys after load: {unexpected}"
-
-        print(f"[MetaEMGWrapper] Loaded pretrained weights from {checkpoint_path}")
-
-    # ── Backbone freezing ─────────────────────────────────────────────────────
-
-    def _freeze_backbone(self):
-        """Freeze everything in self.network except self.head (projection layer)."""
-        for name, param in self.network.named_parameters():
-            # Freeze all params. finetune_and_eval_user() will selectively
-            # unfreeze via mode='head_only' or mode='full'.
-            param.requires_grad_(False)
-        print("[MetaEMGWrapper] Backbone frozen.")
-
-    # ── Forward pass ──────────────────────────────────────────────────────────
-
-    def forward(
-        self,
-        x_emg: torch.Tensor,
-        x_imu=None,          # ignored — Meta's model is EMG-only
-        demographics=None,   # ignored
-    ) -> torch.Tensor:
-        """
-        Args:
-            x_emg : (B, C, T) — channel-first, 2kHz raw EMG, C=16
-                     Must satisfy T >= 21 (Conv1d kernel width).
-
-        Returns:
-            logits : (B, n_classes) — mean-pooled over time dimension.
-                     n_classes = 9 initially; changes to n_way after
-                     replace_head_for_eval() swaps self.head.
-        """
-        # ── Backbone forward (everything up to but not including the head) ────
-        # We call backbone() rather than self.network() so we can intercept
-        # before self.head (which may have been replaced by replace_head_for_eval).
-        features = self._backbone_forward(x_emg)  # (B, T_out, 512)
-
-        # ── Head (may be the original projection or the replaced n_way head) ──
-        # self.head is a Linear(512, n_classes).
-        # features: (B, T_out, 512) → logits_per_frame: (B, T_out, n_classes)
-        logits_per_frame = self.head(features)     # (B, T_out, n_classes)
-
-        # ── Aggregate: mean-pool over time → single logit vector per window ───
-        logits = logits_per_frame.mean(dim=1)      # (B, n_classes)
-
-        return logits
-
-    def _backbone_forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Run everything in self.network EXCEPT the final projection layer,
-        returning the post-LSTM-LayerNorm feature tensor of shape (B, T_out, 512).
-
-        This is called by forward() and also directly by
-        _extract_features_for_prototypical() for zero-shot eval.
-        """
-        net = self.network
-
-        # Reinhard compression
-        x = net.compression(x)          # (B, 16, T)
-
-        # Conv1d + ReLU + Dropout
-        x = net.conv_layer(x)           # (B, 512, T_out)
-        x = net.relu(x)
-        x = net.dropout(x)
-
-        # LayerNorm expects (B, T_out, 512)
-        x = x.transpose(1, 2)           # (B, T_out, 512)
-        x = net.post_conv_layer_norm(x)
-
-        # Stacked LSTM
-        x, _ = net.lstm(x)              # (B, T_out, 512)
-
-        # Post-LSTM LayerNorm
-        x = net.post_lstm_layer_norm(x) # (B, T_out, 512)
-
-        return x  # (B, T_out, 512)
-
-    def get_pooled_features(self, x_emg: torch.Tensor) -> torch.Tensor:
-        """
-        Extract mean-pooled backbone features for prototypical zero-shot eval.
-
-        Args:
-            x_emg : (B, C, T)
-
-        Returns:
-            features : (B, 512) — mean-pooled over time, L2-normalised.
-                        L2 normalisation is standard for prototypical networks
-                        and cosine-distance nearest-neighbour classifiers.
-        """
-        with torch.no_grad():
-            feats = self._backbone_forward(x_emg)  # (B, T_out, 512)
-            feats = feats.mean(dim=1)               # (B, 512)
-            feats = nn.functional.normalize(feats, dim=-1)  # L2 normalise
-        return feats
