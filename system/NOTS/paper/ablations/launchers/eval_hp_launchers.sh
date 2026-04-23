@@ -19,10 +19,10 @@
 #
 # Full workflow:
 #   bash eval_hp_launchers.sh A11 --n-trials 50
-#   bash eval_hp_launchers.sh M0_SWEEP --checkpoint /path/to/ckpt.pt --sweep-alpha
+#   bash eval_hp_launchers.sh M0_SWEEP
 #   # ... wait for both to finish, inspect JSONs for best ft_lr and best alpha ...
 #   bash eval_hp_launchers.sh A11_CURVE --ft-lr <best_ft_lr>
-#   bash eval_hp_launchers.sh M0_CURVE  --checkpoint /path/to/ckpt.pt --alpha <best_alpha>
+#   bash eval_hp_launchers.sh M0_CURVE  [--alpha <best_alpha>]
 #
 # A12 uses the M0 paper curve result directly — no separate sweep needed.
 # If you want to verify, pass --ablation-id A12 to M0_SWEEP / M0_CURVE.
@@ -32,10 +32,11 @@
 #   bash eval_hp_launchers.sh A11 --n-trials 50 --dry-run
 #   bash eval_hp_launchers.sh A11 --debug
 #   bash eval_hp_launchers.sh A11_CURVE --ft-lr 0.05
-#   bash eval_hp_launchers.sh M0_SWEEP --checkpoint /path/to/ckpt.pt --sweep-alpha
-#   bash eval_hp_launchers.sh M0_CURVE  --checkpoint /path/to/ckpt.pt --alpha 0.005
-#   bash eval_hp_launchers.sh M0_SWEEP  --checkpoint /path/to/A12_ckpt.pt \
-#                                        --ablation-id A12 --sweep-alpha
+#   bash eval_hp_launchers.sh M0_SWEEP
+#   bash eval_hp_launchers.sh M0_SWEEP  --checkpoint /path/to/ckpt.pt
+#   bash eval_hp_launchers.sh M0_CURVE
+#   bash eval_hp_launchers.sh M0_CURVE  --alpha 0.005
+#   bash eval_hp_launchers.sh M0_SWEEP  --checkpoint /path/to/A12_ckpt.pt --ablation-id A12
 
 set -euo pipefail
 
@@ -57,6 +58,12 @@ M0_SWEEP_OUT=/scratch/my13/kai/runs/paper/ablations/eval_hp/M0_sweep
 mkdir -p "$HPO_DB_DIR" "$LOG_DIR" "$A11_OUT_BASE" "$M0_SWEEP_OUT"
 
 # =============================================================================
+# Defaults — edit these when you have new best values from sweeps
+# =============================================================================
+DEFAULT_CHECKPOINT=/projects/my13/kai/meta-pers-gest/checkpoints/M0_best.pt
+DEFAULT_ALPHA=0.005   # update after M0_SWEEP completes
+
+# =============================================================================
 # Parse arguments
 # =============================================================================
 MODE=""
@@ -64,7 +71,6 @@ DRY_RUN=false
 DEBUG=false
 N_TRIALS=100
 CHECKPOINT=""
-SWEEP_ALPHA=false
 ABLATION_ID="M0"
 BEST_FT_LR=""
 BEST_ALPHA=""
@@ -80,7 +86,6 @@ while [[ $i -lt ${#args_array[@]} ]]; do
         M0_CURVE)     MODE="M0_CURVE" ;;
         --dry-run)    DRY_RUN=true ;;
         --debug)      DEBUG=true ;;
-        --sweep-alpha) SWEEP_ALPHA=true ;;
         --n-trials)    i=$((i+1)); N_TRIALS="${args_array[$i]}" ;;
         --checkpoint)  i=$((i+1)); CHECKPOINT="${args_array[$i]}" ;;
         --ablation-id) i=$((i+1)); ABLATION_ID="${args_array[$i]}" ;;
@@ -97,9 +102,22 @@ if [[ -z "$MODE" ]]; then
     echo "Usage:"
     echo "  bash eval_hp_launchers.sh A11       [--n-trials N] [--dry-run] [--debug]"
     echo "  bash eval_hp_launchers.sh A11_CURVE --ft-lr <value> [--dry-run]"
-    echo "  bash eval_hp_launchers.sh M0_SWEEP  --checkpoint /path/to/ckpt.pt --sweep-alpha [--ablation-id A12] [--dry-run]"
-    echo "  bash eval_hp_launchers.sh M0_CURVE  --checkpoint /path/to/ckpt.pt --alpha <value> [--ablation-id A12] [--dry-run]"
+    echo "  bash eval_hp_launchers.sh M0_SWEEP  [--checkpoint /path/to/ckpt.pt] [--ablation-id A12] [--dry-run]"
+    echo "  bash eval_hp_launchers.sh M0_CURVE  [--checkpoint /path/to/ckpt.pt] [--alpha <value>] [--ablation-id A12] [--dry-run]"
     exit 1
+fi
+
+# Apply defaults for checkpoint and alpha after parsing so explicit CLI args take precedence
+if [[ -z "$CHECKPOINT" ]]; then
+    CHECKPOINT="$DEFAULT_CHECKPOINT"
+    echo "INFO: --checkpoint not specified, using default: $CHECKPOINT"
+fi
+if [[ -z "$BEST_ALPHA" ]]; then
+    BEST_ALPHA="$DEFAULT_ALPHA"
+    # Only notify when alpha is actually relevant
+    if [[ "$MODE" == "M0_CURVE" ]]; then
+        echo "INFO: --alpha not specified, using default: $BEST_ALPHA"
+    fi
 fi
 
 # =============================================================================
@@ -248,17 +266,10 @@ WRAPEOF
 
 # =============================================================================
 # MODE: M0_SWEEP — 2D eval sweep (find best steps + alpha)
+# --sweep-alpha is always passed to the python script for this mode;
+# it is not a CLI toggle because M0_SWEEP always does a sweep by definition.
 # =============================================================================
 elif [[ "$MODE" == "M0_SWEEP" ]]; then
-
-    if [[ -z "$CHECKPOINT" ]]; then
-        echo "ERROR: --checkpoint is required for M0_SWEEP mode."
-        exit 1
-    fi
-    if [[ "$SWEEP_ALPHA" != "true" ]]; then
-        echo "ERROR: --sweep-alpha is required for M0_SWEEP mode."
-        exit 1
-    fi
 
     PARTITION=commons
     TIME="03:30:00"   # 8 steps x 9 alphas x ~2 min + buffer
@@ -310,15 +321,6 @@ WRAPEOF
 # MODE: M0_CURVE — paper figure curve at fixed alpha
 # =============================================================================
 elif [[ "$MODE" == "M0_CURVE" ]]; then
-
-    if [[ -z "$CHECKPOINT" ]]; then
-        echo "ERROR: --checkpoint is required for M0_CURVE mode."
-        exit 1
-    fi
-    if [[ -z "$BEST_ALPHA" ]]; then
-        echo "ERROR: --alpha is required for M0_CURVE mode."
-        exit 1
-    fi
 
     PARTITION=commons
     TIME="00:45:00"   # 10 steps x ~2-3 min each
@@ -382,20 +384,20 @@ echo ""
 echo "Monitor:  squeue -u \$USER"
 echo "Logs:     $LOG_DIR"
 echo ""
-echo "After A11 HPO completes — inspect best trial:"
-echo "  python -c \""
-echo "    import optuna"
-echo "    from optuna.storages.journal import JournalStorage, JournalFileBackend"
-echo "    s = JournalStorage(JournalFileBackend('$HPO_DB_DIR/ablation_A11_eval_hpo_v2.log'))"
-echo "    study = optuna.load_study(study_name='ablation_A11_eval_hpo_v2', storage=s)"
-echo "    t = study.best_trial"
-echo "    print(f'best ft_lr={t.params[\"ft_lr\"]:.4e}  ft_steps={t.params[\"ft_steps\"]}  acc={t.value*100:.2f}%')"
-echo "  \""
-echo ""
-echo "After M0_SWEEP completes — inspect best (steps, alpha):"
-echo "  python -c \""
-echo "    import json, glob"
-echo "    f = sorted(glob.glob('$M0_SWEEP_OUT/M0/*.json'))[-1]"
-echo "    d = json.load(open(f))"
-echo "    print(f'best_steps={d[\"best_steps_so_far\"]}  best_alpha={d[\"best_alpha_so_far\"]}  acc={d[\"best_mean_acc_so_far\"]*100:.2f}%')"
-echo "  \""
+#echo "After A11 HPO completes — inspect best trial:"
+#echo "  python -c \""
+#echo "    import optuna"
+#echo "    from optuna.storages.journal import JournalStorage, JournalFileBackend"
+#echo "    s = JournalStorage(JournalFileBackend('$HPO_DB_DIR/ablation_A11_eval_hpo_v2.log'))"
+#echo "    study = optuna.load_study(study_name='ablation_A11_eval_hpo_v2', storage=s)"
+#echo "    t = study.best_trial"
+#echo "    print(f'best ft_lr={t.params[\"ft_lr\"]:.4e}  ft_steps={t.params[\"ft_steps\"]}  acc={t.value*100:.2f}%')"
+#echo "  \""
+#echo ""
+#echo "After M0_SWEEP completes — inspect best (steps, alpha):"
+#echo "  python -c \""
+#echo "    import json, glob"
+#echo "    f = sorted(glob.glob('$M0_SWEEP_OUT/M0/*.json'))[-1]"
+#echo "    d = json.load(open(f))"
+#echo "    print(f'best_steps={d[\"best_steps_so_far\"]}  best_alpha={d[\"best_alpha_so_far\"]}  acc={d[\"best_mean_acc_so_far\"]*100:.2f}%')"
+#echo "  \""
