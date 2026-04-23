@@ -2,7 +2,7 @@
 *.xlsx
 *.h5
 
-gesture_encodering.ipynb
+system/universal_preprocessing/gesture_encoding.ipynb
 
 *.pyc
 __pycache__/
