@@ -35,7 +35,7 @@ warnings.filterwarnings("ignore", message=".*weights_only=False.*", category=Fut
 # =============================================================================
 CHECKPOINT_PATH = os.environ.get(
     "CHECKPOINT_PATH",
-    "/scratch/my13/kai/runs/paper/ablations/hpo/M0/trial_25/trial_64_fold0_best.pt",
+    "/projects/my13/kai/meta-pers-gest/pers-gest-cls/hpo_best_models/M0_best.pt",
 )
 CODE_DIR = os.environ.get(
     "CODE_DIR",

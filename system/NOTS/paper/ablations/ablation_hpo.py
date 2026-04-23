@@ -283,7 +283,7 @@ M0_WARM_START_PARAMS: list[dict] = [
 ]
 
 # Ablations that receive the M0 warm-start (identical HP space to M0's v3 study)
-ABLATIONS_WITH_M0_WARMSTART = {"M0", "A5", "A8", "A12"}
+ABLATIONS_WITH_M0_WARMSTART = {} #{"M0", "A5", "A8", "A12"}
 
 # =============================================================================
 # HP suggestion helpers
