@@ -1,7 +1,8 @@
 *.pkl
 *.xlsx
 *.h5
-April_25/results/
+
+gesture_encodering.ipynb
 
 *.pyc
 __pycache__/
