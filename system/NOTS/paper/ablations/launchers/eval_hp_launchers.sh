@@ -48,8 +48,8 @@ HPO_DB_DIR=/scratch/my13/kai/meta-pers-gest/optuna_dbs
 LOG_DIR=/scratch/my13/kai/runs/paper/ablations/eval_hp/logs
 ENV_PATH=/projects/my13/kai/meta-pers-gest/envs/fl-torch
 
-A11_HPO_SCRIPT="$CODE_DIR/system/NOTS/paper/ablations/A11_eval_hpo_extended.py"
-M0_SWEEP_SCRIPT="$CODE_DIR/system/NOTS/paper/ablations/maml_eval_hp_sweep.py"
+A11_HPO_SCRIPT="$CODE_DIR/system/NOTS/paper/ablations/sweeps/A11_eval_hpo_extended.py"
+M0_SWEEP_SCRIPT="$CODE_DIR/system/NOTS/paper/ablations/sweeps/maml_eval_hp_sweep.py"
 
 A11_OUT_BASE=/scratch/my13/kai/runs/paper/ablations/eval_hp/A11_v2
 M0_SWEEP_OUT=/scratch/my13/kai/runs/paper/ablations/eval_hp/M0_sweep
