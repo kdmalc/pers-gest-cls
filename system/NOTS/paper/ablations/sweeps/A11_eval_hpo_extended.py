@@ -315,7 +315,7 @@ EMG_2KHZ_IN_CH   = 16
 EMG_2KHZ_SEQ_LEN = 4300
 
 USER_SPLIT_JSON = (
-    CODE_DIR / "system" / "fixed_user_splits" / "4kfcv_splits_shared_test.json"
+    CODE_DIR / "system" / "fixed_user_splits" / "hpo_strat_kapanji_split.json"
 )
 FOLD_IDX = 0
 

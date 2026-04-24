@@ -59,7 +59,7 @@ print(f"RUN_DIR : {RUN_DIR}")
 RUN_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Split file ────────────────────────────────────────────────────────────────
-USER_SPLIT_JSON = CODE_DIR / "system" / "fixed_user_splits" / "4kfcv_splits_shared_test.json"
+USER_SPLIT_JSON = CODE_DIR / "system" / "fixed_user_splits" / "hpo_strat_kapanji_split.json"
 
 with open(USER_SPLIT_JSON, "r") as f:
     ALL_SPLITS = json.load(f)

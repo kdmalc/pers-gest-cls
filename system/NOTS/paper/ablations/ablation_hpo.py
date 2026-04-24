@@ -617,7 +617,7 @@ def _check_moe_collapse(history_or_logs: dict, num_experts: int) -> float | None
 # =============================================================================
 
 USER_SPLIT_JSON = (CODE_DIR / "system" / "fixed_user_splits"
-                   / "4kfcv_splits_shared_test.json")
+                   / "hpo_strat_kapanji_split.json")
 
 with open(USER_SPLIT_JSON, "r") as f:
     ALL_SPLITS = json.load(f)
