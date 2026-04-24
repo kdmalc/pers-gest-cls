@@ -33,7 +33,7 @@ set -euo pipefail
 CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
 DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
 HPO_SCRIPT_PATH="$CODE_DIR/system/NOTS/paper/ablations/ablation_hpo.py"
-MOE_HPO_SCRIPT_PATH="$CODE_DIR/system/MOE/MOE_hpo.py"
+MOE_HPO_SCRIPT_PATH="$CODE_DIR/system/MOE/M0_MOE_hpo.py"
 HPO_DB_DIR=/scratch/my13/kai/meta-pers-gest/optuna_dbs
 HPO_OUT_BASE=/scratch/my13/kai/runs/paper/ablations/hpo
 LOG_DIR=/scratch/my13/kai/runs/paper/ablations/hpo/logs
@@ -180,7 +180,7 @@ _resolve_n_trials() {
 # Shared wrap script body — identical for both debug and production.
 # Uses shell variables that are set per-ablation in the loop below.
 # $4 = hpo_script_path: either $HPO_SCRIPT_PATH (ablation_hpo.py)
-#                     or $MOE_HPO_SCRIPT_PATH (MOE_hpo.py)
+#                     or $MOE_HPO_SCRIPT_PATH (M0_MOE_hpo.py)
 _make_wrap_body() {
     local out_dir="$1"
     local ablation="$2"
@@ -232,7 +232,7 @@ for ABLATION in "${ABLATIONS[@]}"; do
         EFFECTIVE_PARTITION=$(get_resource PARTITION "$ABLATION" "scavenge")
         EFFECTIVE_CONCURRENCY=$(get_resource CONCURRENCY "$ABLATION" "50")
         EFFECTIVE_SCRIPT="$MOE_HPO_SCRIPT_PATH"
-        # Journal name matches STUDY_NAME constant in MOE_hpo.py
+        # Journal name matches STUDY_NAME constant in M0_MOE_hpo.py
         EFFECTIVE_JOURNAL="$HPO_DB_DIR/moe_hpo_1s3w_hpo_v1.log"
     else
         EFFECTIVE_PARTITION="$PARTITION"
