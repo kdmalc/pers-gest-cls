@@ -74,12 +74,13 @@ for arg in "$@"; do
     esac
 done
 
-# Re-parse cleanly to handle --n-trials N
+# Re-parse cleanly to handle --n-trials N and --partition PARTITION
 ABLATIONS=()
 DRY_RUN=false
 DEBUG=false
 N_TRIALS=100
 EXPLICIT_N_TRIALS=""   # empty = user did not pass --n-trials explicitly
+OVERRIDE_PARTITION=""  # empty = use per-ablation default; set via --partition to override all
 i=0
 args_array=("$@")
 while [[ $i -lt ${#args_array[@]} ]]; do
@@ -88,7 +89,8 @@ while [[ $i -lt ${#args_array[@]} ]]; do
         --dry-run)    DRY_RUN=true ;;
         --debug)      DEBUG=true ;;
         --n-trials)   i=$((i+1)); N_TRIALS="${args_array[$i]}"; EXPLICIT_N_TRIALS="${args_array[$i]}" ;;
-        all)          ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 A12) ;;  # MOE_hpo excluded from 'all'
+        --partition)  i=$((i+1)); OVERRIDE_PARTITION="${args_array[$i]}" ;;
+        all)          ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 A12) ;;  # M0_MOE_hpo excluded from 'all'
         -*)           echo "WARNING: Unknown flag '$arg' — ignoring." ;;
         *)            ABLATIONS+=("$arg") ;;
     esac
@@ -97,8 +99,9 @@ done
 
 if [[ ${#ABLATIONS[@]} -eq 0 ]]; then
     echo "ERROR: No ablations specified."
-    echo "Usage: bash hpo_ablation_launcher.sh [M0|A1|A2|A3|A4|A5|A7|A8|A11|A12|MOE_hpo|all] [--dry-run] [--debug] [--n-trials N]"
-    echo "       MOE_hpo runs on scavenge partition with 500 trials by default."
+    echo "Usage: bash hpo_ablation_launcher.sh [M0|A1|A2|A3|A4|A5|A7|A8|A11|A12|M0_MOE_hpo|all] [--dry-run] [--debug] [--n-trials N] [--partition PARTITION]"
+    echo "       M0_MOE_hpo runs on commons partition with 500 trials by default."
+    echo "       --partition overrides the partition for all submitted ablations."
     exit 1
 fi
 
@@ -125,17 +128,15 @@ TIME_A7="00:35:00";  MEM_A7=16G    # subject-specific supervised: fast (~15 min 
 TIME_A11="00:35:00"; MEM_A11=24G   # Meta pretrained, ft_lr only: fast (~15 min observed)
 # TIME_A12="06:00:00"; MEM_A12=32G   # Our model on 2kHz data
 
-# MOE_hpo: scavenge partition, 500 trials, generous per-trial time.
+# MOE_hpo: commons partition by default (scavenge max walltime is only 1h — too short).
 # Each trial is a full MAML+MoE training run (~3-4h observed for M0).
-# Scavenge jobs can be preempted; the JournalFileBackend survives preemption
-# so completed trials are never lost.  Failed/preempted trials count against
-# the 500-task array budget — hence submitting 500 rather than 200.
-# Adjust TIME_MOE_hpo based on your observed per-trial wall time.
-TIME_MOE_hpo="08:00:00"; MEM_MOE_hpo=32G
-PARTITION_MOE_hpo=scavenge
-# Max concurrent scavenge tasks: higher than commons (50 vs 10) since
-# scavenge jobs are low-priority and we want to soak up idle GPUs.
-CONCURRENCY_MOE_hpo=50
+# The JournalFileBackend survives preemption so completed trials are never lost.
+# Failed/preempted trials count against the 500-task array budget — hence
+# submitting 500 rather than 200 to absorb expected failures.
+# Adjust TIME_M0_MOE_hpo based on your observed per-trial wall time.
+TIME_M0_MOE_hpo="08:00:00"; MEM_M0_MOE_hpo=32G
+PARTITION_M0_MOE_hpo=commons
+CONCURRENCY_M0_MOE_hpo=10
 
 # Debug overrides:
 #   - Single non-array job (N_TRIALS forced to 1, --array flag suppressed below)
@@ -156,14 +157,14 @@ get_resource() {
     echo "${!varname:-$3}"
 }
 
-# Default trial count for MOE_hpo when --n-trials is not explicitly passed.
+# Default trial count for M0_MOE_hpo when --n-trials is not explicitly passed.
 # For all other ablations the default remains N_TRIALS (100).
 _resolve_n_trials() {
     local ablation="$1"
     local explicit_n_trials="$2"   # "" if not set by user
     if [[ -n "$explicit_n_trials" ]]; then
         echo "$explicit_n_trials"
-    elif [[ "$ablation" == "MOE_hpo" ]]; then
+    elif [[ "$ablation" == "M0_MOE_hpo" ]]; then
         echo "500"
     else
         echo "$N_TRIALS"
@@ -227,10 +228,10 @@ for ABLATION in "${ABLATIONS[@]}"; do
     TIME=$(get_resource TIME "$ABLATION" "$TIME_DEFAULT")
     MEM=$(get_resource  MEM  "$ABLATION" "$MEM_DEFAULT")
 
-    # ── Per-ablation overrides for MOE_hpo ───────────────────────────────────
+    # ── Per-ablation overrides for M0_MOE_hpo ────────────────────────────────
     if [[ "$ABLATION" == "M0_MOE_hpo" ]]; then
-        EFFECTIVE_PARTITION=$(get_resource PARTITION "$ABLATION" "scavenge")
-        EFFECTIVE_CONCURRENCY=$(get_resource CONCURRENCY "$ABLATION" "50")
+        EFFECTIVE_PARTITION=$(get_resource PARTITION "$ABLATION" "commons")
+        EFFECTIVE_CONCURRENCY=$(get_resource CONCURRENCY "$ABLATION" "10")
         EFFECTIVE_SCRIPT="$MOE_HPO_SCRIPT_PATH"
         # Journal name matches STUDY_NAME constant in M0_MOE_hpo.py
         EFFECTIVE_JOURNAL="$HPO_DB_DIR/moe_hpo_1s3w_hpo_v1.log"
@@ -239,6 +240,11 @@ for ABLATION in "${ABLATIONS[@]}"; do
         EFFECTIVE_CONCURRENCY="10"
         EFFECTIVE_SCRIPT="$HPO_SCRIPT_PATH"
         EFFECTIVE_JOURNAL="$HPO_DB_DIR/ablation_${ABLATION}_1s3w_hpo_v1.log"
+    fi
+
+    # --partition flag overrides whatever was resolved above for all ablations
+    if [[ -n "$OVERRIDE_PARTITION" ]]; then
+        EFFECTIVE_PARTITION="$OVERRIDE_PARTITION"
     fi
 
     # ── Resolve trial count ───────────────────────────────────────────────────
@@ -356,7 +362,7 @@ echo "    study = optuna.load_study(study_name='ablation_<ID>_1s3w_hpo_v1', stor
 echo "    print(study.best_trial)"
 echo "  \""
 echo ""
-echo "Inspect MOE_hpo results:"
+echo "Inspect M0_MOE_hpo results:"
 echo "  python -c \""
 echo "    import optuna"
 echo "    from optuna.storages.journal import JournalStorage, JournalFileBackend"
