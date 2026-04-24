@@ -228,7 +228,7 @@ for ABLATION in "${ABLATIONS[@]}"; do
     MEM=$(get_resource  MEM  "$ABLATION" "$MEM_DEFAULT")
 
     # ── Per-ablation overrides for MOE_hpo ───────────────────────────────────
-    if [[ "$ABLATION" == "MOE_hpo" ]]; then
+    if [[ "$ABLATION" == "M0_MOE_hpo" ]]; then
         EFFECTIVE_PARTITION=$(get_resource PARTITION "$ABLATION" "scavenge")
         EFFECTIVE_CONCURRENCY=$(get_resource CONCURRENCY "$ABLATION" "50")
         EFFECTIVE_SCRIPT="$MOE_HPO_SCRIPT_PATH"
