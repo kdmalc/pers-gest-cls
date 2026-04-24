@@ -45,44 +45,17 @@ mkdir -p "$HPO_DB_DIR" "$HPO_OUT_BASE" "$LOG_DIR"
 # =============================================================================
 # Parse args
 # =============================================================================
-DRY_RUN=false
-DEBUG=false
-N_TRIALS=100       # total Optuna trials per ablation (= number of array tasks)
-ABLATIONS=()
-
-for arg in "$@"; do
-    case "$arg" in
-        --dry-run)   DRY_RUN=true ;;
-        --debug)     DEBUG=true ;;
-        --n-trials)  shift; N_TRIALS="$1" ;;   # handled below via positional
-        all)
-            # All HPO-able ablations (A10 excluded: zero-shot; A6/A9 excluded: not needed)
-            # MOE_hpo is intentionally NOT included in 'all' — it uses a
-            # different partition (scavenge), trial count (500), and script.
-            # Launch it explicitly: bash hpo_ablation_launcher.sh MOE_hpo
-            ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 A12)
-            ;;
-        --*)
-            # Handle --n-trials N as a two-token arg
-            if [[ "$arg" == "--n-trials" ]]; then
-                : # value consumed in next iteration — handled by shift logic below
-            fi
-            ;;
-        *)
-            ABLATIONS+=("$arg")
-            ;;
-    esac
-done
-
-# Re-parse cleanly to handle --n-trials N and --partition PARTITION
+# Initialize defaults
 ABLATIONS=()
 DRY_RUN=false
 DEBUG=false
 N_TRIALS=100
-EXPLICIT_N_TRIALS=""   # empty = user did not pass --n-trials explicitly
-OVERRIDE_PARTITION=""  # empty = use per-ablation default; set via --partition to override all
+EXPLICIT_N_TRIALS=""   
+OVERRIDE_PARTITION=""  
 i=0
 args_array=("$@")
+
+# Single, clean parsing loop
 while [[ $i -lt ${#args_array[@]} ]]; do
     arg="${args_array[$i]}"
     case "$arg" in
@@ -90,7 +63,7 @@ while [[ $i -lt ${#args_array[@]} ]]; do
         --debug)      DEBUG=true ;;
         --n-trials)   i=$((i+1)); N_TRIALS="${args_array[$i]}"; EXPLICIT_N_TRIALS="${args_array[$i]}" ;;
         --partition)  i=$((i+1)); OVERRIDE_PARTITION="${args_array[$i]}" ;;
-        all)          ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 A12) ;;  # M0_MOE_hpo excluded from 'all'
+        all)          ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 A12) ;;
         -*)           echo "WARNING: Unknown flag '$arg' — ignoring." ;;
         *)            ABLATIONS+=("$arg") ;;
     esac
@@ -100,8 +73,12 @@ done
 if [[ ${#ABLATIONS[@]} -eq 0 ]]; then
     echo "ERROR: No ablations specified."
     echo "Usage: bash hpo_ablation_launcher.sh [M0|A1|A2|A3|A4|A5|A7|A8|A11|A12|M0_MOE_hpo|all] [--dry-run] [--debug] [--n-trials N] [--partition PARTITION]"
-    echo "       M0_MOE_hpo runs on commons partition with 500 trials by default."
-    echo "       --partition overrides the partition for all submitted ablations."
+    exit 1
+fi
+
+if [[ ${#ABLATIONS[@]} -eq 0 ]]; then
+    echo "ERROR: No ablations specified."
+    echo "Usage: bash hpo_ablation_launcher.sh [M0|A1|A2|A3|A4|A5|A7|A8|A11|A12|M0_MOE_hpo|all] [--dry-run] [--debug] [--n-trials N] [--partition PARTITION]"
     exit 1
 fi
 
