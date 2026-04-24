@@ -33,7 +33,7 @@ set -euo pipefail
 CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
 DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
 HPO_SCRIPT_PATH="$CODE_DIR/system/NOTS/paper/ablations/ablation_hpo.py"
-MOE_HPO_SCRIPT_PATH="$CODE_DIR/system/MOE/M0_MOE_hpo.py"
+MOE_HPO_SCRIPT_PATH="$CODE_DIR/system/NOTS/paper/ablations/M0_MOE_hpo.py"
 HPO_DB_DIR=/scratch/my13/kai/meta-pers-gest/optuna_dbs
 HPO_OUT_BASE=/scratch/my13/kai/runs/paper/ablations/hpo
 LOG_DIR=/scratch/my13/kai/runs/paper/ablations/hpo/logs
