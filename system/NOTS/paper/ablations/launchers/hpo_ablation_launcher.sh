@@ -33,6 +33,7 @@ set -euo pipefail
 CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
 DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
 HPO_SCRIPT_PATH="$CODE_DIR/system/NOTS/paper/ablations/ablation_hpo.py"
+MOE_HPO_SCRIPT_PATH="$CODE_DIR/system/MOE/MOE_hpo.py"
 HPO_DB_DIR=/scratch/my13/kai/meta-pers-gest/optuna_dbs
 HPO_OUT_BASE=/scratch/my13/kai/runs/paper/ablations/hpo
 LOG_DIR=/scratch/my13/kai/runs/paper/ablations/hpo/logs
@@ -56,6 +57,9 @@ for arg in "$@"; do
         --n-trials)  shift; N_TRIALS="$1" ;;   # handled below via positional
         all)
             # All HPO-able ablations (A10 excluded: zero-shot; A6/A9 excluded: not needed)
+            # MOE_hpo is intentionally NOT included in 'all' — it uses a
+            # different partition (scavenge), trial count (500), and script.
+            # Launch it explicitly: bash hpo_ablation_launcher.sh MOE_hpo
             ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 A12)
             ;;
         --*)
@@ -75,6 +79,7 @@ ABLATIONS=()
 DRY_RUN=false
 DEBUG=false
 N_TRIALS=100
+EXPLICIT_N_TRIALS=""   # empty = user did not pass --n-trials explicitly
 i=0
 args_array=("$@")
 while [[ $i -lt ${#args_array[@]} ]]; do
@@ -82,8 +87,8 @@ while [[ $i -lt ${#args_array[@]} ]]; do
     case "$arg" in
         --dry-run)    DRY_RUN=true ;;
         --debug)      DEBUG=true ;;
-        --n-trials)   i=$((i+1)); N_TRIALS="${args_array[$i]}" ;;
-        all)          ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 A12) ;;
+        --n-trials)   i=$((i+1)); N_TRIALS="${args_array[$i]}"; EXPLICIT_N_TRIALS="${args_array[$i]}" ;;
+        all)          ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 A12) ;;  # MOE_hpo excluded from 'all'
         -*)           echo "WARNING: Unknown flag '$arg' — ignoring." ;;
         *)            ABLATIONS+=("$arg") ;;
     esac
@@ -92,7 +97,8 @@ done
 
 if [[ ${#ABLATIONS[@]} -eq 0 ]]; then
     echo "ERROR: No ablations specified."
-    echo "Usage: bash hpo_ablation_launcher.sh [M0|A1|A2|A3|A4|A5|A7|A8|A11|A12|all] [--dry-run] [--debug] [--n-trials N]"
+    echo "Usage: bash hpo_ablation_launcher.sh [M0|A1|A2|A3|A4|A5|A7|A8|A11|A12|MOE_hpo|all] [--dry-run] [--debug] [--n-trials N]"
+    echo "       MOE_hpo runs on scavenge partition with 500 trials by default."
     exit 1
 fi
 
@@ -119,6 +125,18 @@ TIME_A7="00:35:00";  MEM_A7=16G    # subject-specific supervised: fast (~15 min 
 TIME_A11="00:35:00"; MEM_A11=24G   # Meta pretrained, ft_lr only: fast (~15 min observed)
 # TIME_A12="06:00:00"; MEM_A12=32G   # Our model on 2kHz data
 
+# MOE_hpo: scavenge partition, 500 trials, generous per-trial time.
+# Each trial is a full MAML+MoE training run (~3-4h observed for M0).
+# Scavenge jobs can be preempted; the JournalFileBackend survives preemption
+# so completed trials are never lost.  Failed/preempted trials count against
+# the 500-task array budget — hence submitting 500 rather than 200.
+# Adjust TIME_MOE_hpo based on your observed per-trial wall time.
+TIME_MOE_hpo="08:00:00"; MEM_MOE_hpo=32G
+PARTITION_MOE_hpo=scavenge
+# Max concurrent scavenge tasks: higher than commons (50 vs 10) since
+# scavenge jobs are low-priority and we want to soak up idle GPUs.
+CONCURRENCY_MOE_hpo=50
+
 # Debug overrides:
 #   - Single non-array job (N_TRIALS forced to 1, --array flag suppressed below)
 #   - HPO_USE_JOURNAL=0 so nothing is written to the shared Optuna journal
@@ -133,23 +151,42 @@ fi
 # ^ I hardcoded this in later so I think this does nothing now? Might as well leave it
 
 get_resource() {
-    # get_resource TIME M0 "06:00:00"  →  value of $TIME_M0, or default
+    # get_resource TIME M0 "06:00:00"  ->  value of $TIME_M0, or default
     local varname="${1}_${2}"
     echo "${!varname:-$3}"
+}
+
+# Default trial count for MOE_hpo when --n-trials is not explicitly passed.
+# For all other ablations the default remains N_TRIALS (100).
+_resolve_n_trials() {
+    local ablation="$1"
+    local explicit_n_trials="$2"   # "" if not set by user
+    if [[ -n "$explicit_n_trials" ]]; then
+        echo "$explicit_n_trials"
+    elif [[ "$ablation" == "MOE_hpo" ]]; then
+        echo "500"
+    else
+        echo "$N_TRIALS"
+    fi
 }
 
 # =============================================================================
 # Submit each ablation
 # =============================================================================
-ARRAY_END=$((N_TRIALS - 1))   # 0-indexed: 0..N_TRIALS-1
+
+# NOTE: ARRAY_END is now computed per-ablation inside the loop, since
+# MOE_hpo defaults to 500 trials while all other ablations default to N_TRIALS.
 
 # Shared wrap script body — identical for both debug and production.
 # Uses shell variables that are set per-ablation in the loop below.
+# $4 = hpo_script_path: either $HPO_SCRIPT_PATH (ablation_hpo.py)
+#                     or $MOE_HPO_SCRIPT_PATH (MOE_hpo.py)
 _make_wrap_body() {
     local out_dir="$1"
     local ablation="$2"
     local use_task_id="$3"   # "true" = production array (use SLURM_ARRAY_TASK_ID),
                               # "false" = debug single job (use SLURM_JOB_ID)
+    local script_path="$4"   # full path to the HPO python script to invoke
     if [[ "$use_task_id" == "true" ]]; then
         local run_dir_line="export RUN_DIR=$out_dir/trial_\${SLURM_ARRAY_TASK_ID}"
         local job_echo='echo '"'"'JOB_START host=$(hostname) date=$(date) jobid=${SLURM_JOB_ID} task=${SLURM_ARRAY_TASK_ID}'"'"
@@ -180,7 +217,7 @@ which python
 python -c "import torch; print(f'PyTorch: {torch.__version__}  CUDA: {torch.version.cuda}  GPU: {torch.cuda.is_available()}')"
 nvidia-smi || true
 
-python -u $HPO_SCRIPT_PATH --ablation $ablation
+python -u $script_path --ablation $ablation
 
 echo 'JOB_END date=\$(date)'
 WRAPEOF
@@ -189,6 +226,24 @@ WRAPEOF
 for ABLATION in "${ABLATIONS[@]}"; do
     TIME=$(get_resource TIME "$ABLATION" "$TIME_DEFAULT")
     MEM=$(get_resource  MEM  "$ABLATION" "$MEM_DEFAULT")
+
+    # ── Per-ablation overrides for MOE_hpo ───────────────────────────────────
+    if [[ "$ABLATION" == "MOE_hpo" ]]; then
+        EFFECTIVE_PARTITION=$(get_resource PARTITION "$ABLATION" "scavenge")
+        EFFECTIVE_CONCURRENCY=$(get_resource CONCURRENCY "$ABLATION" "50")
+        EFFECTIVE_SCRIPT="$MOE_HPO_SCRIPT_PATH"
+        # Journal name matches STUDY_NAME constant in MOE_hpo.py
+        EFFECTIVE_JOURNAL="$HPO_DB_DIR/moe_hpo_1s3w_hpo_v1.log"
+    else
+        EFFECTIVE_PARTITION="$PARTITION"
+        EFFECTIVE_CONCURRENCY="10"
+        EFFECTIVE_SCRIPT="$HPO_SCRIPT_PATH"
+        EFFECTIVE_JOURNAL="$HPO_DB_DIR/ablation_${ABLATION}_1s3w_hpo_v1.log"
+    fi
+
+    # ── Resolve trial count ───────────────────────────────────────────────────
+    EFFECTIVE_N_TRIALS=$(_resolve_n_trials "$ABLATION" "$EXPLICIT_N_TRIALS")
+    ARRAY_END=$((EFFECTIVE_N_TRIALS - 1))
 
     JOB_NAME="hpo_${ABLATION}"
     OUT_DIR="$HPO_OUT_BASE/$ABLATION"
@@ -199,8 +254,6 @@ for ABLATION in "${ABLATIONS[@]}"; do
         # HPO_USE_JOURNAL=0  → InMemoryStorage (results discarded after job ends)
         # N_TRIALS=1         → run exactly one trial
         # No --array flag    → single job, log uses %x_%j.out (no %a suffix)
-        # Warm-start is still enqueued in InMemoryStorage so the first trial
-        # exercises the warm-start code path.
         SBATCH_CMD=(
             sbatch
             --job-name="$JOB_NAME"
@@ -221,15 +274,16 @@ N_TRIALS=1,\
 MAML_DIR=$CODE_DIR/system/MAML,\
 MOE_DIR=$CODE_DIR/system/MOE,\
 PYTHONPATH=$CODE_DIR:$CODE_DIR/system/MAML:$CODE_DIR/system/MOE:${PYTHONPATH:-}"
-            --wrap="$(_make_wrap_body "$OUT_DIR" "$ABLATION" "false")"
+            --wrap="$(_make_wrap_body "$OUT_DIR" "$ABLATION" "false" "$EFFECTIVE_SCRIPT")"
         )
 
         echo ""
         echo "════════════════════════════════════════════════════"
         echo "  Ablation   : $ABLATION  [DEBUG]"
+        echo "  Script     : $EFFECTIVE_SCRIPT"
         echo "  Mode       : single job, 1 trial, no journal write"
-        echo "  Partition  : $PARTITION"
-        echo "  Time       : $TIME"
+        echo "  Partition  : $PARTITION  (debug always uses commons/debug)"
+        echo "  Time       : 00:15:00"
         echo "  Memory     : $MEM"
         echo "  Output dir : $OUT_DIR"
         echo "  Log        : $LOG_DIR/${JOB_NAME}_<jobid>.out"
@@ -240,14 +294,14 @@ PYTHONPATH=$CODE_DIR:$CODE_DIR/system/MAML:$CODE_DIR/system/MOE:${PYTHONPATH:-}"
         SBATCH_CMD=(
             sbatch
             --job-name="$JOB_NAME"
-            --partition="$PARTITION"
+            --partition="$EFFECTIVE_PARTITION"
             --nodes=1
             --ntasks=1
             --cpus-per-task="$CPUS"
             --mem="$MEM"
             --time="$TIME"
             --gres=gpu:1
-            --array="0-${ARRAY_END}%10"
+            --array="0-${ARRAY_END}%${EFFECTIVE_CONCURRENCY}"
             --output="$LOG_DIR/%x_%A_%a.out"
             --export="ALL,\
 CODE_DIR=$CODE_DIR,\
@@ -258,17 +312,19 @@ N_TRIALS=1,\
 MAML_DIR=$CODE_DIR/system/MAML,\
 MOE_DIR=$CODE_DIR/system/MOE,\
 PYTHONPATH=$CODE_DIR:$CODE_DIR/system/MAML:$CODE_DIR/system/MOE:${PYTHONPATH:-}"
-            --wrap="$(_make_wrap_body "$OUT_DIR" "$ABLATION" "true")"
+            --wrap="$(_make_wrap_body "$OUT_DIR" "$ABLATION" "true" "$EFFECTIVE_SCRIPT")"
         )
 
         echo ""
         echo "════════════════════════════════════════════════════"
         echo "  Ablation   : $ABLATION"
-        echo "  Trials     : $N_TRIALS  (array 0-${ARRAY_END}, max 10 concurrent)"
+        echo "  Script     : $EFFECTIVE_SCRIPT"
+        echo "  Trials     : $EFFECTIVE_N_TRIALS  (array 0-${ARRAY_END}, max ${EFFECTIVE_CONCURRENCY} concurrent)"
+        echo "  Partition  : $EFFECTIVE_PARTITION"
         echo "  Time/trial : $TIME"
         echo "  Memory     : $MEM"
         echo "  Output dir : $OUT_DIR"
-        echo "  Optuna DB  : $HPO_DB_DIR/ablation_${ABLATION}_1s3w_hpo_v1.log"
+        echo "  Optuna DB  : $EFFECTIVE_JOURNAL"
         echo "  Log dir    : $LOG_DIR"
         echo "════════════════════════════════════════════════════"
     fi
@@ -291,11 +347,21 @@ echo "  Production (array) : $LOG_DIR/hpo_<ABLATION>_<arrayjobid>_<taskid>.out"
 echo "  Debug (single job) : $LOG_DIR/hpo_<ABLATION>_<jobid>.out"
 echo "  tail example       : tail -f $LOG_DIR/hpo_M0_<jobid>.out"
 echo ""
-echo "Inspect results with Optuna:"
+echo "Inspect ablation HPO results:"
 echo "  python -c \""
 echo "    import optuna"
 echo "    from optuna.storages.journal import JournalStorage, JournalFileBackend"
 echo "    storage = JournalStorage(JournalFileBackend('$HPO_DB_DIR/ablation_<ID>_1s3w_hpo_v1.log'))"
 echo "    study = optuna.load_study(study_name='ablation_<ID>_1s3w_hpo_v1', storage=storage)"
 echo "    print(study.best_trial)"
+echo "  \""
+echo ""
+echo "Inspect MOE_hpo results:"
+echo "  python -c \""
+echo "    import optuna"
+echo "    from optuna.storages.journal import JournalStorage, JournalFileBackend"
+echo "    storage = JournalStorage(JournalFileBackend('$HPO_DB_DIR/moe_hpo_1s3w_hpo_v1.log'))"
+echo "    study = optuna.load_study(study_name='moe_hpo_1s3w_hpo_v1', storage=storage)"
+echo "    print(study.best_trial)"
+echo "    print(study.best_params)"
 echo "  \""
