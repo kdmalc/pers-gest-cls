@@ -123,10 +123,9 @@ def make_base_config(ablation_id: str) -> dict:
     # ── Modality flags ────────────────────────────────────────────────────────
     config["multimodal"]       = True
     config["use_imu"]          = True
-    config["use_demographics"] = False
+    config["use_demographics"] = True
     config["use_film_x_demo"]  = False
-    config["FILM_on_context_or_demo"] = "context"
-    # I dont think this is used at all yet?
+    config["FILM_on_context_or_demo"] = "context" # TODO: I dont think this is used at all yet?
     ## Also, for the figure at least, we should probably drop ET, Left, and Man from this since otherwise we have 15 cols instead of 12
     #config["demo_dim_labels"] = ["time_disabled", "age", "BMI", "DASH_score", "disability_coding_ET", "disability_coding_MD", 
     # "disability_coding_No_Disability", "disability_coding_PN", "disability_coding_SCI", "disability_coding_other", "handedness_Left",

@@ -1,5 +1,5 @@
 """
-MOE_hpo.py
+M0_MOE_hpo.py
 ==========
 Optuna HPO for the MoE architecture and loss hyperparameters.
 
@@ -23,7 +23,7 @@ Environment variables consumed (set by the launcher via --export):
     N_TRIALS        : always "1" when called from launcher (1 trial per task)
 
 CLI args:
-    --ablation MOE_hpo   (must be passed; the launcher always passes --ablation)
+    --ablation M0_MOE_hpo   (must be passed; the launcher always passes --ablation)
     --dry-run            print sampled config without training
 
 Study name  : moe_hpo_1s3w_hpo_v1
@@ -41,8 +41,13 @@ Scavenge / preemption safety
 
 Search space
 ────────────
-  num_experts            : {4, 8, 16}
-  MOE_top_k              : {1, 2, 4, None (dense)}
+  num_experts            : {4, 8, 12, 16, 20, 24, 28, 32, 36, 40}
+  utilization_ratio      : {0.1, 0.2, 0.3, 0.4, 0.5}
+                           top_k = max(1, round(num_experts * ratio))
+                           Both utilization_ratio and effective top_k are
+                           stored in the trial config so downstream code that
+                           reads config["top_k"] or config["MOE_top_k"] works
+                           without modification.
   MOE_routing_signal     : {linear_proj_input, context_proj,
                             context_proj_with_demo}  (last only if use_demographics)
   MOE_gate_temperature   : {0.5, 1.0, 2.0}
@@ -54,6 +59,9 @@ Search space
 
 Constraint: expected samples per expert per batch >= MIN_SAMPLES_PER_EXPERT.
 Violated trials are pruned (not failed) so TPE avoids that region going forward.
+The constraint uses meta_batchsize (number of MAML episodes per outer step),
+which is the operationally correct batch size for expert load — not the flat
+supervised batch_size.
 """
 
 from __future__ import annotations
@@ -95,8 +103,9 @@ STUDY_NAME   = "moe_hpo_1s3w_hpo_v1"
 JOURNAL_NAME = "moe_hpo_1s3w_hpo_v1.log"
 
 # Minimum expected samples routed to each expert per batch step.
-# (k / E) * batch_size >= this threshold.
-# Dense routing (k=None) is always allowed — constraint is vacuous (inf).
+# (k / E) * meta_batchsize >= this threshold.
+# meta_batchsize is the number of MAML episodes per outer step — the
+# operationally correct batch size for expert load (not the flat batch_size).
 MIN_SAMPLES_PER_EXPERT = 2
 
 
@@ -132,15 +141,12 @@ def make_storage(use_journal: bool,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _expected_samples_per_expert(num_experts: int,
-                                  top_k,
+                                  top_k: int,
                                   batch_size: int) -> float:
     """
     Average number of samples routed to each expert per forward pass.
-    Dense (top_k=None) -> inf (constraint vacuous).
-    Top-k             -> (k / E) * B
+    top_k is always an int here (dense routing is not offered in this search space).
     """
-    if top_k is None:
-        return float("inf")
     return (top_k / num_experts) * batch_size
 
 
@@ -153,27 +159,45 @@ def sample_moe_hparams(trial: optuna.Trial, base_config: dict) -> dict:
     Sample one set of MoE hyperparameters and merge with base_config.
     Raises optuna.exceptions.TrialPruned if the (E, k, B) combination
     violates the minimum-samples-per-expert constraint.
+
+    top_k is derived from num_experts * utilization_ratio rather than sampled
+    directly, so the search space is fixed and consistent across all trials
+    (required for TPE to build a valid probabilistic model).
+
+    Both "utilization_ratio" and the effective "top_k" / "MOE_top_k" are
+    written into the returned config so all downstream code that reads
+    config["top_k"] or config["MOE_top_k"] works without any changes.
     """
     # ── Core structure ───────────────────────────────────────────────────────
-    num_experts = trial.suggest_categorical("num_experts", [4, 8, 16])
+    num_experts = trial.suggest_categorical(
+        "num_experts", [4, 8, 12, 16, 20, 24, 28, 32, 36, 40]
+    )
 
-    # Only offer top_k values strictly less than num_experts; None always valid.
-    top_k_choices = [k for k in [1, 2, 4] if k < num_experts] + [None]
-    top_k = trial.suggest_categorical("MOE_top_k", top_k_choices)
+    # Sample utilization ratio; top_k is derived, not sampled directly.
+    # This keeps the Optuna search space fixed regardless of num_experts,
+    # which is required for TPE to function correctly.
+    ratio = trial.suggest_categorical(
+        "utilization_ratio", [0.1, 0.2, 0.3, 0.4, 0.5]
+    )
+    top_k = max(1, round(num_experts * ratio))
 
     # ── Constraint ───────────────────────────────────────────────────────────
-    batch_size = base_config.get("episode_batch_size",
-                 base_config.get("batch_size", 32))
-    expected = _expected_samples_per_expert(num_experts, top_k, batch_size)
+    # Use meta_batchsize: number of MAML episodes per outer step.
+    # This is the correct batch size for expert load — each episode is one
+    # forward pass through the MoE, so meta_batchsize determines how many
+    # samples are distributed across experts per step.
+    meta_batchsize = base_config["meta_batchsize"]
+    expected = _expected_samples_per_expert(num_experts, top_k, meta_batchsize)
     if expected < MIN_SAMPLES_PER_EXPERT:
         raise optuna.exceptions.TrialPruned(
-            f"Constraint violated: E={num_experts}, k={top_k}, B={batch_size} "
+            f"Constraint violated: E={num_experts}, ratio={ratio}, "
+            f"k={top_k}, B={meta_batchsize} "
             f"-> {expected:.2f} samples/expert/batch < {MIN_SAMPLES_PER_EXPERT}"
         )
 
     # ── Routing signal ───────────────────────────────────────────────────────
     routing_choices = ["linear_proj_input", "context_proj"]
-    if base_config.get("use_demographics", False):
+    if base_config["use_demographics"]:
         routing_choices.append("context_proj_with_demo")
     routing_signal = trial.suggest_categorical(
         "MOE_routing_signal", routing_choices
@@ -201,7 +225,9 @@ def sample_moe_hparams(trial: optuna.Trial, base_config: dict) -> dict:
     config = copy.deepcopy(base_config)
     config.update({
         "num_experts":           num_experts,
-        "MOE_top_k":             top_k,
+        "utilization_ratio":     ratio,   # logged for analysis; not read by model
+        "MOE_top_k":             top_k,   # effective integer top_k
+        "top_k":                 top_k,   # alias kept in sync (ablation_config sets both)
         "MOE_routing_signal":    routing_signal,
         "MOE_gate_temperature":  gate_temp,
         "MOE_use_shared_expert": use_shared,
@@ -233,7 +259,7 @@ def objective(trial: optuna.Trial, base_config: dict,
     config["seed"] = trial_seed
 
     print(f"\n[MOE HPO | trial {trial.number}] Hyperparameters:")
-    for k in ["num_experts", "MOE_top_k", "MOE_routing_signal",
+    for k in ["num_experts", "utilization_ratio", "MOE_top_k", "MOE_routing_signal",
               "MOE_gate_temperature", "MOE_use_shared_expert",
               "MOE_aux_coeff", "MOE_importance_coeff",
               "MOE_ctx_hidden_dim", "MOE_ctx_out_dim"]:
@@ -304,7 +330,7 @@ def parse_args() -> argparse.Namespace:
         description="MoE HPO — runs exactly one Optuna trial per invocation."
     )
     p.add_argument(
-        "--ablation", type=str, default="MOE_hpo",
+        "--ablation", type=str, default="M0_MOE_hpo",
         help="Passed by the launcher; used for logging only. "
              "Study name and journal path are fixed constants in this script.",
     )
@@ -384,10 +410,10 @@ def main() -> None:
         try:
             config = sample_moe_hparams(dummy_trial, base_config)
             print("[DRY RUN] Sampled config:")
-            for k in ["num_experts", "MOE_top_k", "MOE_routing_signal",
-                      "MOE_gate_temperature", "MOE_use_shared_expert",
-                      "MOE_aux_coeff", "MOE_importance_coeff",
-                      "MOE_ctx_hidden_dim", "MOE_ctx_out_dim"]:
+            for k in ["num_experts", "utilization_ratio", "MOE_top_k", "top_k",
+                      "MOE_routing_signal", "MOE_gate_temperature",
+                      "MOE_use_shared_expert", "MOE_aux_coeff",
+                      "MOE_importance_coeff", "MOE_ctx_hidden_dim", "MOE_ctx_out_dim"]:
                 print(f"  {k}: {config[k]}")
         except optuna.exceptions.TrialPruned as e:
             print(f"[DRY RUN] Trial pruned during sampling: {e}")
