@@ -97,13 +97,13 @@ class SmoothedEarlyStopping:
 
         if smoothed_loss < self.best_loss - self.min_delta:
             self.best_loss = smoothed_loss
-            self.num_bad_epochs = 0  # Reset patience if improvement
+            self.num_bad_epochs = 0
         else:
-            self.num_bad_epochs += 1  # Increment if no improvement
+            self.num_bad_epochs += 1
 
-        return self.num_bad_epochs >= self.patience  # Stop if patience exceeded
+        return self.num_bad_epochs >= self.patience
 
-#def set_MOE_optimizer(model, config, optimizer_name=None, lr=None, use_weight_decay=None, weight_decay=None)
+
 def set_MOE_optimizer(
     model: torch.nn.Module,
     lr: float,
@@ -119,7 +119,6 @@ def set_MOE_optimizer(
         RuntimeError: if no trainable parameters are found.
         ValueError: for unsupported optimizer names.
     """
-    # Filter to trainable params only
     params = [p for p in model.parameters() if p.requires_grad]
     if len(params) == 0:
         raise RuntimeError(
@@ -139,23 +138,84 @@ def set_MOE_optimizer(
     else:
         raise ValueError(f"Only ADAM, ADAMW, and SGD are supported; got {optimizer_name}")
 
-# ideal entropy for E=6 is log(6) ≈ 1.792
-#def gate_stats(usage):  # usage: (E,) on CUDA
-#    u = usage.detach().float().cpu().clamp_min(1e-8)
-#    E = u.numel()
-#    ent = float(-(u * u.log()).sum())              # entropy
-#    kl  = float(F.kl_div(u.log(), torch.full_like(u, 1.0/E), reduction='sum'))  # KL(u || uniform)
-#    return ent, kl, u.tolist()
 
 def accuracy(logits, y):
     pred = logits.argmax(dim=-1)
     return (pred == y).float().mean().item()
 
+
 def gate_balance_loss(avg_usage, eps=1e-8):
-    # KL( avg_usage || uniform )
+    """KL( avg_usage || uniform ). Legacy helper kept for backwards compat."""
     E = avg_usage.numel()
     target = torch.full_like(avg_usage, 1.0 / E)
     return F.kl_div((avg_usage + eps).log(), target, reduction='batchmean')
 
+
 def make_ce(label_smooth=0.05):
     return nn.CrossEntropyLoss(label_smoothing=label_smooth)
+
+
+def compute_moe_aux_loss(
+    routing_info: dict,
+    config: dict,
+) -> torch.Tensor:
+    """
+    Compute the combined MoE auxiliary loss from a routing_info dict.
+
+    Handles both dense and top-k routing automatically:
+      - Dense (MOE_top_k is None):
+          KL(avg_gate_weights || uniform)
+          No importance loss needed — soft weights ARE dispatch weights.
+      - Top-k:
+          Switch-style f_i * P_i loss   (penalises uneven dispatch counts)
+        + Shazeer importance loss CV²   (penalises ordinal ranking dominance)
+
+    The two losses are complementary and must be used together for top-k:
+      - f_i * P_i can be satisfied even when one expert dominates the ranking
+        if mean soft weights appear roughly uniform.
+      - Importance loss catches this by penalising variance in the SUM of soft
+        weights per expert, which captures consistent ranking dominance even
+        when the mean looks flat.
+
+    Args:
+        routing_info : dict with keys:
+                         "gate_weights"      (B, E) — hard weights (post top-k)
+                         "gate_weights_soft" (B, E) — soft weights (pre top-k)
+                       As returned by model.forward(return_routing=True).
+        config       : training config dict.  Keys read:
+                         "MOE_top_k"             int | None
+                         "MOE_aux_coeff"         float  (Switch loss weight)
+                         "MOE_importance_coeff"  float  (importance loss weight)
+
+    Returns:
+        Scalar aux loss tensor (on the same device as gate_weights).
+
+    Raises:
+        KeyError  : if routing_info is missing expected keys.
+        ValueError: if routing_info values are None (model not in routing mode).
+    """
+    w_hard = routing_info["gate_weights"]
+    w_soft = routing_info["gate_weights_soft"]
+
+    if w_hard is None or w_soft is None:
+        raise ValueError(
+            "routing_info contains None gate weights. "
+            "Make sure model.forward() was called with return_routing=True "
+            "before passing routing_info to compute_moe_aux_loss()."
+        )
+
+    top_k          = config.get("MOE_top_k", None)
+    aux_coeff      = config["MOE_aux_coeff"]
+    imp_coeff      = config.get("MOE_importance_coeff", aux_coeff)
+
+    if top_k is None:
+        # Dense routing: single KL load-balance loss on hard weights
+        # (which equal soft weights for dense routing).
+        from MOE_encoder import dense_MOE_aux_loss
+        return dense_MOE_aux_loss(w_hard, coeff=aux_coeff)
+    else:
+        # Top-k routing: Switch loss + importance loss.
+        from MOE_encoder import topk_MOE_aux_loss, importance_loss
+        switch_loss = topk_MOE_aux_loss(w_soft, w_hard, coeff=aux_coeff)
+        imp_loss    = importance_loss(w_soft, coeff=imp_coeff)
+        return switch_loss + imp_loss

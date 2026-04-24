@@ -16,6 +16,7 @@ from MOE.MOE_training import _model_forward_router, set_MOE_optimizer, SmoothedE
 from MAML.shared_maml import *
 from MOE.MOE_encoder import dense_MOE_aux_loss as _dense_MOE_aux_loss
 from MOE.MOE_encoder import topk_MOE_aux_loss  as _topk_MOE_aux_loss
+from MOE.MOE_encoder import importance_loss  as _importance_loss
 from MOE.MOE_analysis import RoutingCollector, RoutingAnalyzer
 
 # -----------------------------
@@ -109,7 +110,7 @@ def _compute_aux_loss(routing_info, config, aux_coeff):
         return _dense_MOE_aux_loss(gate_w, coeff=aux_coeff)
     else:                                        # sparse top-k routing
         gate_w_soft = routing_info.get('gate_weights_soft', gate_w)
-        return _topk_MOE_aux_loss(gate_w_soft, gate_w, coeff=aux_coeff)
+        return _topk_MOE_aux_loss(gate_w_soft, gate_w, coeff=aux_coeff) + _importance_loss(gate_w_soft, coeff=config["MOE_importance_coeff"])
 
 
 # -----------------------------
