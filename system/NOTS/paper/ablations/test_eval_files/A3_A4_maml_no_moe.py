@@ -8,7 +8,7 @@ A3: Single encoder, natural (smaller) parameter count.
 A4: Single encoder scaled to match M0 expert CNN parameter count. CRITICAL ablation.
 
 test_procedure:
-  'hpo_test_split' : Fixed split, multi-seed loop (development/HPO).
+  'hpo_test_split' : Fixed split, single seed run (FIXED_SEED).
   'L2SO'           : Leave-2-Subjects-Out over all_PIDs. One run per fold.
 """
 
@@ -27,7 +27,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
     make_base_config, build_maml_moe_model, build_maml_no_moe_model,
-    set_seeds, FIXED_SEED, NUM_FINAL_SEEDS,
+    set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
     RUN_DIR,
 )
@@ -41,7 +41,7 @@ if torch.cuda.is_available():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Parameter matching utilities (unchanged from original)
+# Parameter matching utilities
 # ─────────────────────────────────────────────────────────────────────────────
 
 def count_moe_encoder_params(moe_model: nn.Module) -> int:
@@ -205,21 +205,17 @@ def run_one_fold(ablation_id: str, fold_id: str, seed: int, config: dict) -> dic
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_hpo_test_split(ablation_id: str, config: dict) -> list:
-    results = []
-    for seed_idx in range(NUM_FINAL_SEEDS):
-        actual_seed = FIXED_SEED + seed_idx
-        print(f"\n{'='*70}")
-        print(f"[{ablation_id}] hpo_test_split: seed {seed_idx+1}/{NUM_FINAL_SEEDS} "
-              f"(seed={actual_seed})")
-        print(f"{'='*70}")
-        result = run_one_fold(
-            ablation_id=ablation_id,
-            fold_id=f"fixed_seed{actual_seed}",
-            seed=actual_seed,
-            config=copy.deepcopy(config),
-        )
-        results.append(result)
-    return results
+    """Single deterministic run on the fixed train/val/test split."""
+    print(f"\n{'='*70}")
+    print(f"[{ablation_id}] hpo_test_split: single run (seed={FIXED_SEED})")
+    print(f"{'='*70}")
+    result = run_one_fold(
+        ablation_id=ablation_id,
+        fold_id=f"fixed_seed{FIXED_SEED}",
+        seed=FIXED_SEED,
+        config=copy.deepcopy(config),
+    )
+    return [result]
 
 
 def build_l2so_folds(all_pids: list) -> list:
@@ -294,7 +290,7 @@ def run_ablation(ablation_id: str, config: dict, description: str):
             "fold_results":    all_results,
             "mean_test_acc":   float(np.mean(test_accs)),
             "std_test_acc":    float(np.std(test_accs)),
-            "num_seeds":       NUM_FINAL_SEEDS,
+            "seed":            FIXED_SEED,
             "config_snapshot": {k: str(v) for k, v in config.items()},
         }
     else:  # L2SO
@@ -316,11 +312,12 @@ def run_ablation(ablation_id: str, config: dict, description: str):
 
     print(f"\n{'='*70}")
     print(f"[{ablation_id}] FINAL ({test_procedure}): "
-          f"{summary['mean_test_acc']*100:.2f}% ± {summary['std_test_acc']*100:.2f}%")
+          f"{summary['mean_test_acc']*100:.2f}%")
     if test_procedure == "L2SO":
-        print(f"     over {summary['num_folds']} L2SO folds (one per test subject)")
+        print(f"     ± {summary['std_test_acc']*100:.2f}%  "
+              f"over {summary['num_folds']} L2SO folds (one per test subject)")
     else:
-        print(f"     over {summary['num_seeds']} seeds, fixed split")
+        print(f"     single run, seed={FIXED_SEED}, fixed split")
     print(f"     {config['n_way']}-way {config['k_shot']}-shot")
     print(f"{'='*70}")
 
@@ -329,14 +326,19 @@ def run_ablation(ablation_id: str, config: dict, description: str):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ablation", choices=["A3", "A4", "both"], default="both")
+    parser.add_argument(
+        "--ablation",
+        choices=["A3", "A4"],
+        required=True,  # no default — must be explicit to avoid running the wrong thing
+        help="Which ablation to run: A3 (natural params) or A4 (parameter-matched to M0 experts).",
+    )
     args = parser.parse_args()
 
-    if args.ablation in ("A3", "both"):
+    if args.ablation == "A3":
         config_a3 = build_config_a3()
         run_ablation("A3", config_a3, "MAML + No-MoE (Single Expert, Reduced Parameters)")
 
-    if args.ablation in ("A4", "both"):
+    elif args.ablation == "A4":
         moe_config = make_base_config(ablation_id="M0_ref")
         config_a4  = build_config_a4(moe_config)
         run_ablation("A4", config_a4,

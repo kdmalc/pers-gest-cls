@@ -13,7 +13,8 @@
 #   M0   → M0_full_model.py
 #   A1   → A1_no_maml_moe.py
 #   A2   → A2_no_maml_no_moe.py
-#   A4   → A3_A4_maml_no_moe.py
+#   A3   → A3_A4_maml_no_moe.py  --ablation A3
+#   A4   → A3_A4_maml_no_moe.py  --ablation A4
 #   A5   → A5_expert_count_sweep.py      [one job per expert count]
 #   A7   → A7_A8_subject_specific.py
 #   A8   → A7_A8_subject_specific.py
@@ -22,6 +23,8 @@
 #
 # Usage:
 #   bash eval_launcher.sh M0                    # eval M0
+#   bash eval_launcher.sh A3                    # eval A3 only
+#   bash eval_launcher.sh A4                    # eval A4 only
 #   bash eval_launcher.sh A1 A2 A4              # multiple ablations
 #   bash eval_launcher.sh all                   # all ablations (no grid)
 #   bash eval_launcher.sh grid                  # k-shot/n-way grid (M0)
@@ -31,7 +34,7 @@
 #   bash eval_launcher.sh A5 --partition commons
 #
 # Output layout:
-#   $EVAL_OUT_BASE/<ID>/              (M0, A1, A2, A4, A7, A8, A11)
+#   $EVAL_OUT_BASE/<ID>/              (M0, A1, A2, A3, A4, A7, A8, A11)
 #   $EVAL_OUT_BASE/A5/E<N>/           (A5, one subdir per expert count)
 #   $EVAL_OUT_BASE/grid/k<K>_n<N>/   (grid, one subdir per cell)
 #   $LOG_DIR/eval_<ID>_<jobid>.out
@@ -66,14 +69,15 @@ GRID_N_WAYS=(3 5 10)
 
 # =============================================================================
 # Ablation ID -> Python script mapping.
-# A4, A7/A8, and A11 share scripts — the Python scripts read
-# config["ablation_id"] to select the right variant.
+# A3 and A4 share a script — the --ablation flag selects the variant.
+# A7/A8 and A10/A11/A12 also share scripts similarly.
 # A5 and grid are handled separately in the submission loop.
 # =============================================================================
 declare -A ABLATION_SCRIPT
 ABLATION_SCRIPT[M0]="M0_full_model.py"
 ABLATION_SCRIPT[A1]="A1_no_maml_moe.py"
 ABLATION_SCRIPT[A2]="A2_no_maml_no_moe.py"
+ABLATION_SCRIPT[A3]="A3_A4_maml_no_moe.py"
 ABLATION_SCRIPT[A4]="A3_A4_maml_no_moe.py"
 ABLATION_SCRIPT[A5]="A5_expert_count_sweep.py"
 ABLATION_SCRIPT[A7]="A7_A8_subject_specific.py"
@@ -82,8 +86,8 @@ ABLATION_SCRIPT[A11]="A10_A11_A12_meta_pretrained.py"
 ABLATION_SCRIPT[grid]="fewshot_grid.py"
 
 # "all" expands to the standard ablation set only — grid is opt-in.
-VALID_ABLATIONS=(M0 A1 A2 A4 A5 A7 A8 A11)
-ALL_TOKENS=(M0 A1 A2 A4 A5 A7 A8 A11 grid)  # for usage string
+VALID_ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11)
+ALL_TOKENS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 grid)  # for usage string
 
 # =============================================================================
 # Parse args
@@ -143,8 +147,9 @@ TIME_A2="01:00:00";   MEM_A2=16G
 TIME_A7="01:00:00";   MEM_A7=16G
 TIME_A8="01:00:00";   MEM_A8=16G
 TIME_A11="01:00:00";  MEM_A11=24G
-# Uncomment and tune once you have wall-time data from HPO:
+# Uncomment and tune once you have wall-time data from HPO runs:
 # TIME_M0="08:00:00";   MEM_M0=32G
+# TIME_A3="05:00:00";   MEM_A3=24G
 # TIME_A4="05:00:00";   MEM_A4=24G
 # TIME_A5="08:00:00";   MEM_A5=32G    # applied per-expert-count job
 # TIME_grid="08:00:00"; MEM_grid=32G  # applied per grid cell; higher k/n may need more time
@@ -296,6 +301,18 @@ for ABLATION in "${ABLATIONS[@]}"; do
                     "--k-shot ${K} --n-way ${N}"
             done
         done
+
+    elif [[ "$ABLATION" == "A3" || "$ABLATION" == "A4" ]]; then
+        # ── A3 / A4: shared script, --ablation flag selects the variant ───────
+        submit_single_job \
+            "$ABLATION" \
+            "$SCRIPT_PATH" \
+            "$EVAL_OUT_BASE/$ABLATION" \
+            "$TIME" \
+            "$MEM" \
+            "$EFFECTIVE_PARTITION" \
+            "--ablation ${ABLATION}"
+
     elif [[ "$ABLATION" == "A10" || "$ABLATION" == "A11" || "$ABLATION" == "A12" ]]; then
         submit_single_job \
             "$ABLATION" \
@@ -305,6 +322,7 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "$MEM" \
             "$EFFECTIVE_PARTITION" \
             "--ablation ${ABLATION}"
+
     else
         # ── All other ablations: single job, no extra CLI args ─────────────────
         submit_single_job \
