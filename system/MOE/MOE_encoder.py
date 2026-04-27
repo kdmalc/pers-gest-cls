@@ -84,7 +84,7 @@ Config keys consumed (all optional with sensible defaults)
   MOE_top_k              : int | None          (None = soft/dense routing; set for sparse)
   MOE_use_shared_expert  : bool, default False (add always-on universal expert)
   MOE_aux_coeff          : float, default 1e-2 (Switch-style load balance loss weight)
-  MOE_importance_coeff   : float, default 1e-2 (importance loss weight)
+  MOE_importance_coeff   : float, default 1e-2 (importance loss weight) --> REMOVED FOR NOW!!!
   demo_embed_dim         : int, default 8      (demographics embedding output dim;
                                                 used only when routing_signal ==
                                                 "context_proj_with_demo")
