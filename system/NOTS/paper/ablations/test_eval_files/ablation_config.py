@@ -3,23 +3,49 @@ ablation_config.py
 ==================
 Single source of truth for all ablation hyperparameters and shared utilities.
 
-The "best" config is derived from the M0 HPO warm-start trials. Per the spec:
-  - FIXED params use their specified fixed values.
-  - TUNE params use the median / mode of the warm-start top-10 trials, favouring
-    the settings that appeared most frequently among the top cluster.
+All tunable hyperparameters are taken from the CONFIRMED best HPO trial:
+  Trial 89 of study 'ablation_M0_1s3w_hpo_v1', val_acc = 90.05%
+  Log: /scratch/my13/kai/runs/paper/ablations/hpo/M0/trial_89
 
-Reviewed choices (justify each if a reviewer asks):
-  outer_lr              = 3e-4  (median of top trials: 2.6e-4 to 5.3e-4)
-  maml_alpha_init       = 1.7e-3 (median of top trials)
-  maml_alpha_init_eval  = 0.017  (median of top trials)
-  maml_inner_steps      = 5      (most common, spec says keep 5 competitive)
-  wd                    = 5.6e-4 (median)
-  label_smooth          = 0.15   (mode of top-10)
-  episodes_per_epoch    = 200    (mode of top-10)
-  num_experts           = 32     (near-mode of top-10, spec says "best val")
-  MOE_top_k             = 9      (mode of top-10)
-  MOE_gate_temperature  = 0.65   (median)
-  MOE_aux_coeff         = 0.023  (median, "lower is better" per spec)
+Parameters sourced directly from the Trial 89 config snapshot in M0_best_log.out.
+Each changed value is annotated with its old (pre-Trial-89) value for auditability.
+
+Trial 89 Optuna parameters (the tuned subset):
+  outer_lr               = 1.9506e-4   (was 3e-4)
+  wd                     = 8.874e-4    (was 5.6e-4)
+  maml_inner_steps       = 10          (was 5)
+  maml_inner_steps_eval  = 10          (was 50)
+  maml_alpha_init        = 9.735e-4    (was 1.7e-3)
+  maml_alpha_init_eval   = 5.066e-3    (was 0.017)
+  maml_use_lslr          = True        (unchanged)
+  use_lslr_at_eval       = False       (unchanged)
+  use_maml_msl           = "hybrid"    (was False)
+  maml_msl_num_epochs    = 31          (was 0)
+  episodes_per_epoch     = 500         (was 200)
+  num_experts            = 22          (was 32)
+  MOE_top_k              = 9           (unchanged)
+  MOE_gate_temperature   = 1.5290      (was 0.65)
+  MOE_aux_coeff          = 0.03282     (was 0.023)
+  MOE_ctx_out_dim        = 64          (was 32)
+  MOE_ctx_hidden_dim     = 32          (unchanged)
+  MOE_dropout            = 0.03654     (was 0.05)
+  MOE_aux_loss_plcmt     = "outer"     (was "inner")
+  label_smooth           = 0.05        (was 0.15)
+
+Architecture params from Trial 89 config snapshot (not Optuna-tuned but
+confirmed values from the best run):
+  cnn_base_filters       = 64          (was 128)
+  lstm_hidden            = 64          (was 128)
+  groupnorm_num_groups   = 8           (was 4)
+  use_GlobalAvgPooling   = True        (was False)
+  use_demographics       = False       (was True)
+  num_eval_episodes(val) = 100         (was 200; NUM_VAL_EPISODES kept at 200
+                                        for test — see note below)
+
+NOTE on num_eval_episodes: Trial 89 used 100 val episodes during HPO (faster
+iteration). We keep NUM_VAL_EPISODES = 200 here for the final ablation runs
+to give tighter val accuracy estimates, consistent with ablation spec §1.3.
+If you want to exactly reproduce the HPO regime, set NUM_VAL_EPISODES = 100.
 """
 
 import os
@@ -45,7 +71,7 @@ FIXED_SEED = 42
 NUM_FINAL_SEEDS = 5
 # Episodic eval episodes (spec: 500 for test)
 NUM_TEST_EPISODES = 500
-NUM_VAL_EPISODES  = 200
+NUM_VAL_EPISODES  = 200   # see note in module docstring re: Trial 89 using 100
 
 # ── Environment paths (same convention as HPO script) ─────────────────────────
 CODE_DIR = Path(os.environ.get("CODE_DIR", "./")).resolve()
@@ -85,6 +111,9 @@ def make_base_config(ablation_id: str) -> dict:
     Returns the shared base config dict.  Each ablation script calls this and
     then modifies only the keys it needs to change.
 
+    All hyperparameter values reflect Trial 89 (val_acc=90.05%), the confirmed
+    best HPO trial from study 'ablation_M0_1s3w_hpo_v1'.
+
     Args:
         ablation_id: e.g. "M0", "A1", etc.  Used for save-path naming.
     """
@@ -111,7 +140,7 @@ def make_base_config(ablation_id: str) -> dict:
     config["train_PIDs"] = TRAIN_PIDS
     config["val_PIDs"]   = VAL_PIDS
     config["test_PIDs"]  = TEST_PIDS
-    config["all_PIDs"]  = TRAIN_PIDS + VAL_PIDS + TEST_PIDS
+    config["all_PIDs"]   = TRAIN_PIDS + VAL_PIDS + TEST_PIDS
     config["test_procedure"] = 'hpo_test_split'  # Either 'hpo_test_split' or "L2SO"
 
     # ── Input dimensions (FIXED per spec) ─────────────────────────────────────
@@ -123,11 +152,14 @@ def make_base_config(ablation_id: str) -> dict:
     # ── Modality flags ────────────────────────────────────────────────────────
     config["multimodal"]       = True
     config["use_imu"]          = True
-    config["use_demographics"] = True
+    # CHANGED: Trial 89 had use_demographics=False. The HPO apparently found
+    # demographics unhelpful (or at least the best trial didn't use them).
+    # All ablations should be consistent with this.
+    config["use_demographics"] = False   # was True
     config["use_film_x_demo"]  = False
-    config["FILM_on_context_or_demo"] = "context" # TODO: I dont think this is used at all yet?
+    config["FILM_on_context_or_demo"] = "context"  # TODO: I dont think this is used at all yet?
     ## Also, for the figure at least, we should probably drop ET, Left, and Man from this since otherwise we have 15 cols instead of 12
-    #config["demo_dim_labels"] = ["time_disabled", "age", "BMI", "DASH_score", "disability_coding_ET", "disability_coding_MD", 
+    #config["demo_dim_labels"] = ["time_disabled", "age", "BMI", "DASH_score", "disability_coding_ET", "disability_coding_MD",
     # "disability_coding_No_Disability", "disability_coding_PN", "disability_coding_SCI", "disability_coding_other", "handedness_Left",
     # "handedness_Right", "gender_Man", "gender_Non-binary", "gender_Woman",
     #]
@@ -143,15 +175,19 @@ def make_base_config(ablation_id: str) -> dict:
     # At eval time the head is replaced with a fresh `n_way`-class head.
     config["pretrain_num_classes"] = 10
 
-    # ── Architecture (FIXED per spec) ─────────────────────────────────────────
-    config["cnn_base_filters"]    = 128
+    # ── Architecture ──────────────────────────────────────────────────────────
+    # CHANGED: Trial 89 used cnn_base_filters=64, lstm_hidden=64 (was 128 each).
+    # These are smaller than the old defaults but are what actually achieved 90.05%.
+    config["cnn_base_filters"]    = 64    # was 128
     config["cnn_layers"]          = 3
     config["cnn_kernel"]          = 5
-    config["lstm_hidden"]         = 128
+    config["lstm_hidden"]         = 64    # was 128
     config["lstm_layers"]         = 3
     config["bidirectional"]       = True
-    config["groupnorm_num_groups"] = 4 
-    config["use_GlobalAvgPooling"] = False
+    # CHANGED: Trial 89 used groupnorm_num_groups=8 (was 4).
+    config["groupnorm_num_groups"] = 8    # was 4
+    # CHANGED: Trial 89 had use_GlobalAvgPooling=True (was False).
+    config["use_GlobalAvgPooling"] = True  # was False
     config["use_batch_norm"]       = False
     config["dropout"]              = 0.1
     config["head_type"]            = "mlp"
@@ -171,15 +207,19 @@ def make_base_config(ablation_id: str) -> dict:
     # Only A12 sets this to 20 to handle 2kHz data on a 32GB GPU.
     config["front_end_stride"]     = 0
 
-    # ── Best hyperparameters (from HPO warm-start analysis) ───────────────────
-    config["learning_rate"]  = 3e-4      # outer_lr
-    config["weight_decay"]   = 5.6e-4
-    config["label_smooth"]   = 0.15
+    # ── Best hyperparameters (Trial 89) ───────────────────────────────────────
+    # CHANGED: learning_rate 3e-4 → 1.9506e-4 (Trial 89 Optuna value)
+    config["learning_rate"]  = 1.9506115991520216e-4   # was 3e-4
+    # CHANGED: weight_decay 5.6e-4 → 8.874e-4 (Trial 89 Optuna value)
+    config["weight_decay"]   = 8.873572502558012e-4    # was 5.6e-4
+    # CHANGED: label_smooth 0.15 → 0.05 (Trial 89 Optuna value)
+    config["label_smooth"]   = 0.05                    # was 0.15
     config["gradient_clip_max_norm"] = 10.0
 
     # ── Training schedule ─────────────────────────────────────────────────────
     config["num_epochs"]              = 50
-    config["episodes_per_epoch_train"] = 200   # TUNE; best from warm-start mode
+    # CHANGED: episodes_per_epoch_train 200 → 500 (Trial 89 Optuna value)
+    config["episodes_per_epoch_train"] = 500   # was 200
     config["num_eval_episodes"]        = NUM_VAL_EPISODES
     config["batch_size"]               = 64    # flat dataloader default
     config["num_workers"]              = 8
@@ -191,37 +231,50 @@ def make_base_config(ablation_id: str) -> dict:
     config["earlystopping_patience"]   = 8
     config["earlystopping_min_delta"]  = 0.005
 
-    # ── MAML core (FIXED + best TUNE per spec) ────────────────────────────────
+    # ── MAML core (Trial 89 values) ───────────────────────────────────────────
     config["meta_learning"]           = True
     config["meta_batchsize"]          = 24    # FIXED per spec
-    config["maml_inner_steps"]        = 5     # best from warm-start mode
-    config["maml_inner_steps_eval"]   = 50    # FIXED per spec
-    config["maml_alpha_init"]         = 1.7e-3
-    config["maml_alpha_init_eval"]    = 0.017
-    config["maml_use_lslr"]           = True   # FIXED per spec
-    config["use_lslr_at_eval"]        = False  # FIXED per spec
-    config["use_maml_msl"]            = False  # FIXED per spec
-    config["maml_msl_num_epochs"]     = 0
+    # CHANGED: maml_inner_steps 5 → 10 (Trial 89 Optuna value)
+    config["maml_inner_steps"]        = 10    # was 5
+    # CHANGED: maml_inner_steps_eval 50 → 10 (Trial 89 value; HPO did NOT use
+    # a separate eval step count — it used the same value as train)
+    config["maml_inner_steps_eval"]   = 10    # was 50
+    # CHANGED: maml_alpha_init 1.7e-3 → 9.735e-4 (Trial 89 Optuna value)
+    config["maml_alpha_init"]         = 9.734890497675034e-4   # was 1.7e-3
+    # CHANGED: maml_alpha_init_eval 0.017 → 5.066e-3 (Trial 89 Optuna value)
+    config["maml_alpha_init_eval"]    = 5.06597432775958e-3    # was 0.017
+    config["maml_use_lslr"]           = True   # FIXED per spec; unchanged
+    config["use_lslr_at_eval"]        = False  # FIXED per spec; unchanged
+    # CHANGED: use_maml_msl False → "hybrid" (Trial 89 Optuna value)
+    config["use_maml_msl"]            = "hybrid"  # was False
+    # CHANGED: maml_msl_num_epochs 0 → 31 (Trial 89 Optuna value)
+    config["maml_msl_num_epochs"]     = 31         # was 0
     config["maml_opt_order"]          = "first"
     config["maml_first_order_to_second_order_epoch"] = 1_000_000
     config["enable_inner_loop_optimizable_bn_params"] = False
 
-    # ── MoE (FIXED + best TUNE per spec) ─────────────────────────────────────
+    # ── MoE (Trial 89 values) ─────────────────────────────────────────────────
     config["use_MOE"]                         = True
     config["MOE_placement"]                   = "encoder"   # FIXED per spec
-    config["num_experts"]                     = 32
-    config["MOE_top_k"]                       = 9
+    # CHANGED: num_experts 32 → 22 (Trial 89 Optuna value)
+    config["num_experts"]                     = 22          # was 32
+    config["MOE_top_k"]                       = 9           # unchanged
     config["top_k"]                           = config["MOE_top_k"]
-    config["MOE_gate_temperature"]            = 0.65
-    config["MOE_aux_coeff"]                   = 0.023
-    config["MOE_ctx_out_dim"]                 = 32    # FIXED per spec
-    config["MOE_ctx_hidden_dim"]              = 32    # FIXED per spec
-    config["MOE_dropout"]                     = 0.05  # FIXED per spec
+    # CHANGED: MOE_gate_temperature 0.65 → 1.5290 (Trial 89 Optuna value)
+    config["MOE_gate_temperature"]            = 1.5290172211651742   # was 0.65
+    # CHANGED: MOE_aux_coeff 0.023 → 0.03282 (Trial 89 Optuna value)
+    config["MOE_aux_coeff"]                   = 0.03282324399711515  # was 0.023
+    # CHANGED: MOE_ctx_out_dim 32 → 64 (Trial 89 Optuna value)
+    config["MOE_ctx_out_dim"]                 = 64    # was 32
+    config["MOE_ctx_hidden_dim"]              = 32    # unchanged
+    # CHANGED: MOE_dropout 0.05 → 0.03654 (Trial 89 Optuna value)
+    config["MOE_dropout"]                     = 0.03653577545411608  # was 0.05
     config["MOE_expert_expand"]               = 1.0
     config["MOE_mlp_hidden_mult"]             = 1.0
     config["MOE_log_every"]                   = 5
     config["MOE_plot_dir"]                    = None
-    config["apply_MOE_aux_loss_inner_outer"]  = "inner"  # FIXED per spec (favoured by Optuna)
+    # CHANGED: apply_MOE_aux_loss_inner_outer "inner" → "outer" (Trial 89 Optuna value)
+    config["apply_MOE_aux_loss_inner_outer"]  = "outer"   # was "inner"
     # Legacy keys kept for compatibility
     config["gate_type"]              = "context_feature_demo"
     config["expert_architecture"]    = "MLP"
@@ -437,7 +490,7 @@ def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
 
     with open(tensor_dict_path, "rb") as f:
         full_dict   = pickle.load(f)
-    tensor_dict = reorient_tensor_dict(full_dict, config)    
+    tensor_dict = reorient_tensor_dict(full_dict, config)
 
     test_ds = MetaGestureDataset(
         tensor_dict,
