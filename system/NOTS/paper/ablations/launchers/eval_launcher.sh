@@ -1,5 +1,5 @@
 #!/bin/bash
-# eval_ablation_launcher.sh
+# eval_launcher.sh
 # =========================
 # Submit final evaluation jobs for one or more ablation IDs.
 #
@@ -21,14 +21,14 @@
 #   grid → fewshot_grid.py               [one job per (k_shot, n_way) cell]
 #
 # Usage:
-#   bash eval_ablation_launcher.sh M0                    # eval M0
-#   bash eval_ablation_launcher.sh A1 A2 A4              # multiple ablations
-#   bash eval_ablation_launcher.sh all                   # all ablations (no grid)
-#   bash eval_ablation_launcher.sh grid                  # k-shot/n-way grid (M0)
-#   bash eval_ablation_launcher.sh all grid              # everything
-#   bash eval_ablation_launcher.sh M0 --dry-run          # print without submitting
-#   bash eval_ablation_launcher.sh A1 --debug            # debug partition, 15 min limit
-#   bash eval_ablation_launcher.sh A5 --partition commons
+#   bash eval_launcher.sh M0                    # eval M0
+#   bash eval_launcher.sh A1 A2 A4              # multiple ablations
+#   bash eval_launcher.sh all                   # all ablations (no grid)
+#   bash eval_launcher.sh grid                  # k-shot/n-way grid (M0)
+#   bash eval_launcher.sh all grid              # everything
+#   bash eval_launcher.sh M0 --dry-run          # print without submitting
+#   bash eval_launcher.sh A1 --debug            # debug partition, 15 min limit
+#   bash eval_launcher.sh A5 --partition commons
 #
 # Output layout:
 #   $EVAL_OUT_BASE/<ID>/              (M0, A1, A2, A4, A7, A8, A11)
@@ -43,7 +43,7 @@ set -euo pipefail
 # =============================================================================
 CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
 DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
-ABLATIONS_DIR="$CODE_DIR/system/NOTS/paper/ablations"
+ABLATIONS_DIR="$CODE_DIR/system/NOTS/paper/ablations/test_eval_files"
 EVAL_OUT_BASE=/scratch/my13/kai/runs/paper/ablations/eval
 LOG_DIR=/scratch/my13/kai/runs/paper/ablations/eval/logs
 
@@ -111,7 +111,7 @@ done
 
 if [[ ${#ABLATIONS[@]} -eq 0 ]]; then
     echo "ERROR: No ablations specified."
-    echo "Usage: bash eval_ablation_launcher.sh [$(IFS='|'; echo "${ALL_TOKENS[*]}")|all] [--dry-run] [--debug] [--partition PARTITION]"
+    echo "Usage: bash eval_launcher.sh [$(IFS='|'; echo "${ALL_TOKENS[*]}")|all] [--dry-run] [--debug] [--partition PARTITION]"
     echo "       'all' expands to: ${VALID_ABLATIONS[*]}  (grid is opt-in, not included in 'all')"
     exit 1
 fi
