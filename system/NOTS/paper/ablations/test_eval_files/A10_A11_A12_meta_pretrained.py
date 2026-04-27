@@ -14,7 +14,7 @@ A12: Our full MAML + MoE model trained on the same 2kHz EMG-only data.
      Apples-to-apples control: same data format as A10/A11, but our method.
 
 test_procedure:
-  'hpo_test_split' : Fixed split, multi-seed loop (development/HPO).
+  'hpo_test_split' : Fixed split, single run at FIXED_SEED.
   'L2SO'           : Leave-2-Subjects-Out over all_PIDs (same subject list
                      as all other ablations — only the data frequency differs).
                      test=subjects[i], val=subjects[(i+1)%N], train=rest.
@@ -92,7 +92,7 @@ sys.path.insert(0, str(NEUROMOTOR_REPO))
 
 from ablation_config import (
     make_base_config, build_maml_moe_model,
-    set_seeds, FIXED_SEED, NUM_FINAL_SEEDS,
+    set_seeds, FIXED_SEED,
     run_episodic_test_eval, run_supervised_test_eval,
     replace_head_for_eval,
     save_results, save_model_checkpoint, count_parameters,
@@ -366,19 +366,17 @@ def run_a10():
     tensor_dict_path = str(EMG_2KHZ_PKL_PATH)
 
     if test_procedure == "hpo_test_split":
-        all_results = _run_a10_hpo_test_split(config, tensor_dict_path)
-        test_accs   = [r["test_results"]["mean_acc"] for r in all_results]
+        result  = _run_a10_hpo_test_split(config, tensor_dict_path)
         summary = {
             "ablation_id":     "A10",
             "description":     "Meta pretrained — prototypical zero-shot (no fine-tuning)",
             "data_note":       "2kHz EMG-only — compare only against A11/A12, not M0–A9",
             "eval_protocol":   "prototypical nearest-centroid in L2-normalised feature space",
             "test_procedure":  "hpo_test_split",
-            "n_params":        all_results[0]["n_params"],
-            "fold_results":    all_results,
-            "mean_test_acc":   float(np.mean(test_accs)),
-            "std_test_acc":    float(np.std(test_accs)),
-            "num_seeds":       NUM_FINAL_SEEDS,
+            "seed":            FIXED_SEED,
+            "n_params":        result["n_params"],
+            "result":          result,
+            "test_acc":        result["test_results"]["mean_acc"],
             "config_snapshot": {k: str(v) for k, v in config.items()},
         }
     else:  # L2SO
@@ -393,6 +391,7 @@ def run_a10():
             "data_note":       "2kHz EMG-only — compare only against A11/A12, not M0–A9",
             "eval_protocol":   "prototypical nearest-centroid in L2-normalised feature space",
             "test_procedure":  "L2SO",
+            "seed":            FIXED_SEED,
             "n_params":        all_results[0]["n_params"],
             "fold_results":    all_results,
             "mean_test_acc":   float(np.mean(test_accs)),
@@ -404,36 +403,33 @@ def run_a10():
     save_results(summary, config, tag="summary")
 
     print(f"\n{'='*70}")
-    print(f"[A10] FINAL zero-shot ({test_procedure}): "
-          f"{summary['mean_test_acc']*100:.2f}% ± {summary['std_test_acc']*100:.2f}%")
-    if test_procedure == "L2SO":
+    if test_procedure == "hpo_test_split":
+        print(f"[A10] FINAL zero-shot (hpo_test_split): "
+              f"{summary['test_acc']*100:.2f}%  single run, seed={FIXED_SEED}")
+    else:
+        print(f"[A10] FINAL zero-shot (L2SO): "
+              f"{summary['mean_test_acc']*100:.2f}% ± {summary['std_test_acc']*100:.2f}%")
         print(f"     over {summary['num_folds']} L2SO folds (one per test subject)")
     print(f"      ⚠  2kHz EMG-only — compare only against A11/A12")
     print(f"{'='*70}")
 
 
 def _run_a10_hpo_test_split(config, tensor_dict_path):
-    all_results = []
-    for seed_idx in range(NUM_FINAL_SEEDS):
-        actual_seed = FIXED_SEED + seed_idx
-        print(f"\n{'='*70}")
-        print(f"[A10] hpo_test_split: seed {seed_idx+1}/{NUM_FINAL_SEEDS} (seed={actual_seed})")
-        print(f"{'='*70}")
-        set_seeds(actual_seed)
-        config_seed        = copy.deepcopy(config)
-        config_seed["seed"] = actual_seed
-        model   = MetaEMGWrapper(META_CHECKPOINT_PATH, freeze_backbone=True)
-        model.to(config["device"])
-        n_params     = count_parameters(model)
-        test_results = prototypical_zeroshot_eval(
-            model, config_seed, tensor_dict_path, config["test_PIDs"], num_episodes=500,
-        )
-        print(f"[A10 | seed={actual_seed}] Zero-shot: "
-              f"{test_results['mean_acc']*100:.2f}% ± {test_results['std_acc']*100:.2f}%")
-        all_results.append({
-            "seed": actual_seed, "test_results": test_results, "n_params": n_params,
-        })
-    return all_results
+    print(f"\n{'='*70}")
+    print(f"[A10] hpo_test_split: single run (seed={FIXED_SEED})")
+    print(f"{'='*70}")
+    set_seeds(FIXED_SEED)
+    config_run        = copy.deepcopy(config)
+    config_run["seed"] = FIXED_SEED
+    model    = MetaEMGWrapper(META_CHECKPOINT_PATH, freeze_backbone=True)
+    model.to(config["device"])
+    n_params     = count_parameters(model)
+    test_results = prototypical_zeroshot_eval(
+        model, config_run, tensor_dict_path, config["test_PIDs"], num_episodes=500,
+    )
+    print(f"[A10 | seed={FIXED_SEED}] Zero-shot: "
+          f"{test_results['mean_acc']*100:.2f}% ± {test_results['std_acc']*100:.2f}%")
+    return {"seed": FIXED_SEED, "test_results": test_results, "n_params": n_params}
 
 
 def _run_a10_l2so(config, tensor_dict_path):
@@ -498,23 +494,19 @@ def run_a11():
     tensor_dict_path = str(EMG_2KHZ_PKL_PATH)
 
     if test_procedure == "hpo_test_split":
-        all_results = _run_a11_hpo_test_split(config, tensor_dict_path)
-        head_accs   = [r["test_head_only"]["mean_acc"] for r in all_results]
-        full_accs   = [r["test_full_ft"]["mean_acc"]   for r in all_results]
+        result    = _run_a11_hpo_test_split(config, tensor_dict_path)
         summary = {
             "ablation_id":         "A11",
             "description":         "Meta pretrained — 1-shot head-only and full fine-tuning",
             "data_note":           "2kHz EMG-only — compare only against A10/A12, not M0–A9",
             "test_procedure":      "hpo_test_split",
+            "seed":                FIXED_SEED,
             "ft_lr":               A11_FT_LR,
             "ft_steps":            A11_FT_STEPS,
-            "n_params":            all_results[0]["n_params"],
-            "fold_results":        all_results,
-            "mean_test_head_only": float(np.mean(head_accs)),
-            "std_test_head_only":  float(np.std(head_accs)),
-            "mean_test_full_ft":   float(np.mean(full_accs)),
-            "std_test_full_ft":    float(np.std(full_accs)),
-            "num_seeds":           NUM_FINAL_SEEDS,
+            "n_params":            result["n_params"],
+            "result":              result,
+            "test_head_only_acc":  result["test_head_only"]["mean_acc"],
+            "test_full_ft_acc":    result["test_full_ft"]["mean_acc"],
             "config_snapshot":     {k: str(v) for k, v in config.items()},
         }
     else:  # L2SO
@@ -526,6 +518,7 @@ def run_a11():
             "description":         "Meta pretrained — 1-shot head-only and full fine-tuning",
             "data_note":           "2kHz EMG-only — compare only against A10/A12, not M0–A9",
             "test_procedure":      "L2SO",
+            "seed":                FIXED_SEED,
             "ft_lr":               A11_FT_LR,
             "ft_steps":            A11_FT_STEPS,
             "n_params":            all_results[0]["n_params"],
@@ -541,47 +534,48 @@ def run_a11():
     save_results(summary, config, tag="summary")
 
     print(f"\n{'='*70}")
-    print(f"[A11] FINAL head-only ({test_procedure}): "
-          f"{summary['mean_test_head_only']*100:.2f}% ± {summary['std_test_head_only']*100:.2f}%")
-    print(f"[A11] FINAL full-ft   ({test_procedure}): "
-          f"{summary['mean_test_full_ft']*100:.2f}% ± {summary['std_test_full_ft']*100:.2f}%")
-    if test_procedure == "L2SO":
+    if test_procedure == "hpo_test_split":
+        print(f"[A11] FINAL head-only (hpo_test_split): "
+              f"{summary['test_head_only_acc']*100:.2f}%  single run, seed={FIXED_SEED}")
+        print(f"[A11] FINAL full-ft   (hpo_test_split): "
+              f"{summary['test_full_ft_acc']*100:.2f}%  single run, seed={FIXED_SEED}")
+    else:
+        print(f"[A11] FINAL head-only (L2SO): "
+              f"{summary['mean_test_head_only']*100:.2f}% ± {summary['std_test_head_only']*100:.2f}%")
+        print(f"[A11] FINAL full-ft   (L2SO): "
+              f"{summary['mean_test_full_ft']*100:.2f}% ± {summary['std_test_full_ft']*100:.2f}%")
         print(f"     over {summary['num_folds']} L2SO folds (one per test subject)")
     print(f"      ⚠  2kHz EMG-only — compare only against A10/A12")
     print(f"{'='*70}")
 
 
 def _run_a11_hpo_test_split(config, tensor_dict_path):
-    all_results = []
-    for seed_idx in range(NUM_FINAL_SEEDS):
-        actual_seed = FIXED_SEED + seed_idx
-        print(f"\n{'='*70}")
-        print(f"[A11] hpo_test_split: seed {seed_idx+1}/{NUM_FINAL_SEEDS} (seed={actual_seed})")
-        print(f"      ft_lr={A11_FT_LR}, ft_steps={A11_FT_STEPS}")
-        print(f"{'='*70}")
-        set_seeds(actual_seed)
-        config_seed         = copy.deepcopy(config)
-        config_seed["seed"] = actual_seed
-        model = MetaEMGWrapper(META_CHECKPOINT_PATH, freeze_backbone=True)
-        model.to(config["device"])
-        n_params     = count_parameters(model)
-        head_results = run_supervised_test_eval(
-            model, config_seed, tensor_dict_path, config["test_PIDs"], ft_mode="head_only",
-        )
-        full_results = run_supervised_test_eval(
-            model, config_seed, tensor_dict_path, config["test_PIDs"], ft_mode="full",
-        )
-        print(f"[A11 | seed={actual_seed}] head-only: "
-              f"{head_results['mean_acc']*100:.2f}% ± {head_results['std_acc']*100:.2f}%")
-        print(f"[A11 | seed={actual_seed}] full-ft:   "
-              f"{full_results['mean_acc']*100:.2f}% ± {full_results['std_acc']*100:.2f}%")
-        all_results.append({
-            "seed":           actual_seed,
-            "test_head_only": head_results,
-            "test_full_ft":   full_results,
-            "n_params":       n_params,
-        })
-    return all_results
+    print(f"\n{'='*70}")
+    print(f"[A11] hpo_test_split: single run (seed={FIXED_SEED})")
+    print(f"      ft_lr={A11_FT_LR}, ft_steps={A11_FT_STEPS}")
+    print(f"{'='*70}")
+    set_seeds(FIXED_SEED)
+    config_run         = copy.deepcopy(config)
+    config_run["seed"] = FIXED_SEED
+    model = MetaEMGWrapper(META_CHECKPOINT_PATH, freeze_backbone=True)
+    model.to(config["device"])
+    n_params     = count_parameters(model)
+    head_results = run_supervised_test_eval(
+        model, config_run, tensor_dict_path, config["test_PIDs"], ft_mode="head_only",
+    )
+    full_results = run_supervised_test_eval(
+        model, config_run, tensor_dict_path, config["test_PIDs"], ft_mode="full",
+    )
+    print(f"[A11 | seed={FIXED_SEED}] head-only: "
+          f"{head_results['mean_acc']*100:.2f}% ± {head_results['std_acc']*100:.2f}%")
+    print(f"[A11 | seed={FIXED_SEED}] full-ft:   "
+          f"{full_results['mean_acc']*100:.2f}% ± {full_results['std_acc']*100:.2f}%")
+    return {
+        "seed":           FIXED_SEED,
+        "test_head_only": head_results,
+        "test_full_ft":   full_results,
+        "n_params":       n_params,
+    }
 
 
 def _run_a11_l2so(config, tensor_dict_path):
@@ -666,18 +660,16 @@ def run_a12():
     tensor_dict_path = str(EMG_2KHZ_PKL_PATH)
 
     if test_procedure == "hpo_test_split":
-        all_results = _run_a12_hpo_test_split(config, tensor_dict_path)
-        test_accs   = [r["test_results"]["mean_acc"] for r in all_results]
+        result  = _run_a12_hpo_test_split(config, tensor_dict_path)
         summary = {
             "ablation_id":     "A12",
             "description":     "MAML + MoE on 2kHz EMG-only (apples-to-apples control)",
             "data_note":       "2kHz EMG-only — compare only against A10/A11, not M0–A9",
             "test_procedure":  "hpo_test_split",
-            "n_params":        all_results[0]["n_params"],
-            "fold_results":    all_results,
-            "mean_test_acc":   float(np.mean(test_accs)),
-            "std_test_acc":    float(np.std(test_accs)),
-            "num_seeds":       NUM_FINAL_SEEDS,
+            "seed":            FIXED_SEED,
+            "n_params":        result["n_params"],
+            "result":          result,
+            "test_acc":        result["test_results"]["mean_acc"],
             "config_snapshot": {k: str(v) for k, v in config.items()},
         }
     else:  # L2SO
@@ -688,6 +680,7 @@ def run_a12():
             "description":     "MAML + MoE on 2kHz EMG-only (apples-to-apples control)",
             "data_note":       "2kHz EMG-only — compare only against A10/A11, not M0–A9",
             "test_procedure":  "L2SO",
+            "seed":            FIXED_SEED,
             "n_params":        all_results[0]["n_params"],
             "fold_results":    all_results,
             "mean_test_acc":   float(np.mean(test_accs)),
@@ -699,55 +692,54 @@ def run_a12():
     save_results(summary, config, tag="summary")
 
     print(f"\n{'='*70}")
-    print(f"[A12] FINAL ({test_procedure}): "
-          f"{summary['mean_test_acc']*100:.2f}% ± {summary['std_test_acc']*100:.2f}%")
-    if test_procedure == "L2SO":
+    if test_procedure == "hpo_test_split":
+        print(f"[A12] FINAL (hpo_test_split): "
+              f"{summary['test_acc']*100:.2f}%  single run, seed={FIXED_SEED}")
+    else:
+        print(f"[A12] FINAL (L2SO): "
+              f"{summary['mean_test_acc']*100:.2f}% ± {summary['std_test_acc']*100:.2f}%")
         print(f"     over {summary['num_folds']} L2SO folds (one per test subject)")
     print(f"      ⚠  2kHz EMG-only data — compare only against A10/A11, not M0")
     print(f"{'='*70}")
 
 
 def _run_a12_hpo_test_split(config, tensor_dict_path):
-    all_results = []
-    for seed_idx in range(NUM_FINAL_SEEDS):
-        actual_seed = FIXED_SEED + seed_idx
-        print(f"\n{'='*70}")
-        print(f"[A12] hpo_test_split: seed {seed_idx+1}/{NUM_FINAL_SEEDS} (seed={actual_seed})")
-        print(f"{'='*70}")
-        set_seeds(actual_seed)
-        config_seed         = copy.deepcopy(config)
-        config_seed["seed"] = actual_seed
-        model    = build_maml_moe_model(config_seed)
-        n_params = count_parameters(model)
-        print(f"[A12 | seed={actual_seed}] Parameters: {n_params:,}  "
-              f"EMG-only {config['emg_in_ch']}ch @ 2kHz, seq_len={config['sequence_length']}")
-        train_dl, val_dl = get_maml_dataloaders(config_seed, tensor_dict_path=tensor_dict_path)
-        trained_model, train_history = mamlpp_pretrain(
-            model, config_seed, train_dl, episodic_val_loader=val_dl,
-        )
-        best_val_acc = train_history["best_val_acc"]
-        print(f"[A12 | seed={actual_seed}] Best val acc = {best_val_acc:.4f}")
-        save_model_checkpoint(
-            {
-                "seed":             actual_seed,
-                "model_state_dict": train_history["best_state"],
-                "config":           config_seed,
-                "best_val_acc":     best_val_acc,
-            },
-            config_seed,
-            tag=f"fixed_seed{actual_seed}_best",
-        )
-        trained_model.load_state_dict(train_history["best_state"])
-        test_results = run_episodic_test_eval(
-            trained_model, config_seed, tensor_dict_path, config["test_PIDs"]
-        )
-        print(f"[A12 | seed={actual_seed}] Test: "
-              f"{test_results['mean_acc']*100:.2f}% ± {test_results['std_acc']*100:.2f}%")
-        all_results.append({
-            "seed": actual_seed, "best_val_acc": float(best_val_acc),
-            "test_results": test_results, "n_params": n_params,
-        })
-    return all_results
+    print(f"\n{'='*70}")
+    print(f"[A12] hpo_test_split: single run (seed={FIXED_SEED})")
+    print(f"{'='*70}")
+    set_seeds(FIXED_SEED)
+    config_run         = copy.deepcopy(config)
+    config_run["seed"] = FIXED_SEED
+    model    = build_maml_moe_model(config_run)
+    n_params = count_parameters(model)
+    print(f"[A12 | seed={FIXED_SEED}] Parameters: {n_params:,}  "
+          f"EMG-only {config['emg_in_ch']}ch @ 2kHz, seq_len={config['sequence_length']}")
+    train_dl, val_dl = get_maml_dataloaders(config_run, tensor_dict_path=tensor_dict_path)
+    trained_model, train_history = mamlpp_pretrain(
+        model, config_run, train_dl, episodic_val_loader=val_dl,
+    )
+    best_val_acc = train_history["best_val_acc"]
+    print(f"[A12 | seed={FIXED_SEED}] Best val acc = {best_val_acc:.4f}")
+    save_model_checkpoint(
+        {
+            "seed":             FIXED_SEED,
+            "model_state_dict": train_history["best_state"],
+            "config":           config_run,
+            "best_val_acc":     best_val_acc,
+        },
+        config_run,
+        tag=f"fixed_seed{FIXED_SEED}_best",
+    )
+    trained_model.load_state_dict(train_history["best_state"])
+    test_results = run_episodic_test_eval(
+        trained_model, config_run, tensor_dict_path, config["test_PIDs"]
+    )
+    print(f"[A12 | seed={FIXED_SEED}] Test: "
+          f"{test_results['mean_acc']*100:.2f}% ± {test_results['std_acc']*100:.2f}%")
+    return {
+        "seed": FIXED_SEED, "best_val_acc": float(best_val_acc),
+        "test_results": test_results, "n_params": n_params,
+    }
 
 
 def _run_a12_l2so(config, tensor_dict_path):

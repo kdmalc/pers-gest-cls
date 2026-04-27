@@ -11,7 +11,7 @@ Changes from M0:
   - Episodic evaluation with head-only and full fine-tuning (same as A1).
 
 test_procedure:
-  'hpo_test_split' : Fixed split, multi-seed loop (development/HPO).
+  'hpo_test_split' : Fixed split, single run at FIXED_SEED.
   'L2SO'           : Leave-2-Subjects-Out over all_PIDs. One run per fold.
 """
 
@@ -30,7 +30,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
     make_base_config, build_supervised_no_moe_model,
-    set_seeds, FIXED_SEED, NUM_FINAL_SEEDS,
+    set_seeds, FIXED_SEED,
     run_supervised_test_eval, save_results, save_model_checkpoint, count_parameters,
     RUN_DIR,
 )
@@ -126,21 +126,16 @@ def run_one_fold(fold_id: str, seed: int, config: dict, tensor_dict: dict) -> di
     }
 
 
-def run_hpo_test_split(config: dict, tensor_dict: dict) -> list:
-    results = []
-    for seed_idx in range(NUM_FINAL_SEEDS):
-        actual_seed = FIXED_SEED + seed_idx
-        print(f"\n{'='*70}")
-        print(f"[A2] hpo_test_split: seed {seed_idx+1}/{NUM_FINAL_SEEDS} (seed={actual_seed})")
-        print(f"{'='*70}")
-        result = run_one_fold(
-            fold_id=f"fixed_seed{actual_seed}",
-            seed=actual_seed,
-            config=copy.deepcopy(config),
-            tensor_dict=tensor_dict,
-        )
-        results.append(result)
-    return results
+def run_hpo_test_split(config: dict, tensor_dict: dict) -> dict:
+    print(f"\n{'='*70}")
+    print(f"[A2] hpo_test_split: single run (seed={FIXED_SEED})")
+    print(f"{'='*70}")
+    return run_one_fold(
+        fold_id=f"fixed_seed{FIXED_SEED}",
+        seed=FIXED_SEED,
+        config=copy.deepcopy(config),
+        tensor_dict=tensor_dict,
+    )
 
 
 def build_l2so_folds(all_pids: list) -> list:
@@ -207,23 +202,19 @@ def main():
     tensor_dict = reorient_tensor_dict(full_dict, config)
 
     if test_procedure == "hpo_test_split":
-        all_results = run_hpo_test_split(config, tensor_dict)
-        head_accs = [r["test_head_only"]["mean_acc"] for r in all_results]
-        full_accs = [r["test_full_ft"]["mean_acc"]   for r in all_results]
+        result = run_hpo_test_split(config, tensor_dict)
         summary = {
-            "ablation_id":         "A2",
-            "description":         "No-MAML + No-MoE (Vanilla CNN-LSTM Baseline)",
-            "test_procedure":      "hpo_test_split",
-            "n_params":            all_results[0]["n_params"],
-            "fold_results":        all_results,
-            "mean_test_head_only": float(np.mean(head_accs)),
-            "std_test_head_only":  float(np.std(head_accs)),
-            "mean_test_full_ft":   float(np.mean(full_accs)),
-            "std_test_full_ft":    float(np.std(full_accs)),
-            "ft_steps":            FT_STEPS,
-            "ft_lr":               FT_LR,
-            "num_seeds":           NUM_FINAL_SEEDS,
-            "config_snapshot":     {k: str(v) for k, v in config.items()},
+            "ablation_id":        "A2",
+            "description":        "No-MAML + No-MoE (Vanilla CNN-LSTM Baseline)",
+            "test_procedure":     "hpo_test_split",
+            "seed":               FIXED_SEED,
+            "n_params":           result["n_params"],
+            "result":             result,
+            "test_head_only_acc": result["test_head_only"]["mean_acc"],
+            "test_full_ft_acc":   result["test_full_ft"]["mean_acc"],
+            "ft_steps":           FT_STEPS,
+            "ft_lr":              FT_LR,
+            "config_snapshot":    {k: str(v) for k, v in config.items()},
         }
     else:  # L2SO
         all_results = run_l2so(config, tensor_dict)
@@ -233,6 +224,7 @@ def main():
             "ablation_id":         "A2",
             "description":         "No-MAML + No-MoE (Vanilla CNN-LSTM Baseline)",
             "test_procedure":      "L2SO",
+            "seed":                FIXED_SEED,
             "n_params":            all_results[0]["n_params"],
             "fold_results":        all_results,
             "mean_test_head_only": float(np.mean(head_accs)),
@@ -248,14 +240,18 @@ def main():
     save_results(summary, config, tag="summary")
 
     print(f"\n{'='*70}")
-    print(f"[A2] FINAL head-only ({test_procedure}): "
-          f"{summary['mean_test_head_only']*100:.2f}% ± {summary['std_test_head_only']*100:.2f}%")
-    print(f"[A2] FINAL full-ft   ({test_procedure}): "
-          f"{summary['mean_test_full_ft']*100:.2f}% ± {summary['std_test_full_ft']*100:.2f}%")
-    if test_procedure == "L2SO":
-        print(f"     over {summary['num_folds']} L2SO folds (one per test subject)")
+    if test_procedure == "hpo_test_split":
+        print(f"[A2] FINAL head-only (hpo_test_split): "
+              f"{summary['test_head_only_acc']*100:.2f}%")
+        print(f"[A2] FINAL full-ft   (hpo_test_split): "
+              f"{summary['test_full_ft_acc']*100:.2f}%")
+        print(f"     single run, seed={FIXED_SEED}")
     else:
-        print(f"     over {summary['num_seeds']} seeds, fixed split")
+        print(f"[A2] FINAL head-only (L2SO): "
+              f"{summary['mean_test_head_only']*100:.2f}% ± {summary['std_test_head_only']*100:.2f}%")
+        print(f"[A2] FINAL full-ft   (L2SO): "
+              f"{summary['mean_test_full_ft']*100:.2f}% ± {summary['std_test_full_ft']*100:.2f}%")
+        print(f"     over {summary['num_folds']} L2SO folds (one per test subject)")
     print(f"     {config['n_way']}-way {config['k_shot']}-shot")
     print(f"{'='*70}")
 

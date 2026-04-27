@@ -4,8 +4,6 @@ A7_A8_subject_specific.py
 ==========================
 Ablations A7 and A8: Subject-Specific Models
 
-[original docstring preserved — see rep split design notes above]
-
 test_procedure:
   'hpo_test_split' : Evaluate only on the fixed TEST_PIDS (development).
   'L2SO'           : Evaluate on ALL all_PIDs so subject coverage matches
@@ -16,6 +14,9 @@ test_procedure:
 NOTE: Subject-specific models have no cross-subject training phase.
 The subject-level loop here is over evaluation subjects only.
 Val/test splits are over REPS within each subject, not over subjects.
+
+seed_idx is fixed to 0 (single run per subject, consistent with all other
+ablations). This means train rep = 1, val rep = 2, test reps = 3–10.
 """
 
 import os, sys, copy, json, argparse
@@ -35,7 +36,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
     make_base_config, build_supervised_no_moe_model, build_maml_moe_model,
-    set_seeds, FIXED_SEED, NUM_FINAL_SEEDS, NUM_TEST_EPISODES,
+    set_seeds, FIXED_SEED, NUM_TEST_EPISODES,
     save_results, count_parameters, RUN_DIR,
 )
 from pretraining.pretrain_data_pipeline import get_pretrain_dataloaders
@@ -52,9 +53,14 @@ ALL_TRIAL_INDICES_0INDEXED = list(range(10))
 NUM_REPS = len(ALL_TRIAL_INDICES_0INDEXED)
 A7_PRETRAIN_EPOCHS = 100
 
+# Fixed seed_idx = 0: train rep=1, val rep=2, test reps=3–10.
+# Changing this would rotate which rep is used for support/train, which is a
+# data-split change — not a seed sweep. Keep at 0 for a single deterministic run.
+FIXED_SEED_IDX = 0
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Episode building helpers (unchanged)
+# Episode building helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_ss_episode(
@@ -141,7 +147,7 @@ def build_ss_eval_episodes(tensor_dict, pid, config, support_trial_idx,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A7 config + per-subject runner (unchanged)
+# A7 config + per-subject runner
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_config_a7() -> dict:
@@ -160,7 +166,10 @@ def build_config_a7() -> dict:
     return config
 
 
-def run_a7_one_subject(pid, seed_idx, seed, config, tensor_dict):
+def run_a7_one_subject(pid, config, tensor_dict):
+    seed     = FIXED_SEED
+    seed_idx = FIXED_SEED_IDX
+
     set_seeds(seed)
     config = copy.deepcopy(config)
     config["seed"] = seed
@@ -177,7 +186,7 @@ def run_a7_one_subject(pid, seed_idx, seed, config, tensor_dict):
     val_rep_num       = val_trial_idx   + 1
     support_trial_idx = train_trial_idx
 
-    print(f"[A7 | {pid} | seed_idx={seed_idx}] "
+    print(f"[A7 | {pid}] "
           f"Train rep: {train_rep_num} | Val rep: {val_rep_num} | "
           f"Test reps: {[i+1 for i in test_trial_indices]}")
 
@@ -189,7 +198,7 @@ def run_a7_one_subject(pid, seed_idx, seed, config, tensor_dict):
     model = build_supervised_no_moe_model(config)
     train_dl, val_dl, n_classes = get_pretrain_dataloaders(config, tensor_dict)
     assert len(train_dl.dataset) > 0, (
-        f"[A7 | {pid} | seed_idx={seed_idx}] Empty train set."
+        f"[A7 | {pid}] Empty train set."
     )
 
     trained_model, history = pretrain(model, train_dl, val_dl, config)
@@ -217,7 +226,7 @@ def run_a7_one_subject(pid, seed_idx, seed, config, tensor_dict):
         episode_accs.append(metrics["acc"])
 
     mean_acc = float(np.mean(episode_accs))
-    print(f"[A7 | {pid} | seed_idx={seed_idx}] Acc: {mean_acc*100:.2f}%")
+    print(f"[A7 | {pid}] Acc: {mean_acc*100:.2f}%")
 
     return {
         "pid":           pid,
@@ -232,7 +241,7 @@ def run_a7_one_subject(pid, seed_idx, seed, config, tensor_dict):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A8 config + per-subject runner (unchanged)
+# A8 config + per-subject runner
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_config_a8() -> dict:
@@ -241,7 +250,10 @@ def build_config_a8() -> dict:
     return config
 
 
-def run_a8_one_subject(pid, seed_idx, seed, config, tensor_dict):
+def run_a8_one_subject(pid, config, tensor_dict):
+    seed     = FIXED_SEED
+    seed_idx = FIXED_SEED_IDX
+
     set_seeds(seed)
     config = copy.deepcopy(config)
     config["seed"] = seed
@@ -250,7 +262,7 @@ def run_a8_one_subject(pid, seed_idx, seed, config, tensor_dict):
     query_trial_indices = [i for i in ALL_TRIAL_INDICES_0INDEXED if i != support_trial_idx]
     support_rep_num     = support_trial_idx + 1
 
-    print(f"[A8 | {pid} | seed_idx={seed_idx}] "
+    print(f"[A8 | {pid}] "
           f"Support rep: {support_rep_num} | Query reps: {[i+1 for i in query_trial_indices]}")
 
     model = build_maml_moe_model(config)
@@ -281,7 +293,7 @@ def run_a8_one_subject(pid, seed_idx, seed, config, tensor_dict):
         episode_accs.append(metrics["acc"])
 
     mean_acc = float(np.mean(episode_accs))
-    print(f"[A8 | {pid} | seed_idx={seed_idx}] Acc: {mean_acc*100:.2f}%")
+    print(f"[A8 | {pid}] Acc: {mean_acc*100:.2f}%")
 
     return {
         "pid":             pid,
@@ -301,7 +313,7 @@ def run_a8_one_subject(pid, seed_idx, seed, config, tensor_dict):
 def run_subject_specific_ablation(ablation_id, subject_runner, config,
                                    description, tensor_dict):
     """
-    Outer loop: iterate over eval subjects × NUM_FINAL_SEEDS.
+    Outer loop: iterate over eval subjects. Single run per subject (FIXED_SEED).
 
     Which subjects are evaluated depends on test_procedure:
       'hpo_test_split' → config['test_PIDs']  (fixed small set)
@@ -318,39 +330,31 @@ def run_subject_specific_ablation(ablation_id, subject_runner, config,
     print(f"\n{ablation_id} CONFIG (test_procedure={test_procedure}):")
     print(json.dumps({k: str(v) for k, v in config.items()}, indent=2))
     print(f"Evaluating on {len(eval_pids)} subjects: {eval_pids}")
+    print(f"Single run per subject: seed={FIXED_SEED}, seed_idx={FIXED_SEED_IDX}")
 
     all_results = []
     for pid in eval_pids:
-        for seed_idx in range(NUM_FINAL_SEEDS):
-            actual_seed = FIXED_SEED + seed_idx
-            print(f"\n{'='*70}")
-            print(f"[{ablation_id}] PID={pid}  seed_idx={seed_idx+1}/{NUM_FINAL_SEEDS}  "
-                  f"(seed={actual_seed})")
-            print(f"{'='*70}")
-            result = subject_runner(pid, seed_idx, actual_seed, config, tensor_dict)
-            all_results.append(result)
+        print(f"\n{'='*70}")
+        print(f"[{ablation_id}] PID={pid}  seed={FIXED_SEED}  seed_idx={FIXED_SEED_IDX}")
+        print(f"{'='*70}")
+        result = subject_runner(pid, config, tensor_dict)
+        all_results.append(result)
 
-    pid_to_accs = defaultdict(list)
-    for r in all_results:
-        pid_to_accs[r["pid"]].append(r["mean_acc"])
-
-    per_subject_mean = {
-        pid: float(np.mean(accs))
-        for pid, accs in pid_to_accs.items()
-    }
-    subject_means = list(per_subject_mean.values())
+    per_subject_mean = {r["pid"]: r["mean_acc"] for r in all_results}
+    subject_means    = list(per_subject_mean.values())
 
     summary = {
         "ablation_id":      ablation_id,
         "description":      description,
         "test_procedure":   test_procedure,
-        "n_params":         next(r["n_params"] for r in all_results),
+        "seed":             FIXED_SEED,
+        "seed_idx":         FIXED_SEED_IDX,
+        "n_params":         all_results[0]["n_params"],
         "all_results":      all_results,
         "per_subject_mean": per_subject_mean,
         "mean_acc":         float(np.mean(subject_means)),
         "std_acc":          float(np.std(subject_means)),
         "n_subjects":       len(per_subject_mean),
-        "num_seeds":        NUM_FINAL_SEEDS,
         "config_snapshot":  {k: str(v) for k, v in config.items()},
     }
     save_results(summary, config, tag="summary")
@@ -358,6 +362,7 @@ def run_subject_specific_ablation(ablation_id, subject_runner, config,
     print(f"\n{'='*70}")
     print(f"[{ablation_id}] FINAL ({test_procedure}) across {len(per_subject_mean)} subjects: "
           f"{summary['mean_acc']*100:.2f}% ± {summary['std_acc']*100:.2f}%")
+    print(f"     single run per subject: seed={FIXED_SEED}, seed_idx={FIXED_SEED_IDX}")
     print(f"{'='*70}")
 
     return summary
@@ -365,7 +370,7 @@ def run_subject_specific_ablation(ablation_id, subject_runner, config,
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ablation", choices=["A7", "A8", "both"], default="both")
+    parser.add_argument("--ablation", choices=["A7", "A8", "both"], required=True)
     args = parser.parse_args()
 
     config_for_path = make_base_config(ablation_id="path_resolve")

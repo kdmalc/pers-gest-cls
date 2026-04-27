@@ -313,6 +313,17 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "$EFFECTIVE_PARTITION" \
             "--ablation ${ABLATION}"
 
+    elif [[ "$ABLATION" == "A7" || "$ABLATION" == "A8" ]]; then
+        # ── A7 / A8: shared script, --ablation flag selects the variant ───────
+        submit_single_job \
+            "$ABLATION" \
+            "$SCRIPT_PATH" \
+            "$EVAL_OUT_BASE/$ABLATION" \
+            "$TIME" \
+            "$MEM" \
+            "$EFFECTIVE_PARTITION" \
+            "--ablation ${ABLATION}"
+
     elif [[ "$ABLATION" == "A10" || "$ABLATION" == "A11" || "$ABLATION" == "A12" ]]; then
         submit_single_job \
             "$ABLATION" \

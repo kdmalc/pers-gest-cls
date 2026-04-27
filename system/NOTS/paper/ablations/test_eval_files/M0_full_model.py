@@ -4,7 +4,7 @@ M0_full_model.py
 Ablation M0: Full Model — MAML + MoE  [PRIMARY RESULT]
 
 Supports two test procedures via config['test_procedure']:
-  'hpo_test_split' : Fixed 24/4/4 split (fold 0 only), multi-seed loop.
+  'hpo_test_split' : Fixed 24/4/4 split, single run at FIXED_SEED.
                      Used during HPO / early development.
   'L2SO'           : Leave-2-Subjects-Out over all N subjects.
                      For fold i: test=subjects[i], val=subjects[(i+1) % N].
@@ -12,7 +12,7 @@ Supports two test procedures via config['test_procedure']:
 
 Training : Episodic dataloader
 Evaluation: Episodic (1-shot 3-way), 500 episodes over test_PIDs
-Reported  : mean ± std across seeds (hpo_test_split) or folds (L2SO)
+Reported  : single result (hpo_test_split) or mean ± std across folds (L2SO)
 """
 
 import os, sys, copy, json
@@ -29,7 +29,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
     make_base_config, build_maml_moe_model,
-    set_seeds, FIXED_SEED, NUM_FINAL_SEEDS,
+    set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
     RUN_DIR,
 )
@@ -48,9 +48,8 @@ def build_config() -> dict:
 
 def run_one_fold(fold_id: str, seed: int, config: dict) -> dict:
     """
-    Train and evaluate a single fold/seed combination.
-    config must already have train_PIDs, val_PIDs, test_PIDs set
-    correctly for this fold before calling this function.
+    Train and evaluate a single fold. config must already have
+    train_PIDs, val_PIDs, test_PIDs set correctly before calling.
     """
     set_seeds(seed)
     config = copy.deepcopy(config)
@@ -107,29 +106,20 @@ def run_one_fold(fold_id: str, seed: int, config: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Test procedure: fixed HPO split (multi-seed, same 24/4/4 split)
+# Test procedure: fixed HPO split (single run)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_hpo_test_split(config: dict) -> list:
-    """
-    Original fixed-split procedure. Loops over NUM_FINAL_SEEDS seeds,
-    each training from scratch on the same train/val/test split.
-    """
-    results = []
-    for seed_idx in range(NUM_FINAL_SEEDS):
-        actual_seed = FIXED_SEED + seed_idx
-        print(f"\n{'='*70}")
-        print(f"[M0] hpo_test_split: seed {seed_idx+1}/{NUM_FINAL_SEEDS} (seed={actual_seed})")
-        print(f"{'='*70}")
-        fold_config = copy.deepcopy(config)
-        # PIDs are already set in make_base_config for fold 0
-        result = run_one_fold(
-            fold_id=f"fixed_seed{actual_seed}",
-            seed=actual_seed,
-            config=fold_config,
-        )
-        results.append(result)
-    return results
+def run_hpo_test_split(config: dict) -> dict:
+    """Single run at FIXED_SEED on the fixed train/val/test split."""
+    print(f"\n{'='*70}")
+    print(f"[M0] hpo_test_split: single run (seed={FIXED_SEED})")
+    print(f"{'='*70}")
+    # PIDs are already set in make_base_config for the fixed split
+    return run_one_fold(
+        fold_id=f"fixed_seed{FIXED_SEED}",
+        seed=FIXED_SEED,
+        config=copy.deepcopy(config),
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -139,17 +129,15 @@ def run_hpo_test_split(config: dict) -> list:
 def build_l2so_folds(all_pids: list) -> list:
     """
     For fold i:
-      test subject  = all_pids[i]
-      val subject   = all_pids[(i + 1) % N]   (round-robin, deterministic)
+      test subject   = all_pids[i]
+      val subject    = all_pids[(i + 1) % N]   (round-robin, deterministic)
       train subjects = everyone else
-
-    Returns a list of dicts: [{test_pid, val_pid, train_pids}, ...]
     """
     n = len(all_pids)
     folds = []
     for i in range(n):
-        test_pid  = all_pids[i]
-        val_pid   = all_pids[(i + 1) % n]
+        test_pid   = all_pids[i]
+        val_pid    = all_pids[(i + 1) % n]
         train_pids = [p for p in all_pids if p != test_pid and p != val_pid]
         folds.append({
             "fold_idx":   i,
@@ -211,20 +199,17 @@ def main():
     )
 
     if test_procedure == "hpo_test_split":
-        all_results = run_hpo_test_split(config)
-        test_accs = [r["test_results"]["mean_acc"] for r in all_results]
+        result = run_hpo_test_split(config)
         summary = {
             "ablation_id":     "M0",
             "description":     "Full Model: MAML + MoE",
             "test_procedure":  "hpo_test_split",
-            "n_params":        all_results[0]["n_params"],
-            "fold_results":    all_results,
-            "mean_test_acc":   float(np.mean(test_accs)),
-            "std_test_acc":    float(np.std(test_accs)),
-            "num_seeds":       NUM_FINAL_SEEDS,
+            "seed":            FIXED_SEED,
+            "n_params":        result["n_params"],
+            "result":          result,
+            "test_acc":        result["test_results"]["mean_acc"],
             "config_snapshot": {k: str(v) for k, v in config.items()},
         }
-
     else:  # L2SO
         all_results = run_l2so(config)
         # One accuracy per test subject — this is the distribution for your paired t-test
@@ -233,6 +218,7 @@ def main():
             "ablation_id":     "M0",
             "description":     "Full Model: MAML + MoE",
             "test_procedure":  "L2SO",
+            "seed":            FIXED_SEED,
             "n_params":        all_results[0]["n_params"],
             "fold_results":    all_results,
             "mean_test_acc":   float(np.mean(test_accs)),
@@ -244,12 +230,13 @@ def main():
     save_results(summary, config, tag="summary")
 
     print(f"\n{'='*70}")
-    print(f"[M0] FINAL ({test_procedure}): "
-          f"{summary['mean_test_acc']*100:.2f}% ± {summary['std_test_acc']*100:.2f}%")
-    if test_procedure == "L2SO":
-        print(f"     over {summary['num_folds']} L2SO folds (one per test subject)")
+    if test_procedure == "hpo_test_split":
+        print(f"[M0] FINAL (hpo_test_split): {summary['test_acc']*100:.2f}%  "
+              f"single run, seed={FIXED_SEED}")
     else:
-        print(f"     over {summary['num_seeds']} seeds, fixed split")
+        print(f"[M0] FINAL (L2SO): "
+              f"{summary['mean_test_acc']*100:.2f}% ± {summary['std_test_acc']*100:.2f}%")
+        print(f"     over {summary['num_folds']} L2SO folds (one per test subject)")
     print(f"     {config['n_way']}-way {config['k_shot']}-shot")
     print(f"{'='*70}")
 
