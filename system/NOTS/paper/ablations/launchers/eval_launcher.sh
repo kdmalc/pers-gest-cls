@@ -296,7 +296,15 @@ for ABLATION in "${ABLATIONS[@]}"; do
                     "--k-shot ${K} --n-way ${N}"
             done
         done
-
+    elif [[ "$ABLATION" == "A10" || "$ABLATION" == "A11" || "$ABLATION" == "A12" ]]; then
+        submit_single_job \
+            "$ABLATION" \
+            "$SCRIPT_PATH" \
+            "$EVAL_OUT_BASE/$ABLATION" \
+            "$TIME" \
+            "$MEM" \
+            "$EFFECTIVE_PARTITION" \
+            "--ablation ${ABLATION}"
     else
         # ── All other ablations: single job, no extra CLI args ─────────────────
         submit_single_job \
