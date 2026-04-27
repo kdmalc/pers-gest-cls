@@ -279,6 +279,12 @@ def make_base_config(ablation_id: str) -> dict:
     config["gate_type"]              = "context_feature_demo"
     config["expert_architecture"]    = "MLP"
 
+    # Added but not used (these need to be fully HPOd/debugged...)
+    config["MOE_use_shared_expert"] = False
+    config["MOE_importance_coeff"] = 0.0
+    config["MOE_routing_signal"] = 'context_proj'
+    config["utilization_ratio"] = 0.3  # I think this is not used at all? This is what sets top-k in the other runs
+
     # ── Gesture / trial selection ─────────────────────────────────────────────
     config["feature_engr"]           = "None"
     config["pretrain_approach"]      = "None"

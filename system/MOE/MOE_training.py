@@ -208,7 +208,7 @@ def compute_moe_aux_loss(
 
     top_k          = config.get("MOE_top_k", None)
     aux_coeff      = config["MOE_aux_coeff"]
-    #imp_coeff      = config.get("MOE_importance_coeff", aux_coeff)
+    imp_coeff      = config.get("MOE_importance_coeff", aux_coeff)
 
     if top_k is None:
         # Dense routing: single KL load-balance loss on hard weights
@@ -219,5 +219,5 @@ def compute_moe_aux_loss(
         # Top-k routing: Switch loss + importance loss.
         from MOE_encoder import topk_MOE_aux_loss, importance_loss
         switch_loss = topk_MOE_aux_loss(w_soft, w_hard, coeff=aux_coeff)
-        #imp_loss    = importance_loss(w_soft, coeff=imp_coeff)
-        return switch_loss# + imp_loss
+        imp_loss    = importance_loss(w_soft, coeff=imp_coeff)
+        return switch_loss + imp_loss

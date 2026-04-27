@@ -499,6 +499,8 @@ def importance_loss(gate_weights_soft: torch.Tensor,
         aux = topk_MOE_aux_loss(w_soft, w_hard, coeff=cfg["MOE_aux_coeff"])
             + importance_loss(w_soft, coeff=cfg["MOE_importance_coeff"])
     """
+    if coeff == 0.0:
+        return 0.0
     importance = gate_weights_soft.sum(dim=0)           # (E,) total soft weight per expert
     mean_imp   = importance.mean()
     var_imp    = importance.var()
