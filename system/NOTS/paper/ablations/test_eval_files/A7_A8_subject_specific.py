@@ -145,11 +145,11 @@ def build_ss_eval_episodes(tensor_dict, pid, config, support_trial_idx,
 
     return episodes
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # A7 config + per-subject runner
 # ─────────────────────────────────────────────────────────────────────────────
-
+FT_STEPS = 200
+FT_LR = 0.001
 def build_config_a7() -> dict:
     config = make_base_config(ablation_id="A7")
     config["subject_specific_model"]  = True
@@ -159,8 +159,8 @@ def build_config_a7() -> dict:
     config["num_epochs"]              = A7_PRETRAIN_EPOCHS
     config["use_earlystopping"]       = True
     config["earlystopping_patience"]  = 20
-    config["ft_steps"]                = 50
-    config["ft_lr"]                   = 1e-3
+    config["ft_steps"]                = FT_STEPS
+    config["ft_lr"]                   = FT_LR
     config["ft_optimizer"]            = "adam"
     config["ft_weight_decay"]         = config["weight_decay"]
     return config

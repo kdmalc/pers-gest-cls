@@ -115,8 +115,8 @@ EMG_2KHZ_PKL_PATH  = "/projects/my13/kai/meta-pers-gest/pers-gest-cls/dataset/me
 EMG_2KHZ_IN_CH     = 16
 EMG_2KHZ_SEQ_LEN   = 4300
 
-A11_FT_LR    = 1e-4
-A11_FT_STEPS = 50
+A11_FT_LR    = 0.01
+A11_FT_STEPS = 150
 
 
 # =============================================================================

@@ -175,7 +175,7 @@ MAML_ALPHA_GRID       = [0.001, 0.002, 0.003, 0.005, 0.007, 0.010, 0.015, 0.020,
 
 # Supervised / A11: paper figure trajectory — same range as MAML for a
 # fair visual comparison on the same x-axis.
-SUP_PAPER_STEPS_GRID  = [1, 5, 10, 25, 50, 100, 150, 200]
+SUP_PAPER_STEPS_GRID  = [1, 5, 10, 25, 50, 100, 150, 200, 250, 300]
 
 # Supervised / A11: 2D sweep grid for finding (ft_steps, ft_lr) jointly.
 SUP_HPO_STEPS_GRID    = [25, 50, 100, 150, 200]
