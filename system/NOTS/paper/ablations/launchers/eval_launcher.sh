@@ -142,11 +142,11 @@ TIME_DEFAULT="08:00:00"
 # MAML+MoE ablations (M0, A5, A8, grid) are the slowest.
 # Adjust TIME_* based on observed wall times from HPO runs.
 # =============================================================================
-TIME_A1="01:00:00";   MEM_A1=24G
+TIME_A1="01:30:00";   MEM_A1=24G
 TIME_A2="01:00:00";   MEM_A2=16G
 TIME_A7="01:00:00";   MEM_A7=16G
 TIME_A8="01:00:00";   MEM_A8=16G
-TIME_A11="01:00:00";  MEM_A11=24G
+TIME_A11="03:00:00";  MEM_A11=24G
 # Uncomment and tune once you have wall-time data from HPO runs:
 # TIME_M0="08:00:00";   MEM_M0=32G
 # TIME_A3="05:00:00";   MEM_A3=24G

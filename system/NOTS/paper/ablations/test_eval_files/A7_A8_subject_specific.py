@@ -37,7 +37,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 from ablation_config import (
     make_base_config, build_supervised_no_moe_model, build_maml_moe_model,
     set_seeds, FIXED_SEED, NUM_TEST_EPISODES,
-    save_results, count_parameters, RUN_DIR,
+    save_results, save_model_checkpoint, count_parameters, RUN_DIR,
 )
 from pretraining.pretrain_data_pipeline import get_pretrain_dataloaders
 from pretraining.pretrain_trainer import pretrain
@@ -202,6 +202,22 @@ def run_a7_one_subject(pid, config, tensor_dict):
     )
 
     trained_model, history = pretrain(model, train_dl, val_dl, config)
+
+    save_model_checkpoint(
+        {
+            "ablation_id":      "A7",
+            "pid":              pid,
+            "seed":             seed,
+            "seed_idx":         seed_idx,
+            "model_state_dict": trained_model.state_dict(),
+            "config":           config,
+            "best_val_acc":     history["best_val_acc"],
+            "train_loss_log":   history["train_loss_log"],
+            "val_acc_log":      history["val_acc_log"],
+        },
+        config,
+        tag=f"A7_pid{pid}_seed{seed}_best",
+    )
 
     episodes = build_ss_eval_episodes(
         tensor_dict, pid, config,
