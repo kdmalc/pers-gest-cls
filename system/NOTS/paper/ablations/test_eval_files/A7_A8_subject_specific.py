@@ -17,6 +17,10 @@ Val/test splits are over REPS within each subject, not over subjects.
 
 seed_idx is fixed to 0 (single run per subject, consistent with all other
 ablations). This means train rep = 1, val rep = 2, test reps = 3–10.
+
+A7 reports BOTH head_only and full_ft (identical to A1/A2).
+A8 uses mamlpp_adapt_and_eval (zero-shot MAML inner-loop adaptation) and
+reports a single mean_acc — head_only vs full_ft is not applicable.
 """
 
 import os, sys, copy, json, argparse
@@ -250,9 +254,10 @@ def run_a7_one_subject(pid, config, tensor_dict):
         seed                = seed,
     )
 
-    episode_accs = []
+    head_accs = []
+    full_accs = []
     for ep in episodes:
-        metrics = finetune_and_eval_user(
+        head_metrics = finetune_and_eval_user(
             trained_model, config,
             support_emg    = ep["support_emg"],
             support_imu    = ep["support_imu"],
@@ -262,20 +267,37 @@ def run_a7_one_subject(pid, config, tensor_dict):
             query_labels   = ep["query_labels"],
             mode           = "head_only",
         )
-        episode_accs.append(metrics["acc"])
+        full_metrics = finetune_and_eval_user(
+            trained_model, config,
+            support_emg    = ep["support_emg"],
+            support_imu    = ep["support_imu"],
+            support_labels = ep["support_labels"],
+            query_emg      = ep["query_emg"],
+            query_imu      = ep["query_imu"],
+            query_labels   = ep["query_labels"],
+            mode           = "full",
+        )
+        head_accs.append(head_metrics["acc"])
+        full_accs.append(full_metrics["acc"])
 
-    mean_acc = float(np.mean(episode_accs))
-    print(f"[A7 | {pid}] Acc: {mean_acc*100:.2f}%")
+    mean_head_acc = float(np.mean(head_accs))
+    mean_full_acc = float(np.mean(full_accs))
+    print(f"[A7 | {pid}] head-only: {mean_head_acc*100:.2f}%  "
+          f"full-ft: {mean_full_acc*100:.2f}%")
 
     return {
-        "pid":           pid,
-        "seed":          seed,
-        "seed_idx":      seed_idx,
-        "train_rep_num": train_rep_num,
-        "val_rep_num":   val_rep_num,
-        "mean_acc":      mean_acc,
-        "n_episodes":    len(episode_accs),
-        "n_params":      count_parameters(model),
+        "pid":            pid,
+        "seed":           seed,
+        "seed_idx":       seed_idx,
+        "train_rep_num":  train_rep_num,
+        "val_rep_num":    val_rep_num,
+        "mean_head_acc":  mean_head_acc,
+        "mean_full_acc":  mean_full_acc,
+        # Keep mean_acc pointing to full_ft for compatibility with A8's shared
+        # orchestrator (run_subject_specific_ablation aggregates on "mean_acc").
+        # The orchestrator is overridden for A7 below.
+        "n_episodes":     len(head_accs),
+        "n_params":       count_parameters(model),
     }
 
 
@@ -349,9 +371,75 @@ def run_a8_one_subject(pid, config, tensor_dict):
 # Orchestration
 # ─────────────────────────────────────────────────────────────────────────────
 
+def run_a7_ablation(config, tensor_dict):
+    """
+    A7-specific orchestrator. Aggregates both head_only and full_ft across
+    subjects and saves a summary with both metrics (matching A1/A2 structure).
+    """
+    test_procedure = config["test_procedure"]
+    assert test_procedure in ("hpo_test_split", "L2SO"), (
+        f"Unknown test_procedure '{test_procedure}'."
+    )
+
+    eval_pids = config["test_PIDs"] if test_procedure == "hpo_test_split" \
+                else config["all_PIDs"]
+
+    print(f"\nA7 CONFIG (test_procedure={test_procedure}):")
+    print(json.dumps({k: str(v) for k, v in config.items()}, indent=2))
+    print(f"Evaluating on {len(eval_pids)} subjects: {eval_pids}")
+    print(f"Single run per subject: seed={FIXED_SEED}, seed_idx={FIXED_SEED_IDX}")
+
+    all_results = []
+    for pid in eval_pids:
+        print(f"\n{'='*70}")
+        print(f"[A7] PID={pid}  seed={FIXED_SEED}  seed_idx={FIXED_SEED_IDX}")
+        print(f"{'='*70}")
+        result = run_a7_one_subject(pid, config, tensor_dict)
+        all_results.append(result)
+
+    per_subject_head = {r["pid"]: r["mean_head_acc"] for r in all_results}
+    per_subject_full = {r["pid"]: r["mean_full_acc"] for r in all_results}
+    head_means = list(per_subject_head.values())
+    full_means = list(per_subject_full.values())
+
+    summary = {
+        "ablation_id":          "A7",
+        "description":          "Subject-Specific CNN-LSTM (Fair 1-shot Baseline)",
+        "test_procedure":       test_procedure,
+        "seed":                 FIXED_SEED,
+        "seed_idx":             FIXED_SEED_IDX,
+        "n_params":             all_results[0]["n_params"],
+        "ft_steps":             FT_STEPS,
+        "ft_lr":                FT_LR,
+        "all_results":          all_results,
+        "per_subject_head_acc": per_subject_head,
+        "per_subject_full_acc": per_subject_full,
+        "mean_head_acc":        float(np.mean(head_means)),
+        "std_head_acc":         float(np.std(head_means)),
+        "mean_full_acc":        float(np.mean(full_means)),
+        "std_full_acc":         float(np.std(full_means)),
+        "n_subjects":           len(all_results),
+        "config_snapshot":      {k: str(v) for k, v in config.items()},
+    }
+    save_results(summary, config, tag="summary")
+
+    print(f"\n{'='*70}")
+    print(f"[A7] FINAL head-only ({test_procedure}) across {len(all_results)} subjects: "
+          f"{summary['mean_head_acc']*100:.2f}% ± {summary['std_head_acc']*100:.2f}%")
+    print(f"[A7] FINAL full-ft   ({test_procedure}) across {len(all_results)} subjects: "
+          f"{summary['mean_full_acc']*100:.2f}% ± {summary['std_full_acc']*100:.2f}%")
+    print(f"     single run per subject: seed={FIXED_SEED}, seed_idx={FIXED_SEED_IDX}")
+    print(f"{'='*70}")
+
+    return summary
+
+
 def run_subject_specific_ablation(ablation_id, subject_runner, config,
                                    description, tensor_dict):
     """
+    Generic orchestrator for A8 (single mean_acc per subject).
+    A7 uses run_a7_ablation instead.
+
     Outer loop: iterate over eval subjects. Single run per subject (FIXED_SEED).
 
     Which subjects are evaluated depends on test_procedure:
@@ -359,8 +447,6 @@ def run_subject_specific_ablation(ablation_id, subject_runner, config,
       'L2SO'           → config['all_PIDs']   (all subjects, matches cross-subject coverage)
 
     NOTE on periodic checkpointing / test eval (vs M0, A3–A5):
-      A7 uses `pretrain` (supervised), not `mamlpp_pretrain`, so the
-      periodic_checkpoint_fn / periodic_test_eval_fn hooks don't exist here.
       A8 has no training at all (random-init zero-shot). Per-user results are
       already printed one line per subject in the outer loop below, which is the
       correct granularity for subject-specific models.
@@ -429,11 +515,7 @@ def main():
 
     if args.ablation in ("A7", "both"):
         config_a7 = build_config_a7()
-        run_subject_specific_ablation(
-            "A7", run_a7_one_subject, config_a7,
-            description="Subject-Specific CNN-LSTM (Fair 1-shot Baseline)",
-            tensor_dict=tensor_dict,
-        )
+        run_a7_ablation(config_a7, tensor_dict)
 
     if args.ablation in ("A8", "both"):
         config_a8 = build_config_a8()
