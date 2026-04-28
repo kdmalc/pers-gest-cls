@@ -234,20 +234,14 @@ def make_base_config(ablation_id: str) -> dict:
     # ── MAML core (Trial 89 values) ───────────────────────────────────────────
     config["meta_learning"]           = True
     config["meta_batchsize"]          = 24    # FIXED per spec
-    # CHANGED: maml_inner_steps 5 → 10 (Trial 89 Optuna value)
     config["maml_inner_steps"]        = 10    # was 5
-    # CHANGED: maml_inner_steps_eval 50 → 10 (Trial 89 value; HPO did NOT use
     # a separate eval step count — it used the same value as train)
     config["maml_inner_steps_eval"]   = 10    # was 50
-    # CHANGED: maml_alpha_init 1.7e-3 → 9.735e-4 (Trial 89 Optuna value)
     config["maml_alpha_init"]         = 9.734890497675034e-4   # was 1.7e-3
-    # CHANGED: maml_alpha_init_eval 0.017 → 5.066e-3 (Trial 89 Optuna value)
     config["maml_alpha_init_eval"]    = 5.06597432775958e-3    # was 0.017
     config["maml_use_lslr"]           = True   # FIXED per spec; unchanged
     config["use_lslr_at_eval"]        = False  # FIXED per spec; unchanged
-    # CHANGED: use_maml_msl False → "hybrid" (Trial 89 Optuna value)
     config["use_maml_msl"]            = "hybrid"  # was False
-    # CHANGED: maml_msl_num_epochs 0 → 31 (Trial 89 Optuna value)
     config["maml_msl_num_epochs"]     = 31         # was 0
     config["maml_opt_order"]          = "first"
     config["maml_first_order_to_second_order_epoch"] = 1_000_000

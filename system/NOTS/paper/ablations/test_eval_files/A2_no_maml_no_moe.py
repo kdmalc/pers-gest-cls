@@ -42,7 +42,7 @@ print(f"CUDA Available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
-FT_STEPS = 200
+FT_STEPS = 25
 FT_LR    = 1e-3
 
 

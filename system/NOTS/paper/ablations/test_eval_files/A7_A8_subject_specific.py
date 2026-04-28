@@ -148,7 +148,7 @@ def build_ss_eval_episodes(tensor_dict, pid, config, support_trial_idx,
 # ─────────────────────────────────────────────────────────────────────────────
 # A7 config + per-subject runner
 # ─────────────────────────────────────────────────────────────────────────────
-FT_STEPS = 200
+FT_STEPS = 25
 FT_LR = 0.001
 def build_config_a7() -> dict:
     config = make_base_config(ablation_id="A7")
