@@ -436,7 +436,23 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
 def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=None,
                     collapse_abort_threshold: float = 0.80,
                     collapse_grace_epochs: int = 10,
-                    collapse_consecutive_checks: int = 2):
+                    collapse_consecutive_checks: int = 2,
+                    periodic_checkpoint_fn=None,
+                    periodic_test_eval_fn=None,
+                    checkpoint_every: int = 10):
+    """
+    Args:
+        periodic_checkpoint_fn: Optional callable(model, config, epoch, best_val_acc) -> None.
+                                 Called every `checkpoint_every` epochs to save a mid-training
+                                 checkpoint to disk. Also called whenever a new best val acc is
+                                 achieved (regardless of epoch interval).
+        periodic_test_eval_fn:  Optional callable(model, config, epoch) -> None.
+                                 Called every `checkpoint_every` epochs to run test evaluation
+                                 and print per-user results. NOTE: if val==test (Kapanji splits),
+                                 this means you are selecting the model checkpoint based on the
+                                 same users you are evaluating — a known limitation of this split.
+        checkpoint_every:       How often (in epochs) to call the above callbacks. Default: 10.
+    """
     device = config["device"]
     model.to(device)
 
@@ -502,23 +518,43 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
                 print(f"[LSLR Stats] Mean: {mean_lr:.7f} | Min: {min_lr:.7f} | Max: {max_lr:.7f}")
 
         # Val
+        periodic_tick = (ep % checkpoint_every == 0)
         if episodic_val_loader is not None:
             val_start_time = time.time()
+            # Print per-user val breakdown on periodic ticks so we can monitor per-subject trends.
+            # WARNING: if val_PIDs == test_PIDs (Kapanji split), this is the same distribution
+            # used for early stopping AND final reporting — a known data-split limitation.
+            print_per_user_this_epoch = periodic_tick
             if ep < 2:  # This only triggers on the first epoch (we start with epoch 1 FYI)
                 adapt_fn = partial(mamlpp_adapt_and_eval, debug=True)
-                val_metrics = meta_evaluate(model, episodic_val_loader, config, adapt_fn)
+                val_metrics = meta_evaluate(model, episodic_val_loader, config, adapt_fn,
+                                            print_per_user=print_per_user_this_epoch)
             else:
-                val_metrics = meta_evaluate(model, episodic_val_loader, config, mamlpp_adapt_and_eval)
+                val_metrics = meta_evaluate(model, episodic_val_loader, config, mamlpp_adapt_and_eval,
+                                            print_per_user=print_per_user_this_epoch)
             cur_val_loss, cur_val_acc = val_metrics["loss"], val_metrics["acc"]
             val_loss_log.append(cur_val_loss)
             val_acc_log.append(cur_val_acc)
             print(f"Val completed in {time.time() - val_start_time:.2f}s")
             print(f"Val loss/acc: {cur_val_loss:.4f}, {cur_val_acc*100:.2f}%")
 
-            if cur_val_acc > best_val_acc:
+            new_best = cur_val_acc > best_val_acc
+            if new_best:
                 best_val_acc  = cur_val_acc
                 best_state    = copy.deepcopy(model.state_dict())
                 best_val_epoch = ep
+                print(f"  [Checkpoint] New best val acc={best_val_acc:.4f} at epoch {ep}. Saving to disk.")
+                if periodic_checkpoint_fn is not None:
+                    periodic_checkpoint_fn(model, config, ep, best_val_acc, tag=f"ep{ep:03d}_best")
+
+            if periodic_tick and not new_best and periodic_checkpoint_fn is not None:
+                # Periodic checkpoint even if not a new best (crash insurance)
+                print(f"  [Checkpoint] Periodic save at epoch {ep} (val acc={cur_val_acc:.4f}).")
+                periodic_checkpoint_fn(model, config, ep, cur_val_acc, tag=f"ep{ep:03d}_periodic")
+
+            if periodic_tick and periodic_test_eval_fn is not None:
+                print(f"  [PeriodicTestEval] Running test eval at epoch {ep}...")
+                periodic_test_eval_fn(model, config, ep)
 
             if use_es and early_stopping(cur_val_loss):
                 print(f"[EarlyStopping] epoch {ep}: val loss stalled. Stopping.")

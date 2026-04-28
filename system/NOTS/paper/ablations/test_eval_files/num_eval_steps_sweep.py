@@ -166,7 +166,7 @@ EMG_2KHZ_SEQ_LEN = 4300
 
 # MAML: paper figure trajectory — includes low step counts to show
 # adaptation speed advantage relative to the supervised baseline.
-MAML_PAPER_STEPS_GRID = [1, 5, 10, 25, 50, 100, 150, 200]
+MAML_PAPER_STEPS_GRID = [100, 150, 200, 250]  #[1, 5, 10, 25, 50, 100, 150, 200]
 
 # MAML: 2D sweep grid for finding (steps, alpha) jointly.
 # Starts at 50 because you already know < 50 is suboptimal for M0.

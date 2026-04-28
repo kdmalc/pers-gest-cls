@@ -217,7 +217,7 @@ def make_base_config(ablation_id: str) -> dict:
     config["gradient_clip_max_norm"] = 10.0
 
     # ── Training schedule ─────────────────────────────────────────────────────
-    config["num_epochs"]              = 50
+    config["num_epochs"]              = 23
     # CHANGED: episodes_per_epoch_train 200 → 500 (Trial 89 Optuna value)
     config["episodes_per_epoch_train"] = 500   # was 200
     config["num_eval_episodes"]        = NUM_VAL_EPISODES
@@ -227,7 +227,7 @@ def make_base_config(ablation_id: str) -> dict:
     config["use_cosine_outer_lr"]      = False
     config["lr_scheduler_factor"]      = 0.1
     config["lr_scheduler_patience"]    = 6
-    config["use_earlystopping"]        = True
+    config["use_earlystopping"]        = False  # Turned off for testing eval!
     config["earlystopping_patience"]   = 8
     config["earlystopping_min_delta"]  = 0.005
 
@@ -523,6 +523,12 @@ def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
 
     per_user = {uid: float(np.mean(accs)) for uid, accs in user_metrics.items()}
     vals = list(per_user.values())
+
+    print(f"  [Test] Per-user results ({len(per_user)} users):")
+    for uid, acc in sorted(per_user.items()):
+        print(f"    user={uid}  acc={acc*100:.2f}%")
+    print(f"  [Test] Mean: {float(np.mean(vals))*100:.2f}%  Std: {float(np.std(vals))*100:.2f}%")
+
     return {
         "per_user_acc": per_user,
         "mean_acc":     float(np.mean(vals)),
@@ -624,3 +630,43 @@ def save_model_checkpoint(state: dict, config: dict, tag: str = "best"):
 
 def count_parameters(model) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+# =============================================================================
+# Periodic training callbacks (for mamlpp_pretrain hooks)
+# =============================================================================
+
+def make_periodic_checkpoint_fn(config: dict):
+    """
+    Returns a function compatible with mamlpp_pretrain's `periodic_checkpoint_fn` kwarg.
+    Signature: fn(model, config, epoch, val_acc, tag) -> None
+    Saves a checkpoint to disk immediately (crash insurance).
+    """
+    def _checkpoint(model, cfg, epoch: int, val_acc: float, tag: str):
+        state = {
+            "epoch":            epoch,
+            "val_acc":          val_acc,
+            "model_state_dict": copy.deepcopy(model.state_dict()),
+            "config":           cfg,
+        }
+        save_model_checkpoint(state, cfg, tag=tag)
+    return _checkpoint
+
+
+def make_periodic_test_eval_fn(tensor_dict_path: str, test_pids: list):
+    """
+    Returns a function compatible with mamlpp_pretrain's `periodic_test_eval_fn` kwarg.
+    Signature: fn(model, config, epoch) -> None
+    Runs run_episodic_test_eval (which prints per-user results internally) on
+    the current model weights (NOT the best_state snapshot — this shows where
+    the live model is at epoch N, not where the best checkpoint is).
+
+    NOTE: If val_PIDs == test_PIDs (Kapanji split), results here reflect the same
+    users driving early stopping — treat these mid-training numbers with caution.
+    """
+    def _test_eval(model, config, epoch: int):
+        print(f"  [PeriodicTestEval] Epoch {epoch} — evaluating on test PIDs: {test_pids}")
+        results = run_episodic_test_eval(model, config, tensor_dict_path, test_pids)
+        # run_episodic_test_eval already prints per-user + aggregate; nothing extra needed.
+        return results
+    return _test_eval

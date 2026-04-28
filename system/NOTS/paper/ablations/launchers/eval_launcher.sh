@@ -181,7 +181,7 @@ done
 PARTITION=commons
 CPUS=10
 MEM_DEFAULT=32G
-TIME_DEFAULT="11:00:00"
+TIME_DEFAULT="12:00:00"
 
 # =============================================================================
 # Per-ablation resource overrides.
