@@ -20,9 +20,9 @@
 #   A8       → A7_A8_subject_specific.py
 #   A11      → A10_A11_A12_meta_pretrained.py
 #   grid     → fewshot_grid.py               [one job per (k_shot, n_way) cell]
-#   steps_M0  → adaptation_steps_sweep.py    --model-type maml        [steps sweep, no training]
-#   steps_A7  → adaptation_steps_sweep.py    --model-type supervised  [steps sweep, no training]
-#   steps_A11 → adaptation_steps_sweep.py    --model-type a11         [steps sweep, no training]
+#   steps_M0  → num_eval_steps_sweep.py    --model-type maml        [steps sweep, no training]
+#   steps_A7  → num_eval_steps_sweep.py    --model-type supervised  [steps sweep, no training]
+#   steps_A11 → num_eval_steps_sweep.py    --model-type a11         [steps sweep, no training]
 #
 # Usage:
 #   bash eval_launcher.sh M0                    # eval M0
@@ -96,7 +96,7 @@ GRID_N_WAYS=(3 5 10)
 # A3 and A4 share a script — the --ablation flag selects the variant.
 # A7/A8 and A10/A11/A12 also share scripts similarly.
 # A5 and grid are handled separately in the submission loop.
-# steps_M0 / steps_A7 / steps_A11 all call adaptation_steps_sweep.py.
+# steps_M0 / steps_A7 / steps_A11 all call num_eval_steps_sweep.py.
 # =============================================================================
 declare -A ABLATION_SCRIPT
 ABLATION_SCRIPT[M0]="M0_full_model.py"
@@ -109,9 +109,9 @@ ABLATION_SCRIPT[A7]="A7_A8_subject_specific.py"
 ABLATION_SCRIPT[A8]="A7_A8_subject_specific.py"
 ABLATION_SCRIPT[A11]="A10_A11_A12_meta_pretrained.py"
 ABLATION_SCRIPT[grid]="fewshot_grid.py"
-ABLATION_SCRIPT[steps_M0]="adaptation_steps_sweep.py"
-ABLATION_SCRIPT[steps_A7]="adaptation_steps_sweep.py"
-ABLATION_SCRIPT[steps_A11]="adaptation_steps_sweep.py"
+ABLATION_SCRIPT[steps_M0]="num_.py"
+ABLATION_SCRIPT[steps_A7]="num_eval_steps_sweep.py"
+ABLATION_SCRIPT[steps_A11]="num_eval_steps_sweep.py"
 
 # "all" expands to the standard ablation set only — grid and steps sweeps are opt-in.
 VALID_ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11)
