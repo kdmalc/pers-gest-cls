@@ -203,17 +203,40 @@ def run_a7_one_subject(pid, config, tensor_dict):
 
     trained_model, history = pretrain(model, train_dl, val_dl, config)
 
+    # pretrain_trainer does NOT track best weights — it returns the final epoch.
+    # Reconstruct best val acc from the history logs.
+    val_accs = history["val_acc"]
+    assert len(val_accs) > 0, f"[A7 | {pid}] val_acc log is empty after pretrain."
+    best_val_acc = float(max(val_accs))
+    best_epoch   = int(np.argmax(val_accs))
+
+    # We can't recover the best-epoch weights post-hoc from history alone,
+    # so we save the final model and flag clearly that it is NOT the best-epoch model.
+    # To fix properly, pretrain_trainer needs to stash best state_dict internally.
+    print(f"[A7 | {pid}] WARNING: saving FINAL epoch weights, not best-epoch weights. "
+          f"Best val acc {best_val_acc*100:.2f}% was at epoch {best_epoch}. "
+          f"Final val acc {val_accs[-1]*100:.2f}%. "
+          f"Fix pretrain_trainer to return best_state if this matters.")
+
     save_model_checkpoint(
         {
-            "ablation_id":      "A7",
-            "pid":              pid,
-            "seed":             seed,
-            "seed_idx":         seed_idx,
-            "model_state_dict": trained_model.state_dict(),
-            "config":           config,
-            "best_val_acc":     history["best_val_acc"],
-            "train_loss_log":   history["train_loss_log"],
-            "val_acc_log":      history["val_acc_log"],
+            "ablation_id":     "A7",
+            "pid":             pid,
+            "seed":            seed,
+            "seed_idx":        seed_idx,
+            "model_state_dict": trained_model.state_dict(),  # final epoch, NOT best epoch
+            "config":          config,
+            "best_val_acc":    best_val_acc,
+            "best_epoch":      best_epoch,
+            "train_loss":      history["train_loss"],
+            "train_acc":       history["train_acc"],
+            "val_loss":        history["val_loss"],
+            "val_acc":         history["val_acc"],
+            "train_aux_loss":  history["train_aux_loss"],
+            "val_aux_loss":    history["val_aux_loss"],
+            "routing_reports": history["routing_reports"],
+            "note":            "model_state_dict is FINAL epoch, not best-val epoch. "
+                               "pretrain_trainer must be updated to fix this.",
         },
         config,
         tag=f"A7_pid{pid}_seed{seed}_best",
