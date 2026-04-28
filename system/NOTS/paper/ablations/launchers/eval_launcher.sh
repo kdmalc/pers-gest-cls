@@ -10,16 +10,19 @@
 #   grid : k-shot x n-way grid -> 9 jobs (see GRID_K_SHOTS / GRID_N_WAYS)
 #
 # Script mapping:
-#   M0   → M0_full_model.py
-#   A1   → A1_no_maml_moe.py
-#   A2   → A2_no_maml_no_moe.py
-#   A3   → A3_A4_maml_no_moe.py  --ablation A3
-#   A4   → A3_A4_maml_no_moe.py  --ablation A4
-#   A5   → A5_expert_count_sweep.py      [one job per expert count]
-#   A7   → A7_A8_subject_specific.py
-#   A8   → A7_A8_subject_specific.py
-#   A11  → A10_A11_A12_meta_pretrained.py
-#   grid → fewshot_grid.py               [one job per (k_shot, n_way) cell]
+#   M0       → M0_full_model.py
+#   A1       → A1_no_maml_moe.py
+#   A2       → A2_no_maml_no_moe.py
+#   A3       → A3_A4_maml_no_moe.py  --ablation A3
+#   A4       → A3_A4_maml_no_moe.py  --ablation A4
+#   A5       → A5_expert_count_sweep.py      [one job per expert count]
+#   A7       → A7_A8_subject_specific.py
+#   A8       → A7_A8_subject_specific.py
+#   A11      → A10_A11_A12_meta_pretrained.py
+#   grid     → fewshot_grid.py               [one job per (k_shot, n_way) cell]
+#   steps_M0  → adaptation_steps_sweep.py    --model-type maml        [steps sweep, no training]
+#   steps_A7  → adaptation_steps_sweep.py    --model-type supervised  [steps sweep, no training]
+#   steps_A11 → adaptation_steps_sweep.py    --model-type a11         [steps sweep, no training]
 #
 # Usage:
 #   bash eval_launcher.sh M0                    # eval M0
@@ -32,11 +35,13 @@
 #   bash eval_launcher.sh M0 --dry-run          # print without submitting
 #   bash eval_launcher.sh A1 --debug            # debug partition, 15 min limit
 #   bash eval_launcher.sh A5 --partition commons
+#   bash eval_launcher.sh steps_M0 steps_A7 steps_A11   # adaptation steps sweeps
 #
 # Output layout:
 #   $EVAL_OUT_BASE/<ID>/              (M0, A1, A2, A3, A4, A7, A8, A11)
 #   $EVAL_OUT_BASE/A5/E<N>/           (A5, one subdir per expert count)
 #   $EVAL_OUT_BASE/grid/k<K>_n<N>/   (grid, one subdir per cell)
+#   $EVAL_OUT_BASE/steps_sweep/<ID>/  (steps_M0, steps_A7, steps_A11)
 #   $LOG_DIR/eval_<ID>_<jobid>.out
 
 set -euo pipefail
@@ -53,6 +58,25 @@ LOG_DIR=/scratch/my13/kai/runs/paper/ablations/eval/logs
 ENV_PATH=/projects/my13/kai/meta-pers-gest/envs/fl-torch
 
 mkdir -p "$EVAL_OUT_BASE" "$LOG_DIR"
+
+# =============================================================================
+# Adaptation steps sweep — checkpoint paths and eval HPs.
+# UPDATE THESE before running steps_M0 or steps_A7.
+# steps_A11 does not need a checkpoint (Meta model loads its own weights).
+# =============================================================================
+# Best M0 checkpoint from Trial 89 HPO (maml_alpha_init_eval = 5.066e-3).
+STEPS_M0_CHECKPOINT="/projects/my13/kai/meta-pers-gest/pers-gest-cls/hpo_best_models/M0_best.pt"
+STEPS_M0_ALPHA="0.005066"   # maml_alpha_init_eval from Trial 89 — fixed, no alpha sweep needed
+
+# Best A7 checkpoint. Set --ft-lr to whatever you've been using for A7 finetuning.
+STEPS_A7_CHECKPOINT="/projects/my13/kai/meta-pers-gest/pers-gest-cls/hpo_best_models/A7_best.pt"
+STEPS_A7_FT_LR="0.001"      # UPDATE: use your confirmed A7 finetuning LR
+
+# A11: no checkpoint path needed — MetaEMGWrapper loads from the hardcoded Meta path.
+STEPS_A11_FT_LR="0.01"     # UPDATE: use best ft_lr from A11 HPO (v1 best was 0.01)
+
+# ft_mode for supervised models. head_only is standard for 1-shot.
+STEPS_FT_MODE="head_only"
 
 # =============================================================================
 # A5 expert count sweep definition.
@@ -72,6 +96,7 @@ GRID_N_WAYS=(3 5 10)
 # A3 and A4 share a script — the --ablation flag selects the variant.
 # A7/A8 and A10/A11/A12 also share scripts similarly.
 # A5 and grid are handled separately in the submission loop.
+# steps_M0 / steps_A7 / steps_A11 all call adaptation_steps_sweep.py.
 # =============================================================================
 declare -A ABLATION_SCRIPT
 ABLATION_SCRIPT[M0]="M0_full_model.py"
@@ -84,10 +109,13 @@ ABLATION_SCRIPT[A7]="A7_A8_subject_specific.py"
 ABLATION_SCRIPT[A8]="A7_A8_subject_specific.py"
 ABLATION_SCRIPT[A11]="A10_A11_A12_meta_pretrained.py"
 ABLATION_SCRIPT[grid]="fewshot_grid.py"
+ABLATION_SCRIPT[steps_M0]="adaptation_steps_sweep.py"
+ABLATION_SCRIPT[steps_A7]="adaptation_steps_sweep.py"
+ABLATION_SCRIPT[steps_A11]="adaptation_steps_sweep.py"
 
-# "all" expands to the standard ablation set only — grid is opt-in.
+# "all" expands to the standard ablation set only — grid and steps sweeps are opt-in.
 VALID_ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11)
-ALL_TOKENS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 grid)  # for usage string
+ALL_TOKENS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 grid steps_M0 steps_A7 steps_A11)  # for usage string
 
 # =============================================================================
 # Parse args
@@ -116,7 +144,7 @@ done
 if [[ ${#ABLATIONS[@]} -eq 0 ]]; then
     echo "ERROR: No ablations specified."
     echo "Usage: bash eval_launcher.sh [$(IFS='|'; echo "${ALL_TOKENS[*]}")|all] [--dry-run] [--debug] [--partition PARTITION]"
-    echo "       'all' expands to: ${VALID_ABLATIONS[*]}  (grid is opt-in, not included in 'all')"
+    echo "       'all' expands to: ${VALID_ABLATIONS[*]}  (grid and steps sweeps are opt-in, not included in 'all')"
     exit 1
 fi
 
@@ -125,6 +153,24 @@ for ABL in "${ABLATIONS[@]}"; do
     if [[ -z "${ABLATION_SCRIPT[$ABL]+x}" ]]; then
         echo "ERROR: Unknown ablation '$ABL'. Valid tokens: ${ALL_TOKENS[*]}"
         exit 1
+    fi
+done
+
+# Validate steps sweep checkpoint paths exist (fail fast before submitting).
+for ABL in "${ABLATIONS[@]}"; do
+    if [[ "$ABL" == "steps_M0" ]]; then
+        if [[ ! -f "$STEPS_M0_CHECKPOINT" ]]; then
+            echo "ERROR: steps_M0 checkpoint not found: $STEPS_M0_CHECKPOINT"
+            echo "       Update STEPS_M0_CHECKPOINT at the top of this script."
+            exit 1
+        fi
+    fi
+    if [[ "$ABL" == "steps_A7" ]]; then
+        if [[ ! -f "$STEPS_A7_CHECKPOINT" ]]; then
+            echo "ERROR: steps_A7 checkpoint not found: $STEPS_A7_CHECKPOINT"
+            echo "       Update STEPS_A7_CHECKPOINT at the top of this script."
+            exit 1
+        fi
     fi
 done
 
@@ -141,12 +187,16 @@ TIME_DEFAULT="08:00:00"
 # Supervised ablations (A1, A2, A7, A11) are much faster than MAML ablations.
 # MAML+MoE ablations (M0, A5, A8, grid) are the slowest.
 # Adjust TIME_* based on observed wall times from HPO runs.
+# Steps sweeps: 10 step values x ~2-5 min each = well under 2h for all three.
 # =============================================================================
-TIME_A1="01:30:00";   MEM_A1=24G
-TIME_A2="01:00:00";   MEM_A2=16G
-TIME_A7="01:00:00";   MEM_A7=16G
-TIME_A8="01:00:00";   MEM_A8=16G
-TIME_A11="03:00:00";  MEM_A11=24G
+TIME_A1="01:30:00";        MEM_A1=24G
+TIME_A2="01:00:00";        MEM_A2=16G
+TIME_A7="01:00:00";        MEM_A7=16G
+TIME_A8="01:00:00";        MEM_A8=16G
+TIME_A11="03:00:00";       MEM_A11=24G
+TIME_steps_M0="02:00:00";  MEM_steps_M0=32G
+TIME_steps_A7="02:00:00";  MEM_steps_A7=16G
+TIME_steps_A11="02:00:00"; MEM_steps_A11=24G
 # Uncomment and tune once you have wall-time data from HPO runs:
 # TIME_M0="08:00:00";   MEM_M0=32G
 # TIME_A3="05:00:00";   MEM_A3=24G
@@ -334,6 +384,41 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "$EFFECTIVE_PARTITION" \
             "--ablation ${ABLATION}"
 
+    elif [[ "$ABLATION" == "steps_M0" ]]; then
+        # ── steps_M0: MAML adaptation steps sweep (paper curve, no training) ──
+        # Alpha fixed to Trial 89 HPO best. No --sweep-alpha needed.
+        submit_single_job \
+            "steps_M0" \
+            "$SCRIPT_PATH" \
+            "$EVAL_OUT_BASE/steps_sweep/M0" \
+            "$TIME" \
+            "$MEM" \
+            "$EFFECTIVE_PARTITION" \
+            "--model-type maml --ablation-id M0 --checkpoint $STEPS_M0_CHECKPOINT --alpha $STEPS_M0_ALPHA"
+
+    elif [[ "$ABLATION" == "steps_A7" ]]; then
+        # ── steps_A7: supervised adaptation steps sweep (paper curve, no training) ──
+        submit_single_job \
+            "steps_A7" \
+            "$SCRIPT_PATH" \
+            "$EVAL_OUT_BASE/steps_sweep/A7" \
+            "$TIME" \
+            "$MEM" \
+            "$EFFECTIVE_PARTITION" \
+            "--model-type supervised --ablation-id A7 --checkpoint $STEPS_A7_CHECKPOINT --ft-lr $STEPS_A7_FT_LR --ft-mode $STEPS_FT_MODE"
+
+    elif [[ "$ABLATION" == "steps_A11" ]]; then
+        # ── steps_A11: Meta pretrained steps sweep (paper curve, no training) ──
+        # No --checkpoint arg — MetaEMGWrapper loads from its hardcoded path.
+        submit_single_job \
+            "steps_A11" \
+            "$SCRIPT_PATH" \
+            "$EVAL_OUT_BASE/steps_sweep/A11" \
+            "$TIME" \
+            "$MEM" \
+            "$EFFECTIVE_PARTITION" \
+            "--model-type a11 --ablation-id A11 --ft-lr $STEPS_A11_FT_LR --ft-mode $STEPS_FT_MODE"
+
     else
         # ── All other ablations: single job, no extra CLI args ─────────────────
         submit_single_job \
@@ -369,4 +454,17 @@ echo "    files = sorted(glob.glob('$EVAL_OUT_BASE/grid/k*_n*/grid_*_final_resul
 echo "    for f in files:"
 echo "      r = json.load(open(f))"
 echo "      print(f\"k={r['k_shot']} n={r['n_way']}  acc={r['test_results']['mean_acc']*100:.2f}%\")"
+echo "  \""
+echo ""
+echo "Aggregate steps sweep results:"
+echo "  python -c \""
+echo "    import json, glob, sys"
+echo "    for sweep_id in ['M0', 'A7', 'A11']:"
+echo "      files = sorted(glob.glob('$EVAL_OUT_BASE/steps_sweep/' + sweep_id + '/steps_sweep_*.json'))"
+echo "      if not files: continue"
+echo "      r = json.load(open(files[-1]))"
+echo "      print(f'--- {sweep_id} ---')"
+echo "      for entry in r['results']:"
+echo "        key = 'inner_steps_eval' if 'inner_steps_eval' in entry else 'ft_steps'"
+echo "        print(f\"  steps={entry[key]:>4}  acc={entry['mean_acc']*100:.2f}% +/- {entry['std_acc']*100:.2f}%\")"
 echo "  \""

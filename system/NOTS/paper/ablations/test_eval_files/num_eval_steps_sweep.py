@@ -166,19 +166,19 @@ EMG_2KHZ_SEQ_LEN = 4300
 
 # MAML: paper figure trajectory — includes low step counts to show
 # adaptation speed advantage relative to the supervised baseline.
-MAML_PAPER_STEPS_GRID = [1, 3, 5, 10, 15, 25, 50, 100, 150, 200]
+MAML_PAPER_STEPS_GRID = [1, 5, 10, 25, 50, 100, 150, 200]
 
 # MAML: 2D sweep grid for finding (steps, alpha) jointly.
 # Starts at 50 because you already know < 50 is suboptimal for M0.
-MAML_HPO_STEPS_GRID   = [50, 75, 100, 125, 150, 175, 200, 250]
+MAML_HPO_STEPS_GRID   = [25, 50, 75, 100, 125, 150, 175, 200, 250]
 MAML_ALPHA_GRID       = [0.001, 0.002, 0.003, 0.005, 0.007, 0.010, 0.015, 0.020, 0.030]
 
 # Supervised / A11: paper figure trajectory — same range as MAML for a
 # fair visual comparison on the same x-axis.
-SUP_PAPER_STEPS_GRID  = [1, 3, 5, 10, 15, 25, 50, 100, 150, 200]
+SUP_PAPER_STEPS_GRID  = [1, 5, 10, 25, 50, 100, 150, 200]
 
 # Supervised / A11: 2D sweep grid for finding (ft_steps, ft_lr) jointly.
-SUP_HPO_STEPS_GRID    = [10, 25, 50, 100, 150, 200]
+SUP_HPO_STEPS_GRID    = [25, 50, 100, 150, 200]
 # LR grid — centered around A11 v1 best (0.01) and expanded upward since
 # both ft_lr and ft_steps hit the upper bound in the original HPO.
 SUP_LR_GRID           = [0.001, 0.005, 0.01, 0.05, 0.1, 0.3, 1.0]
