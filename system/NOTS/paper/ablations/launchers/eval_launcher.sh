@@ -35,6 +35,7 @@
 #   bash eval_launcher.sh M0 --dry-run          # print without submitting
 #   bash eval_launcher.sh A1 --debug            # debug partition, 15 min limit
 #   bash eval_launcher.sh A5 --partition commons
+#
 #   bash eval_launcher.sh steps_M0 steps_A7 steps_A11   # adaptation steps sweeps
 #
 # Output layout:
@@ -180,7 +181,7 @@ done
 PARTITION=commons
 CPUS=10
 MEM_DEFAULT=32G
-TIME_DEFAULT="08:00:00"
+TIME_DEFAULT="11:00:00"
 
 # =============================================================================
 # Per-ablation resource overrides.
@@ -189,14 +190,14 @@ TIME_DEFAULT="08:00:00"
 # Adjust TIME_* based on observed wall times from HPO runs.
 # Steps sweeps: 10 step values x ~2-5 min each = well under 2h for all three.
 # =============================================================================
-TIME_A1="01:30:00";        MEM_A1=24G
-TIME_A2="01:00:00";        MEM_A2=16G
-TIME_A7="01:00:00";        MEM_A7=16G
-TIME_A8="01:00:00";        MEM_A8=16G
-TIME_A11="03:00:00";       MEM_A11=24G
-TIME_steps_M0="02:00:00";  MEM_steps_M0=32G
+TIME_A1="02:00:00";        MEM_A1=24G
+TIME_A2="02:00:00";        MEM_A2=16G
+TIME_A7="02:00:00";        MEM_A7=16G
+TIME_A8="03:00:00";        MEM_A8=16G
+TIME_A11="04:00:00";       MEM_A11=24G
+TIME_steps_M0="04:00:00";  MEM_steps_M0=32G
 TIME_steps_A7="02:00:00";  MEM_steps_A7=16G
-TIME_steps_A11="02:00:00"; MEM_steps_A11=24G
+TIME_steps_A11="03:00:00"; MEM_steps_A11=24G
 # Uncomment and tune once you have wall-time data from HPO runs:
 # TIME_M0="08:00:00";   MEM_M0=32G
 # TIME_A3="05:00:00";   MEM_A3=24G
