@@ -313,7 +313,29 @@ def load_maml_checkpoint(checkpoint_path: Path) -> tuple:
             device       = device,
         ).to(device)
 
-    model.load_state_dict(ckpt["model_state_dict"])
+    # ── Key remapping: ctx_proj -> router.projector ───────────────────────────
+    # Checkpoints saved before the router/projector rename used "ctx_proj" as
+    # the attribute name. Remap on the fly so we never have to touch the ckpt
+    # file or revert model code.
+    #
+    # Two naming schemes must be patched:
+    #   dot-separated  (model params):  ctx_proj.X      -> router.projector.X
+    #   hyphen-separated (LSLR keys):   ctx_proj-X      -> router-projector-X
+    #   (LSLR prefix is "_lslr._lrs.", so the pattern is "ctx_proj-" mid-key)
+    raw_sd = ckpt["model_state_dict"]
+    remapped_sd = {}
+    n_remapped = 0
+    for k, v in raw_sd.items():
+        new_k = k.replace("ctx_proj.", "router.projector.")
+        new_k = new_k.replace("ctx_proj-", "router-projector-")
+        if new_k != k:
+            n_remapped += 1
+        remapped_sd[new_k] = v
+    if n_remapped > 0:
+        print(f"  [ckpt remap] Remapped {n_remapped} keys: ctx_proj -> router.projector")
+    # ── End remapping ─────────────────────────────────────────────────────────
+
+    model.load_state_dict(remapped_sd)
     model.to(device)
     model.eval()
 
