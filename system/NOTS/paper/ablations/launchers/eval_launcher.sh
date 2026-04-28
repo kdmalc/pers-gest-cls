@@ -109,7 +109,7 @@ ABLATION_SCRIPT[A7]="A7_A8_subject_specific.py"
 ABLATION_SCRIPT[A8]="A7_A8_subject_specific.py"
 ABLATION_SCRIPT[A11]="A10_A11_A12_meta_pretrained.py"
 ABLATION_SCRIPT[grid]="fewshot_grid.py"
-ABLATION_SCRIPT[steps_M0]="num_.py"
+ABLATION_SCRIPT[steps_M0]="num_eval_steps_sweep.py"
 ABLATION_SCRIPT[steps_A7]="num_eval_steps_sweep.py"
 ABLATION_SCRIPT[steps_A11]="num_eval_steps_sweep.py"
 
