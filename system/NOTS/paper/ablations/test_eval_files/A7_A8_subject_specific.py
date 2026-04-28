@@ -357,6 +357,13 @@ def run_subject_specific_ablation(ablation_id, subject_runner, config,
     Which subjects are evaluated depends on test_procedure:
       'hpo_test_split' → config['test_PIDs']  (fixed small set)
       'L2SO'           → config['all_PIDs']   (all subjects, matches cross-subject coverage)
+
+    NOTE on periodic checkpointing / test eval (vs M0, A3–A5):
+      A7 uses `pretrain` (supervised), not `mamlpp_pretrain`, so the
+      periodic_checkpoint_fn / periodic_test_eval_fn hooks don't exist here.
+      A8 has no training at all (random-init zero-shot). Per-user results are
+      already printed one line per subject in the outer loop below, which is the
+      correct granularity for subject-specific models.
     """
     test_procedure = config["test_procedure"]
     assert test_procedure in ("hpo_test_split", "L2SO"), (

@@ -29,6 +29,7 @@ from ablation_config import (
     make_base_config, build_maml_moe_model, build_maml_no_moe_model,
     set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
+    make_periodic_checkpoint_fn, make_periodic_test_eval_fn,
     RUN_DIR,
 )
 from MAML.maml_data_pipeline import get_maml_dataloaders
@@ -163,6 +164,9 @@ def run_one_fold(ablation_id: str, fold_id: str, seed: int, config: dict) -> dic
 
     trained_model, train_history = mamlpp_pretrain(
         model, config, train_dl, episodic_val_loader=val_dl,
+        periodic_checkpoint_fn=make_periodic_checkpoint_fn(config),
+        periodic_test_eval_fn=make_periodic_test_eval_fn(tensor_dict_path, config["test_PIDs"]),
+        checkpoint_every=10,
     )
     best_val_acc = train_history["best_val_acc"]
     print(f"[{ablation_id} | {fold_id}] Training complete. Best val acc = {best_val_acc:.4f}")
