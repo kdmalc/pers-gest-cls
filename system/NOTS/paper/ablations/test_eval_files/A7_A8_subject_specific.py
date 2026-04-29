@@ -19,8 +19,23 @@ seed_idx is fixed to 0 (single run per subject, consistent with all other
 ablations). This means train rep = 1, val rep = 2, test reps = 3–10.
 
 A7 reports BOTH head_only and full_ft (identical to A1/A2).
-A8 uses mamlpp_adapt_and_eval (zero-shot MAML inner-loop adaptation) and
-reports a single mean_acc — head_only vs full_ft is not applicable.
+  - Model: supervised CNN-LSTM, no MoE.
+  - Training: flat supervised pretraining on a single subject's train rep.
+  - Eval: episodic finetune-then-eval (head_only and full_ft).
+
+A8 uses supervised pretraining (same procedure as A7) on the full MoE model,
+then evaluates using mamlpp_adapt_and_eval (MAML inner-loop test-time
+adaptation). This isolates the question: does cross-subject MAML pretraining
+(M0) provide a better initialisation than subject-specific supervised
+pretraining for MAML inner-loop adaptation?
+
+Training procedure for A8:
+  1. Build build_maml_moe_model with meta_learning=False so the head has
+     pretrain_num_classes (=10) output logits for supervised cross-entropy.
+  2. Run flat supervised pretrain() on the subject's single train rep.
+  3. Call replace_head_for_eval() to swap the 10-class head for a fresh
+     n_way (=3) head, and set meta_learning=True in config.
+  4. Run mamlpp_adapt_and_eval (MAML inner-loop steps) at test time.
 """
 
 import os, sys, copy, json, argparse
@@ -40,6 +55,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
     make_base_config, build_supervised_no_moe_model, build_maml_moe_model,
+    replace_head_for_eval,
     set_seeds, FIXED_SEED, NUM_TEST_EPISODES,
     save_results, save_model_checkpoint, count_parameters, RUN_DIR,
 )
@@ -56,6 +72,7 @@ if torch.cuda.is_available():
 ALL_TRIAL_INDICES_0INDEXED = list(range(10))
 NUM_REPS = len(ALL_TRIAL_INDICES_0INDEXED)
 A7_PRETRAIN_EPOCHS = 100
+A8_PRETRAIN_EPOCHS = 100
 
 # Fixed seed_idx = 0: train rep=1, val rep=2, test reps=3–10.
 # Changing this would rotate which rep is used for support/train, which is a
@@ -307,7 +324,17 @@ def run_a7_one_subject(pid, config, tensor_dict):
 
 def build_config_a8() -> dict:
     config = make_base_config(ablation_id="A8")
-    config["subject_specific_model"] = True
+    config["subject_specific_model"]  = True
+    # meta_learning=False during the supervised pretraining phase so the model
+    # is built with a pretrain_num_classes (=10) head for cross-entropy over
+    # all gesture classes. It will be flipped to True and the head replaced
+    # before MAML test-time eval (see run_a8_one_subject).
+    config["meta_learning"]           = False
+    config["use_MOE"]                 = True   # full MoE model, same architecture as M0
+    config["batch_size"]              = 10
+    config["num_epochs"]              = A8_PRETRAIN_EPOCHS
+    config["use_earlystopping"]       = True
+    config["earlystopping_patience"]  = 20
     return config
 
 
@@ -319,19 +346,89 @@ def run_a8_one_subject(pid, config, tensor_dict):
     config = copy.deepcopy(config)
     config["seed"] = seed
 
-    support_trial_idx   = seed_idx % NUM_REPS
-    query_trial_indices = [i for i in ALL_TRIAL_INDICES_0INDEXED if i != support_trial_idx]
-    support_rep_num     = support_trial_idx + 1
+    # Same rep assignment as A7: train=rep1, val=rep2, test=reps3-10.
+    # support_trial_idx (= train rep) is what the MAML inner loop adapts from
+    # at eval time — identical to A7 so the support set is the same rep.
+    train_trial_idx    = seed_idx % NUM_REPS
+    val_trial_idx      = (seed_idx + 1) % NUM_REPS
+    test_trial_indices = [
+        i for i in ALL_TRIAL_INDICES_0INDEXED
+        if i != train_trial_idx and i != val_trial_idx
+    ]
+    assert len(test_trial_indices) == NUM_REPS - 2
+
+    train_rep_num     = train_trial_idx + 1
+    val_rep_num       = val_trial_idx   + 1
+    support_trial_idx = train_trial_idx
 
     print(f"[A8 | {pid}] "
-          f"Support rep: {support_rep_num} | Query reps: {[i+1 for i in query_trial_indices]}")
+          f"Train rep: {train_rep_num} | Val rep: {val_rep_num} | "
+          f"Test reps: {[i+1 for i in test_trial_indices]} | "
+          f"Support rep (MAML eval): {train_rep_num}")
 
+    # ── Phase 1: supervised pretraining on this subject's single train rep ──
+    # meta_learning=False means the MoE model is built with a 10-class head.
+    config["train_PIDs"] = [pid]
+    config["val_PIDs"]   = [pid]
+    config["train_reps"] = [train_rep_num]
+    config["val_reps"]   = [val_rep_num]
+
+    # build_maml_moe_model reads meta_learning from config; since we set it to
+    # False above the model will be initialised with a pretrain_num_classes head.
     model = build_maml_moe_model(config)
+    train_dl, val_dl, n_classes = get_pretrain_dataloaders(config, tensor_dict)
+    assert len(train_dl.dataset) > 0, (
+        f"[A8 | {pid}] Empty train set."
+    )
 
+    trained_model, history = pretrain(model, train_dl, val_dl, config)
+
+    val_accs     = history["val_acc"]
+    assert len(val_accs) > 0, f"[A8 | {pid}] val_acc log is empty after pretrain."
+    best_val_acc = float(max(val_accs))
+    best_epoch   = int(np.argmax(val_accs))
+
+    print(f"[A8 | {pid}] Pretraining complete. "
+          f"Best val acc {best_val_acc*100:.2f}% at epoch {best_epoch}. "
+          f"Final val acc {val_accs[-1]*100:.2f}%.")
+
+    save_model_checkpoint(
+        {
+            "ablation_id":      "A8",
+            "pid":              pid,
+            "seed":             seed,
+            "seed_idx":         seed_idx,
+            "model_state_dict": trained_model.state_dict(),
+            "config":           config,
+            "best_val_acc":     best_val_acc,
+            "best_epoch":       best_epoch,
+            "train_loss":       history["train_loss"],
+            "train_acc":        history["train_acc"],
+            "val_loss":         history["val_loss"],
+            "val_acc":          history["val_acc"],
+            "train_aux_loss":   history["train_aux_loss"],
+            "val_aux_loss":     history["val_aux_loss"],
+            "routing_reports":  history["routing_reports"],
+            "note":             "Supervised pretrain weights (10-class head). "
+                                "Head replaced to n_way=3 before MAML eval.",
+        },
+        config,
+        tag=f"A8_pid{pid}_seed{seed}_pretrain",
+    )
+
+    # ── Phase 2: replace head and switch to MAML eval mode ──────────────────
+    # replace_head_for_eval swaps the 10-class supervised head for a fresh
+    # n_way (=3) head. The backbone weights are untouched.
+    trained_model = replace_head_for_eval(trained_model, config)
+    # Now flip meta_learning so that mamlpp_adapt_and_eval sees the correct
+    # config state (n_way head, MAML inner-loop logic).
+    config["meta_learning"] = True
+
+    # ── Phase 3: MAML inner-loop test-time eval ──────────────────────────────
     episodes = build_ss_eval_episodes(
         tensor_dict, pid, config,
         support_trial_idx   = support_trial_idx,
-        query_trial_indices = query_trial_indices,
+        query_trial_indices = test_trial_indices,
         num_episodes        = NUM_TEST_EPISODES,
         seed                = seed,
     )
@@ -350,7 +447,7 @@ def run_a8_one_subject(pid, config, tensor_dict):
                 "labels": ep["query_labels"],
             },
         }
-        metrics = mamlpp_adapt_and_eval(model, config, batch["support"], batch["query"])
+        metrics = mamlpp_adapt_and_eval(trained_model, config, batch["support"], batch["query"])
         episode_accs.append(metrics["acc"])
 
     mean_acc = float(np.mean(episode_accs))
@@ -360,10 +457,13 @@ def run_a8_one_subject(pid, config, tensor_dict):
         "pid":             pid,
         "seed":            seed,
         "seed_idx":        seed_idx,
-        "support_rep_num": support_rep_num,
+        "train_rep_num":   train_rep_num,
+        "val_rep_num":     val_rep_num,
+        "support_rep_num": train_rep_num,
+        "best_val_acc":    best_val_acc,
         "mean_acc":        mean_acc,
         "n_episodes":      len(episode_accs),
-        "n_params":        count_parameters(model),
+        "n_params":        count_parameters(trained_model),
     }
 
 
@@ -445,11 +545,6 @@ def run_subject_specific_ablation(ablation_id, subject_runner, config,
     Which subjects are evaluated depends on test_procedure:
       'hpo_test_split' → config['test_PIDs']  (fixed small set)
       'L2SO'           → config['all_PIDs']   (all subjects, matches cross-subject coverage)
-
-    NOTE on periodic checkpointing / test eval (vs M0, A3–A5):
-      A8 has no training at all (random-init zero-shot). Per-user results are
-      already printed one line per subject in the outer loop below, which is the
-      correct granularity for subject-specific models.
     """
     test_procedure = config["test_procedure"]
     assert test_procedure in ("hpo_test_split", "L2SO"), (
@@ -521,7 +616,7 @@ def main():
         config_a8 = build_config_a8()
         run_subject_specific_ablation(
             "A8", run_a8_one_subject, config_a8,
-            description="Subject-Specific MAML + MoE (Fair 1-shot Baseline, Random Init)",
+            description="Subject-Specific MoE (Supervised Pretrain + MAML Test-Time Eval)",
             tensor_dict=tensor_dict,
         )
 
