@@ -135,10 +135,16 @@ def run(k_shot: int, n_way: int) -> dict:
     n_params = count_parameters(model)
     print(f"  Parameters : {n_params:,}")
 
+    # ── Load tensor dict once; reused for both pretrain and eval dataloaders ──
+    tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
+    with open(tensor_dict_path, "rb") as f:
+        full_dict = pickle.load(f)
+    tensor_dict = reorient_tensor_dict(full_dict, config)
+
     # ── Flat supervised pretraining ───────────────────────────────────────────
     # get_pretrain_dataloaders uses pretrain_num_classes (10) for the head.
     # n_way is NOT used during pretraining — only at eval via replace_head_for_eval.
-    train_dl, val_dl, n_classes = get_pretrain_dataloaders(config, tensor_dict=None)
+    train_dl, val_dl, n_classes = get_pretrain_dataloaders(config, tensor_dict=tensor_dict)
     assert n_classes == config["num_classes"], (
         f"Expected {config['num_classes']} classes from dataloader, got {n_classes}."
     )
@@ -161,8 +167,6 @@ def run(k_shot: int, n_way: int) -> dict:
         config,
         tag=f"k{k_shot}_n{n_way}_seed{FIXED_SEED}_best",
     )
-
-    tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
 
     # ── Episodic eval: head-only fine-tuning ──────────────────────────────────
     head_results = run_supervised_test_eval(
