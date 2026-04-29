@@ -348,11 +348,11 @@ def evaluate_all_val_users(
         q_query                : int   (default 9)
         num_eval_episodes      : int   (default 10)
         maml_gesture_classes   : list[int] — which gesture classes to sample from
-        target_trial_indices   : list[int] — 1-indexed rep nums available overall
+        target_trial_reps     : list[int] — 1-indexed rep nums available overall
         ft_support_reps        : list[int] — 1-indexed rep nums to use as support
                                  (default: [1], i.e. rep 1 is the support set)
         ft_query_reps          : list[int] — 1-indexed rep nums to use as query
-                                 (default: all target_trial_indices except support)
+                                 (default: all target_trial_reps except support)
         use_imu                : bool
         device                 : torch.device
 
@@ -368,7 +368,7 @@ def evaluate_all_val_users(
     n_episodes  = int(config['num_eval_episodes'])
     use_imu     = bool(config['use_imu'])
     all_classes = list(config['maml_gesture_classes'])
-    all_reps    = list(config['target_trial_indices'])  # 1-indexed
+    all_reps    = list(config['target_trial_reps'])  # 1-indexed
 
     # TODO: This implements a train/val split within the novel user...
     ## This really should be in the config...

@@ -11,7 +11,7 @@ Tensor-dict layout (new, as of bug-fix — matches pretrain_data_pipeline.py):
     'imu'         : Tensor (num_trials, seq_len, imu_channels)   or None
     'demo'        : Tensor (demographic feature vector)
     'gest_ID'     : int — same as the outer key; 0-indexed gesture class label
-    'rep_indices' : list — 1-indexed trial/repetition numbers present in this entry
+    'rep_indices' : list — 1-indexed rep numbers present in this entry, e.g. [1..10]
 
   Key types:
     pid           : str,  e.g. "P102"
@@ -21,18 +21,20 @@ Tensor-dict layout (new, as of bug-fix — matches pretrain_data_pipeline.py):
 ────────────────────────────────────────────────────────────────────────────────
 Terminology (please keep distinct throughout this file):
   gesture_class / class_label : int 0 … (n_classes-1)  ← identity of the gesture
-  trial_idx                   : int 0 … (num_trials-1)  ← which recording of that gesture
-                                 (0-indexed position inside the (num_trials, T, C) tensor)
-  rep_num / rep_index         : int 1 … 10  (1-indexed, stored in 'rep_indices');
-                                 NOT used directly in MAML — we just iterate trial_idx.
+  trial_idx                   : int 0 … (num_trials-1)  ← 0-indexed position inside
+                                 the (num_trials, T, C) tensor
+  rep_num                     : int 1 … 10  (1-indexed, stored in 'rep_indices');
+                                 trial_idx = rep_num - 1  (tensors are sorted by
+                                 Gesture_Num ascending during save, so rep N is
+                                 always at tensor row N-1).
 
 ────────────────────────────────────────────────────────────────────────────────
 MAML train/test split strategy:
   - Split is BY USER (participant): train_PIDs vs val_PIDs.
   - ALL gesture classes for a withheld user are withheld (no intra-class split).
   - Intra-subject rep splits (e.g. hold out reps 9 & 10) are supported via
-    `target_trial_indices` for legacy / ablation purposes, but are NOT the
-    default MAML strategy.  Pass target_trial_indices=None to use all trials.
+    `target_rep_nums` for legacy / ablation purposes, but are NOT the
+    default MAML strategy.  Pass target_rep_nums=None to use all trials.
 
 ────────────────────────────────────────────────────────────────────────────────
 Config keys consumed here:
@@ -51,6 +53,11 @@ Config keys consumed here:
   seed                    : int
   num_workers             : int
   use_label_shuf_meta_aug : bool — shuffle label assignment order (augmentation)
+  target_trial_reps    : list[int] | None — 1-INDEXED rep numbers to restrict to
+                             (e.g. [1,2,...,10] for all reps).  None → use all.
+                             NOTE: these are rep NUMBERS (1-indexed), not tensor
+                             positions.  _available_trial_indices_for_class()
+                             converts to 0-indexed internally.
 """
 
 import os
@@ -137,9 +144,12 @@ class MetaGestureDataset(Dataset):
         target_pids          : participant IDs to draw episodes from.
         target_gesture_classes : list of 0-indexed gesture class labels to sample.
                                Only classes present for a given user are actually used.
-        target_trial_indices : optional list of 0-indexed trial positions to restrict
-                               to (legacy intra-subject rep split).  Pass None to use
-                               ALL available trials (default MAML behaviour).
+        target_trial_reps : optional list of 1-INDEXED rep numbers to restrict to
+                               (e.g. [1,2,...,10]).  Pass None to use ALL available
+                               trials (default MAML behaviour).
+                               IMPORTANT: these are rep numbers (1-indexed), NOT tensor
+                               positions.  Conversion to 0-indexed tensor positions is
+                               done internally in _available_trial_indices_for_class().
         n_way, k_shot, q_query : standard few-shot episode dimensions.
         episodes_per_epoch   : number of episodes constituting one training epoch.
         is_train             : if True → episodes generated on-the-fly each __getitem__;
@@ -157,7 +167,7 @@ class MetaGestureDataset(Dataset):
         tensor_dict,
         target_pids,
         target_gesture_classes,          # 0-indexed class labels (NOT rep numbers)
-        target_trial_indices=None,       # 0-indexed; None → use all trials
+        target_trial_reps=None,       # 1-indexed rep numbers; None → use all trials
         n_way=10,
         k_shot=1,
         q_query=9,
@@ -176,9 +186,11 @@ class MetaGestureDataset(Dataset):
         # Gesture classes to sample from (0-indexed class labels).
         self.target_gesture_classes = list(target_gesture_classes)
 
-        # Optional trial-index restriction (legacy intra-subject split).
+        # Optional rep-number restriction (1-indexed rep numbers, e.g. [1..10]).
         # None means "use all available trials for this class".
-        self.target_trial_indices = target_trial_indices  # list[int] | None
+        # Conversion to 0-indexed tensor positions is done in
+        # _available_trial_indices_for_class() — do NOT subtract 1 here.
+        self.target_trial_reps = target_trial_reps  # list[int] of rep nums | None
 
         self.n_way               = n_way
         self.k_shot              = k_shot
@@ -254,24 +266,39 @@ class MetaGestureDataset(Dataset):
 
     def _available_trial_indices_for_class(self, user_id: str, class_label: int) -> list:
         """
-        Return the trial (0-indexed) positions available for this user × class,
-        optionally restricted to self.target_trial_indices.
+        Return the 0-indexed tensor positions available for this user × class,
+        optionally restricted to a subset of rep numbers.
 
-        The tensor has shape (num_trials, T, C); valid indices are 0 … num_trials-1.
-        If target_trial_indices is None, all trials are used.
+        Storage contract (from tensor_saving_with_morphology.ipynb):
+          - Trials are sorted by Gesture_Num (1-indexed rep number) before saving.
+          - tensor row i  ←→  rep_num (i + 1)
+          - Therefore: trial_idx = rep_num - 1   (always safe, no missing reps)
+
+        self.target_trial_reps holds 1-INDEXED rep numbers (e.g. [1..10]).
+        This method converts them to 0-indexed tensor positions before returning.
+        If target_trial_reps is None, all trials are used.
         """
-        emg_tensor  = self.data[user_id][class_label]["emg"]  # (num_trials, T, C)
-        num_trials  = emg_tensor.shape[0]
-        all_indices = list(range(num_trials))
+        emg_tensor = self.data[user_id][class_label]["emg"]  # (num_trials, T, C)
+        num_trials = emg_tensor.shape[0]
 
-        if self.target_trial_indices is None:
-            return all_indices
+        if self.target_trial_reps is None:
+            return list(range(num_trials))
 
-        # Keep only indices that fall within the allowed set AND within bounds.
-        return [
-            idx for idx in self.target_trial_indices
-            if 0 <= idx < num_trials
-        ]
+        # Convert 1-indexed rep numbers → 0-indexed tensor positions.
+        # Bounds-check after conversion so a misconfigured rep number raises
+        # loudly rather than silently dropping data.
+        trial_indices = []
+        for rep_num in self.target_trial_reps:
+            trial_idx = rep_num - 1
+            if trial_idx < 0 or trial_idx >= num_trials:
+                raise IndexError(
+                    f"rep_num={rep_num} converts to trial_idx={trial_idx}, which is "
+                    f"out of range for user={user_id}, class={class_label} "
+                    f"(num_trials={num_trials}). "
+                    f"Check that target_trial_reps contains valid 1-indexed rep numbers."
+                )
+            trial_indices.append(trial_idx)
+        return trial_indices
 
     # ──────────────────────────────────────────────────────────────────────────
     # Episode construction
@@ -432,8 +459,10 @@ def get_maml_dataloaders(config, tensor_dict_path):
     Config keys:
       maml_gesture_classes  : list[int]  0-indexed gesture class labels to sample.
                               LABELS (0-indexed), not repetition numbers.
-      target_trial_indices  : list[int] | None  0-indexed trial positions to use.
-                              None (default) → all available trials used.
+      target_trial_reps  : list[int] | None  1-INDEXED rep numbers to restrict to
+                              (e.g. [1,2,...,10]).  None → all available trials used.
+                              NOTE: rep numbers, not 0-indexed tensor positions.
+                              MetaGestureDataset converts internally.
     """
     with open(tensor_dict_path, "rb") as f:
         full_dict   = pickle.load(f)
@@ -442,30 +471,6 @@ def get_maml_dataloaders(config, tensor_dict_path):
 
     # ── Re-orient Data to Contiguous (B, C, T) once ──────────────────────────
     # Needs to be contiguous for the CNN
-    #print("[maml_data_pipeline] Re-orienting data tensors to (trials, channels, seq_len)...")
-    # ATTEMPT 1
-    #for pid in tensor_dict:
-    #    for gest_class in tensor_dict[pid]:
-    #        # EMG: (trials, seq, chan) -> (trials, chan, seq) ----> (trials, 64, 16) -> (trials, 16, 64)
-    #        emg = tensor_dict[pid][gest_class]['emg']
-    #        if emg.shape[1] != config['emg_in_ch']: # Double check it's "sideways"
-    #            tensor_dict[pid][gest_class]['emg'] = emg.permute(0, 2, 1).contiguous()
-    #        # IMU: (trials, seq, chan) -> (trials, chan, seq) ----> (trials, 64, 72) -> (trials, 72, 64)
-    #        imu = tensor_dict[pid][gest_class].get('imu')
-    #        if imu is not None and imu.shape[1] != config['imu_in_ch']:
-    #             tensor_dict[pid][gest_class]['imu'] = imu.permute(0, 2, 1).contiguous()
-    # ATTEMPT 2
-    #if not full_dict.get("_reoriented", False):
-    #    for pid in tensor_dict:
-    #        for gest_class in tensor_dict[pid]:
-    #            emg = tensor_dict[pid][gest_class]['emg']
-    #            if emg.shape[-1] == config['emg_in_ch']:  # (trials, T, C) → needs flip
-    #                tensor_dict[pid][gest_class]['emg'] = emg.permute(0, 2, 1).contiguous()
-    #            imu = tensor_dict[pid][gest_class].get('imu')
-    #            if imu is not None and imu.shape[-1] == config['imu_in_ch']:
-    #                tensor_dict[pid][gest_class]['imu'] = imu.permute(0, 2, 1).contiguous()
-    #    full_dict["_reoriented"] = True
-    # ATTEMPT 3
     tensor_dict = reorient_tensor_dict(full_dict, config)
 
     num_workers    = int(config["num_workers"])
@@ -481,10 +486,12 @@ def get_maml_dataloaders(config, tensor_dict_path):
             "a list of 0-indexed gesture class labels to sample episodes from."
         )
 
-    # ── Optional trial-index restriction (legacy intra-subject rep split) ─────
-    # Pass a list of 0-indexed trial positions to restrict which trials are used,
+    # ── Optional rep-number restriction (1-indexed rep numbers) ───────────────
+    # Pass a list of 1-indexed rep numbers to restrict which trials are used,
     # or leave as None to use all available trials (standard MAML by-user split).
-    target_trial_indices = config["target_trial_indices"]
+    # MetaGestureDataset._available_trial_indices_for_class() converts to
+    # 0-indexed tensor positions internally.
+    target_trial_reps = config["target_trial_reps"]
 
     # ── Leakage check: train and val PIDs must be disjoint ────────────────────
     if config.get("subject_specific_model", False) is False:
@@ -512,7 +519,7 @@ def get_maml_dataloaders(config, tensor_dict_path):
         tensor_dict,
         target_pids             = config["train_PIDs"],
         target_gesture_classes  = gesture_classes,
-        target_trial_indices    = target_trial_indices,
+        target_trial_reps    = target_trial_reps,
         n_way                   = config["n_way"],
         k_shot                  = config["k_shot"],
         q_query                 = config["q_query"],
@@ -535,7 +542,7 @@ def get_maml_dataloaders(config, tensor_dict_path):
         tensor_dict,
         target_pids             = val_pids,
         target_gesture_classes  = gesture_classes,
-        target_trial_indices    = target_trial_indices,
+        target_trial_reps    = target_trial_reps,
         n_way                   = config["n_way"],
         k_shot                  = config["k_shot"],
         q_query                 = config["q_query"],

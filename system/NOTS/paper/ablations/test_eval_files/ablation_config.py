@@ -285,7 +285,7 @@ def make_base_config(ablation_id: str) -> dict:
     config["pretrained_model_filename"] = None
     config["maml_gesture_classes"]   = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     config["available_gesture_classes"] = config["maml_gesture_classes"]
-    config["target_trial_indices"]   = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["target_trial_reps"]   = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     # Pretrain (flat) dataloader extras
     config["train_reps"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     config["val_reps"]   = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -496,7 +496,7 @@ def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
         tensor_dict,
         target_pids            = test_pids,
         target_gesture_classes = config["maml_gesture_classes"],
-        target_trial_indices   = config["target_trial_indices"],
+        target_trial_reps   = config["target_trial_reps"],
         n_way                  = config["n_way"],
         k_shot                 = config["k_shot"],
         q_query                = config.get("q_query", None),
@@ -557,7 +557,7 @@ def run_supervised_test_eval(model, config: dict, tensor_dict_path: str,
         tensor_dict,
         target_pids            = test_pids,
         target_gesture_classes = config["maml_gesture_classes"],
-        target_trial_indices   = config["target_trial_indices"],
+        target_trial_reps   = config["target_trial_reps"],
         n_way                  = config["n_way"],
         k_shot                 = config["k_shot"],
         q_query                = config.get("q_query", None),
