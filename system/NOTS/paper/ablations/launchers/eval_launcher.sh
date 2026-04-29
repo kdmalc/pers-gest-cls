@@ -6,8 +6,9 @@
 # Most ablations are a single (non-array) SLURM job calling their dedicated
 # Python script. Two exceptions spawn multiple parallel jobs:
 #
-#   A5   : sweeps num_experts over 8 values -> 8 jobs (see A5_EXPERT_COUNTS)
-#   grid : k-shot x n-way grid -> 9 jobs (see GRID_K_SHOTS / GRID_N_WAYS)
+#   A5      : sweeps num_experts over 8 values -> 8 jobs (see A5_EXPERT_COUNTS)
+#   grid    : k-shot x n-way grid (M0/MAML+MoE) -> 9 jobs
+#   grid_A2 : k-shot x n-way grid (A2/supervised CNN-LSTM) -> 9 jobs
 #
 # Script mapping:
 #   M0       → M0_full_model.py
@@ -20,6 +21,7 @@
 #   A8       → A7_A8_subject_specific.py
 #   A11      → A10_A11_A12_meta_pretrained.py
 #   grid     → fewshot_grid.py               [one job per (k_shot, n_way) cell]
+#   grid_A2  → fewshot_grid_A2.py            [one job per (k_shot, n_way) cell]
 #   steps_M0  → num_eval_steps_sweep.py    --model-type maml        [steps sweep, no training]
 #   steps_A7  → num_eval_steps_sweep.py    --model-type supervised  [steps sweep, no training]
 #   steps_A11 → num_eval_steps_sweep.py    --model-type a11         [steps sweep, no training]
@@ -30,8 +32,9 @@
 #   bash eval_launcher.sh A4                    # eval A4 only
 #   bash eval_launcher.sh A1 A2 A4              # multiple ablations
 #   bash eval_launcher.sh all                   # all ablations (no grid)
-#   bash eval_launcher.sh grid                  # k-shot/n-way grid (M0)
-#   bash eval_launcher.sh all grid              # everything
+#   bash eval_launcher.sh grid                  # k-shot/n-way grid (M0/MAML+MoE)
+#   bash eval_launcher.sh grid_A2               # k-shot/n-way grid (A2/supervised)
+#   bash eval_launcher.sh all grid grid_A2      # everything
 #   bash eval_launcher.sh M0 --dry-run          # print without submitting
 #   bash eval_launcher.sh A1 --debug            # debug partition, 15 min limit
 #   bash eval_launcher.sh A5 --partition commons
@@ -39,10 +42,11 @@
 #   bash eval_launcher.sh steps_M0 steps_A7 steps_A11   # adaptation steps sweeps
 #
 # Output layout:
-#   $EVAL_OUT_BASE/<ID>/              (M0, A1, A2, A3, A4, A7, A8, A11)
-#   $EVAL_OUT_BASE/A5/E<N>/           (A5, one subdir per expert count)
-#   $EVAL_OUT_BASE/grid/k<K>_n<N>/   (grid, one subdir per cell)
-#   $EVAL_OUT_BASE/steps_sweep/<ID>/  (steps_M0, steps_A7, steps_A11)
+#   $EVAL_OUT_BASE/<ID>/                (M0, A1, A2, A3, A4, A7, A8, A11)
+#   $EVAL_OUT_BASE/A5/E<N>/             (A5, one subdir per expert count)
+#   $EVAL_OUT_BASE/grid/k<K>_n<N>/     (grid M0, one subdir per cell)
+#   $EVAL_OUT_BASE/grid_A2/k<K>_n<N>/  (grid A2, one subdir per cell)
+#   $EVAL_OUT_BASE/steps_sweep/<ID>/    (steps_M0, steps_A7, steps_A11)
 #   $LOG_DIR/eval_<ID>_<jobid>.out
 
 set -euo pipefail
@@ -87,7 +91,10 @@ A5_EXPERT_COUNTS=(4 8 12 16 20 24 32 40)
 
 # =============================================================================
 # Few-shot grid definition.
-# MUST be kept in sync with GRID_K_SHOTS / GRID_N_WAYS in fewshot_grid.py.
+# MUST be kept in sync with:
+#   GRID_K_SHOTS / GRID_N_WAYS in fewshot_grid.py    (M0)
+#   GRID_K_SHOTS / GRID_N_WAYS in fewshot_grid_A2.py (A2)
+# Both grids use the same (k, n) combinations.
 # =============================================================================
 GRID_K_SHOTS=(1 3 5)
 GRID_N_WAYS=(3 5 10)
@@ -96,7 +103,7 @@ GRID_N_WAYS=(3 5 10)
 # Ablation ID -> Python script mapping.
 # A3 and A4 share a script — the --ablation flag selects the variant.
 # A7/A8 and A10/A11/A12 also share scripts similarly.
-# A5 and grid are handled separately in the submission loop.
+# A5, grid, and grid_A2 are handled separately in the submission loop.
 # steps_M0 / steps_A7 / steps_A11 all call num_eval_steps_sweep.py.
 # =============================================================================
 declare -A ABLATION_SCRIPT
@@ -110,13 +117,14 @@ ABLATION_SCRIPT[A7]="A7_A8_subject_specific.py"
 ABLATION_SCRIPT[A8]="A7_A8_subject_specific.py"
 ABLATION_SCRIPT[A11]="A10_A11_A12_meta_pretrained.py"
 ABLATION_SCRIPT[grid]="fewshot_grid.py"
+ABLATION_SCRIPT[grid_A2]="fewshot_grid_A2.py"
 ABLATION_SCRIPT[steps_M0]="num_eval_steps_sweep.py"
 ABLATION_SCRIPT[steps_A7]="num_eval_steps_sweep.py"
 ABLATION_SCRIPT[steps_A11]="num_eval_steps_sweep.py"
 
 # "all" expands to the standard ablation set only — grid and steps sweeps are opt-in.
 VALID_ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11)
-ALL_TOKENS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 grid steps_M0 steps_A7 steps_A11)  # for usage string
+ALL_TOKENS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 grid grid_A2 steps_M0 steps_A7 steps_A11)  # for usage string
 
 # =============================================================================
 # Parse args
@@ -145,7 +153,7 @@ done
 if [[ ${#ABLATIONS[@]} -eq 0 ]]; then
     echo "ERROR: No ablations specified."
     echo "Usage: bash eval_launcher.sh [$(IFS='|'; echo "${ALL_TOKENS[*]}")|all] [--dry-run] [--debug] [--partition PARTITION]"
-    echo "       'all' expands to: ${VALID_ABLATIONS[*]}  (grid and steps sweeps are opt-in, not included in 'all')"
+    echo "       'all' expands to: ${VALID_ABLATIONS[*]}  (grid, grid_A2, and steps sweeps are opt-in, not included in 'all')"
     exit 1
 fi
 
@@ -189,6 +197,7 @@ TIME_DEFAULT="12:00:00"
 # MAML+MoE ablations (M0, A5, A8, grid) are the slowest.
 # Adjust TIME_* based on observed wall times from HPO runs.
 # Steps sweeps: 10 step values x ~2-5 min each = well under 2h for all three.
+# grid_A2 is supervised (like A2) so each cell should be comparable to A2 time.
 # =============================================================================
 TIME_A1="02:00:00";        MEM_A1=24G
 TIME_A2="02:00:00";        MEM_A2=16G
@@ -198,6 +207,7 @@ TIME_A11="04:00:00";       MEM_A11=24G
 TIME_steps_M0="04:00:00";  MEM_steps_M0=32G
 TIME_steps_A7="02:00:00";  MEM_steps_A7=16G
 TIME_steps_A11="03:00:00"; MEM_steps_A11=24G
+TIME_grid_A2="02:00:00";   MEM_grid_A2=16G   # supervised; same budget as A2
 # Uncomment and tune once you have wall-time data from HPO runs:
 # TIME_M0="08:00:00";   MEM_M0=32G
 # TIME_A3="05:00:00";   MEM_A3=24G
@@ -331,11 +341,11 @@ for ABLATION in "${ABLATIONS[@]}"; do
         done
 
     elif [[ "$ABLATION" == "grid" ]]; then
-        # ── grid: one job per (k_shot, n_way) cell ────────────────────────────
+        # ── grid (M0): one job per (k_shot, n_way) cell ───────────────────────
         local_n_cells=$(( ${#GRID_K_SHOTS[@]} * ${#GRID_N_WAYS[@]} ))
         echo ""
         echo "##################################################"
-        echo "  Few-Shot Grid: ${local_n_cells} jobs"
+        echo "  Few-Shot Grid (M0/MAML+MoE): ${local_n_cells} jobs"
         echo "  k_shot: ${GRID_K_SHOTS[*]}"
         echo "  n_way : ${GRID_N_WAYS[*]}"
         echo "  Note  : (k=1, n=3) cell is identical to M0 by construction."
@@ -346,6 +356,30 @@ for ABLATION in "${ABLATIONS[@]}"; do
                     "grid_k${K}_n${N}" \
                     "$SCRIPT_PATH" \
                     "$EVAL_OUT_BASE/grid/k${K}_n${N}" \
+                    "$TIME" \
+                    "$MEM" \
+                    "$EFFECTIVE_PARTITION" \
+                    "--k-shot ${K} --n-way ${N}"
+            done
+        done
+
+    elif [[ "$ABLATION" == "grid_A2" ]]; then
+        # ── grid_A2 (A2/supervised): one job per (k_shot, n_way) cell ─────────
+        local_n_cells=$(( ${#GRID_K_SHOTS[@]} * ${#GRID_N_WAYS[@]} ))
+        echo ""
+        echo "##################################################"
+        echo "  Few-Shot Grid (A2/No-MAML No-MoE): ${local_n_cells} jobs"
+        echo "  k_shot: ${GRID_K_SHOTS[*]}"
+        echo "  n_way : ${GRID_N_WAYS[*]}"
+        echo "  Note  : (k=1, n=3) cell is identical to A2 by construction."
+        echo "  Eval  : both head_only and full fine-tuning per cell."
+        echo "##################################################"
+        for K in "${GRID_K_SHOTS[@]}"; do
+            for N in "${GRID_N_WAYS[@]}"; do
+                submit_single_job \
+                    "grid_A2_k${K}_n${N}" \
+                    "$SCRIPT_PATH" \
+                    "$EVAL_OUT_BASE/grid_A2/k${K}_n${N}" \
                     "$TIME" \
                     "$MEM" \
                     "$EFFECTIVE_PARTITION" \
@@ -448,13 +482,22 @@ echo "      r = json.load(open(f))"
 echo "      print(f\"{r['num_experts']:>4} experts  top_k={r['top_k']}  acc={r['test_results']['mean_acc']*100:.2f}%\")"
 echo "  \""
 echo ""
-echo "Aggregate few-shot grid results:"
+echo "Aggregate few-shot grid results (M0):"
 echo "  python -c \""
 echo "    import json, glob"
 echo "    files = sorted(glob.glob('$EVAL_OUT_BASE/grid/k*_n*/grid_*_final_results.json'))"
 echo "    for f in files:"
 echo "      r = json.load(open(f))"
 echo "      print(f\"k={r['k_shot']} n={r['n_way']}  acc={r['test_results']['mean_acc']*100:.2f}%\")"
+echo "  \""
+echo ""
+echo "Aggregate few-shot grid results (A2):"
+echo "  python -c \""
+echo "    import json, glob"
+echo "    files = sorted(glob.glob('$EVAL_OUT_BASE/grid_A2/k*_n*/grid_A2_*_final_results.json'))"
+echo "    for f in files:"
+echo "      r = json.load(open(f))"
+echo "      print(f\"k={r['k_shot']} n={r['n_way']}  head-only={r['test_head_only']['mean_acc']*100:.2f}%  full-ft={r['test_full_ft']['mean_acc']*100:.2f}%\")"
 echo "  \""
 echo ""
 echo "Aggregate steps sweep results:"
