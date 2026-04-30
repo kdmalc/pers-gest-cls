@@ -124,7 +124,7 @@ ABLATION_SCRIPT[steps_A11]="num_eval_steps_sweep.py"
 
 # "all" expands to the standard ablation set only — grid and steps sweeps are opt-in.
 VALID_ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11)
-ALL_TOKENS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 grid grid_A2 steps_M0 steps_A7 steps_A11)  # for usage string
+ALL_TOKENS=(M0 A1 A2 A4 A5 A7 A8 A11 grid grid_A2 steps_M0 steps_A7 steps_A11)  # for usage string
 
 # =============================================================================
 # Parse args
@@ -386,6 +386,16 @@ for ABLATION in "${ABLATIONS[@]}"; do
                     "--k-shot ${K} --n-way ${N}"
             done
         done
+
+    elif [[ "$ABLATION" == "A2" ]]; then
+        submit_single_job \
+            "$ABLATION" \
+            "$SCRIPT_PATH" \
+            "$EVAL_OUT_BASE/$ABLATION" \
+            "$TIME" \
+            "$MEM" \
+            "$EFFECTIVE_PARTITION" \
+            "--test-procedure L2SO"   # or hpo_test_split
 
     elif [[ "$ABLATION" == "A3" || "$ABLATION" == "A4" ]]; then
         # ── A3 / A4: shared script, --ablation flag selects the variant ───────

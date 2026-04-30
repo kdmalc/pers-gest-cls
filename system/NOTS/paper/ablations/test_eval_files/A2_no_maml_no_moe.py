@@ -185,12 +185,16 @@ def run_l2so(config: dict, tensor_dict: dict) -> list:
 
 
 def main():
-    config = build_config()
-    test_procedure = config["test_procedure"]
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--test-procedure", choices=["hpo_test_split", "L2SO"],
+                        default=None)
+    args = parser.parse_args()
 
-    print("\nA2 CONFIG:")
-    print(json.dumps({k: str(v) for k, v in config.items()}, indent=2))
-    print(f"\nTest procedure: {test_procedure}")
+    config = build_config()
+    if args.test_procedure is not None:
+        config["test_procedure"] = args.test_procedure  # CLI overrides config default
+    test_procedure = config["test_procedure"]
 
     assert test_procedure in ("hpo_test_split", "L2SO"), (
         f"Unknown test_procedure '{test_procedure}'. Must be 'hpo_test_split' or 'L2SO'."
