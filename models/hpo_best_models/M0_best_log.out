@@ -1,0 +1,506 @@
+JOB_START host=$(hostname) date=$(date) jobid=${SLURM_JOB_ID} task=${SLURM_ARRAY_TASK_ID}
+ABLATION  : M0
+RUN_DIR   : /scratch/my13/kai/runs/paper/ablations/hpo/M0/trial_89
+HPO_DB_DIR: /scratch/my13/kai/meta-pers-gest/optuna_dbs
+/projects/my13/kai/meta-pers-gest/envs/fl-torch/bin/python
+PyTorch: 2.4.0  CUDA: 12.1  GPU: True
+Wed Apr 22 16:06:03 2026       
++---------------------------------------------------------------------------------------+
+| NVIDIA-SMI 535.230.02             Driver Version: 535.230.02   CUDA Version: 12.2     |
+|-----------------------------------------+----------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |
+|                                         |                      |               MIG M. |
+|=========================================+======================+======================|
+|   0  Tesla V100-PCIE-32GB           On  | 00000000:D8:00.0 Off |                    0 |
+| N/A   38C    P0              29W / 250W |      0MiB / 32768MiB |      0%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+
+                                                                                         
++---------------------------------------------------------------------------------------+
+| Processes:                                                                            |
+|  GPU   GI   CI        PID   Type   Process name                            GPU Memory |
+|        ID   ID                                                             Usage      |
+|=======================================================================================|
+|  No running processes found                                                           |
++---------------------------------------------------------------------------------------+
+CUDA Available : True
+GPU            : Tesla V100-PCIE-32GB
+CODE_DIR       : /projects/my13/kai/meta-pers-gest/pers-gest-cls
+DATA_DIR       : /scratch/my13/kai/meta-pers-gest/data
+RUN_DIR        : /scratch/my13/kai/runs/paper/ablations/hpo/M0/trial_89
+
+======================================================================
+  Ablation HPO: M0
+  Profile     : {'use_maml': True, 'use_moe': True, 'use_sup_ft': False, 'is_a11': False, 'fix_arch': False, 'eval_mode': 'episodic', 'script': 'M0_full_model.py', 'note': 'Full model: MAML + MoE'}
+  N_TRIALS    : 1
+  HPO_DB_DIR  : /scratch/my13/kai/meta-pers-gest/optuna_dbs
+  RUN_DIR     : /scratch/my13/kai/runs/paper/ablations/hpo/M0/trial_89
+======================================================================
+
+Staggering start: sleeping 6.39s …
+Journal storage: /scratch/my13/kai/meta-pers-gest/optuna_dbs/ablation_M0_1s3w_hpo_v1.log
+TPE worker seed: 3221465990 (task_id=89, fixed_seed=42)
+/projects/my13/kai/meta-pers-gest/envs/fl-torch/lib/python3.10/site-packages/optuna/_experimental.py:33: ExperimentalWarning: Argument ``multivariate`` is an experimental feature. The interface can change in the future.
+  optuna_warn(
+[I 2026-04-22 16:06:12,199] Using an existing study with name 'ablation_M0_1s3w_hpo_v1' instead of creating a new one.
+Study already has 89 trials — skipping warm-start.
+================================================================================
+[M0 | Trial 89] Starting
+================================================================================
+CODE_DIR: /projects/my13/kai/meta-pers-gest/pers-gest-cls
+DATA_DIR: /scratch/my13/kai/meta-pers-gest/data
+RUN_DIR : /scratch/my13/kai/runs/paper/ablations/hpo/M0/trial_89
+Using fold 0: 24 train | 4 val | 4 test PIDs
+[W 2026-04-22 16:06:14,442] The parameter `maml_msl_num_epochs` in Trial#89 is sampled independently using `RandomSampler` instead of `TPESampler`, potentially degrading the optimization performance. This fallback happend because dynamic search space is not supported for `multivariate=True`. You can suppress this warning by setting `warn_independent_sampling` to `False` in the constructor of `TPESampler` if this independent sampling is intended behavior.
+
+[M0 | Trial 89] Config snapshot:
+  FILM_on_context_or_demo: context
+  MOE_aux_coeff: 0.03282324399711515
+  MOE_ctx_hidden_dim: 32
+  MOE_ctx_out_dim: 64
+  MOE_dropout: 0.03653577545411608
+  MOE_expert_expand: 1.0
+  MOE_gate_temperature: 1.5290172211651742
+  MOE_log_every: 5
+  MOE_mlp_hidden_mult: 1.0
+  MOE_placement: encoder
+  MOE_plot_dir: None
+  MOE_top_k: 9
+  NOTS: True
+  ablation_id: M0
+  apply_MOE_aux_loss_inner_outer: outer
+  augment: False
+  available_gesture_classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  batch_size: 64
+  bidirectional: True
+  cnn_base_filters: 64
+  cnn_kernel: 5
+  cnn_layers: 3
+  debug_five_episodes: False
+  debug_one_episode: False
+  debug_one_user_only: False
+  debug_verbose: False
+  demo_in_dim: 12
+  dfs_load_path: /projects/my13/kai/meta-pers-gest/pers-gest-cls/dataset/meta-learning-sup-que-ds/
+  dropout: 0.1
+  earlystopping_min_delta: 0.005
+  earlystopping_patience: 8
+  emg_imu_pkl_full_path: /scratch/my13/kai/meta-pers-gest/data/filtered_datasets/metadata_IMU_EMG_allgestures_allusers.pkl
+  emg_in_ch: 16
+  enable_inner_loop_optimizable_bn_params: False
+  episodes_per_epoch_train: 500
+  expert_architecture: MLP
+  feature_engr: None
+  front_end_stride: 0
+  ft_label_smooth: 0.0
+  gate_type: context_feature_demo
+  gradient_clip_max_norm: 10.0
+  groupnorm_num_groups: 8
+  head_type: mlp
+  imu_in_ch: 72
+  k_shot: 1
+  label_smooth: 0.05
+  learning_rate: 0.00019506115991520216
+  lr_scheduler_factor: 0.1
+  lr_scheduler_patience: 6
+  lstm_hidden: 64
+  lstm_layers: 3
+  maml_alpha_init: 0.0009734890497675034
+  maml_alpha_init_eval: 0.00506597432775958
+  maml_first_order_to_second_order_epoch: 1000000
+  maml_gesture_classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  maml_inner_steps: 10
+  maml_inner_steps_eval: 10
+  maml_msl_num_epochs: 31
+  maml_opt_order: first
+  maml_use_lslr: True
+  meta_batchsize: 24
+  meta_learning: True
+  model_type: DeepCNNLSTM
+  models_save_dir: /scratch/my13/kai/runs/paper/ablations/hpo/M0/trial_89
+  multimodal: True
+  n_way: 3
+  num_classes: 10
+  num_epochs: 50
+  num_eval_episodes: 100
+  num_experts: 22
+  num_workers: 8
+  optimizer: adam
+  padding: 0
+  pretrain_approach: None
+  pretrain_dir: /projects/my13/kai/meta-pers-gest/pers-gest-cls/pretrain_outputs/checkpoints/
+  pretrain_num_classes: 10
+  pretrained_model_filename: None
+  q_query: 9
+  results_save_dir: /scratch/my13/kai/runs/paper/ablations/hpo/M0/trial_89
+  seed: 42
+  sequence_length: 64
+  target_trial_indices: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  timestamp: 20260422_1606
+  top_k: 9
+  track_gradient_alignment: False
+  train_reps: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  use_GlobalAvgPooling: True
+  use_MOE: True
+  use_batch_norm: False
+  use_cosine_outer_lr: False
+  use_demographics: False
+  use_earlystopping: True
+  use_film_x_demo: False
+  use_imu: True
+  use_label_shuf_meta_aug: True
+  use_lslr_at_eval: False
+  use_maml_msl: hybrid
+  user_split_json_filepath: /projects/my13/kai/meta-pers-gest/pers-gest-cls/system/fixed_user_splits/4kfcv_splits_shared_test.json
+  val_reps: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  weight_decay: 0.0008873572502558012
+
+/projects/my13/kai/meta-pers-gest/envs/fl-torch/lib/python3.10/site-packages/sklearn/base.py:442: InconsistentVersionWarning: Trying to unpickle estimator LabelEncoder from version 1.2.0 when using version 1.7.2. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+[get_maml_dataloaders] Train PIDs (24): ['P005', 'P010', 'P102', 'P103', 'P104', 'P106', 'P107', 'P108', 'P110', 'P111', 'P112', 'P114', 'P115', 'P116', 'P118', 'P119', 'P122', 'P124', 'P125', 'P126', 'P127', 'P128', 'P131', 'P132']
+[get_maml_dataloaders] Val   PIDs (4):   ['P006', 'P011', 'P105', 'P109']
+[get_maml_dataloaders] num_eval_episodes per val user: 100
+[get_maml_dataloaders] Total val episodes in cache: 400
+[get_maml_dataloaders] use_label_shuf_meta_aug: True
+=== Epoch 0 Baseline (before ANY MAML training) ===
+  [Debug] Pre-adapt acc: 0.3333 ± 0.0000  (n=400)
+Epoch 0 val loss/acc: 1.0952, 33.33%
+Epoch 0 val completed in 187.32s
+MAML++ Pretraining: Epoch 1 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 481.03s
+Train loss/acc: 1.1332, 35.92%
+[LSLR Stats] Mean: 0.0018319 | Min: -0.0004078 | Max: 0.0051597
+  [Debug] Pre-adapt acc: 0.3357 ± 0.1653  (n=400)
+Val completed in 184.07s
+Val loss/acc: 1.0948, 42.09%
+Epoch completed in 665.14s
+
+MAML++ Pretraining: Epoch 2 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 476.17s
+Train loss/acc: 1.1267, 42.51%
+[LSLR Stats] Mean: 0.0037705 | Min: -0.0000367 | Max: 0.0101004
+Val completed in 184.36s
+Val loss/acc: 1.0834, 44.48%
+Epoch completed in 660.57s
+
+MAML++ Pretraining: Epoch 3 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 485.69s
+Train loss/acc: 1.0910, 54.62%
+[LSLR Stats] Mean: 0.0062623 | Min: -0.0014717 | Max: 0.0165104
+Val completed in 178.77s
+Val loss/acc: 1.0036, 52.90%
+Epoch completed in 664.48s
+
+MAML++ Pretraining: Epoch 4 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 482.22s
+Train loss/acc: 0.9945, 68.57%
+[LSLR Stats] Mean: 0.0074461 | Min: -0.0057491 | Max: 0.0238353
+Val completed in 186.00s
+Val loss/acc: 0.8494, 68.74%
+Epoch completed in 668.26s
+
+MAML++ Pretraining: Epoch 5 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 486.06s
+Train loss/acc: 0.8234, 81.01%
+[LSLR Stats] Mean: 0.0080783 | Min: -0.0096107 | Max: 0.0316940
+Val completed in 179.59s
+Val loss/acc: 0.6869, 76.33%
+[MOE] Epoch 5 collapse check: max_load=0.516 (threshold=0.80) — OK
+Epoch completed in 670.74s
+
+MAML++ Pretraining: Epoch 6 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 472.74s
+Train loss/acc: 0.7095, 86.33%
+[LSLR Stats] Mean: 0.0082374 | Min: -0.0115737 | Max: 0.0383709
+Val completed in 176.58s
+Val loss/acc: 0.5365, 84.14%
+Epoch completed in 649.35s
+
+MAML++ Pretraining: Epoch 7 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 473.19s
+Train loss/acc: 0.6684, 87.86%
+[LSLR Stats] Mean: 0.0085563 | Min: -0.0133232 | Max: 0.0413712
+Val completed in 175.82s
+Val loss/acc: 0.5838, 79.75%
+Epoch completed in 649.01s
+
+MAML++ Pretraining: Epoch 8 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 475.81s
+Train loss/acc: 0.6356, 88.72%
+[LSLR Stats] Mean: 0.0087279 | Min: -0.0141983 | Max: 0.0463210
+Val completed in 176.12s
+Val loss/acc: 0.5658, 81.12%
+Epoch completed in 651.94s
+
+MAML++ Pretraining: Epoch 9 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 477.03s
+Train loss/acc: 0.6111, 90.20%
+[LSLR Stats] Mean: 0.0087302 | Min: -0.0181493 | Max: 0.0499631
+Val completed in 177.31s
+Val loss/acc: 0.5209, 84.47%
+Epoch completed in 654.36s
+
+MAML++ Pretraining: Epoch 10 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 475.10s
+Train loss/acc: 0.5758, 90.64%
+[LSLR Stats] Mean: 0.0086957 | Min: -0.0238674 | Max: 0.0538586
+Val completed in 173.81s
+Val loss/acc: 0.5013, 85.43%
+[MOE] Epoch 10 collapse check: max_load=0.708 (threshold=0.80) — OK
+Epoch completed in 653.85s
+
+MAML++ Pretraining: Epoch 11 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 475.54s
+Train loss/acc: 0.5685, 89.54%
+[LSLR Stats] Mean: 0.0087867 | Min: -0.0276994 | Max: 0.0567323
+Val completed in 171.64s
+Val loss/acc: 0.5182, 84.48%
+Epoch completed in 647.18s
+
+MAML++ Pretraining: Epoch 12 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 482.21s
+Train loss/acc: 0.5660, 90.04%
+[LSLR Stats] Mean: 0.0088231 | Min: -0.0289261 | Max: 0.0611956
+Val completed in 182.02s
+Val loss/acc: 0.5703, 82.02%
+Epoch completed in 664.23s
+
+MAML++ Pretraining: Epoch 13 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 490.40s
+Train loss/acc: 0.5442, 90.61%
+[LSLR Stats] Mean: 0.0088525 | Min: -0.0280551 | Max: 0.0639212
+Val completed in 185.41s
+Val loss/acc: 0.4764, 87.49%
+Epoch completed in 675.84s
+
+MAML++ Pretraining: Epoch 14 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 480.62s
+Train loss/acc: 0.5011, 92.14%
+[LSLR Stats] Mean: 0.0087839 | Min: -0.0291225 | Max: 0.0668607
+Val completed in 179.86s
+Val loss/acc: 0.4174, 89.80%
+Epoch completed in 660.51s
+
+MAML++ Pretraining: Epoch 15 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 489.45s
+Train loss/acc: 0.4813, 92.38%
+[LSLR Stats] Mean: 0.0086088 | Min: -0.0309800 | Max: 0.0710840
+Val completed in 184.08s
+Val loss/acc: 0.4617, 87.52%
+[MOE] Epoch 15 collapse check: max_load=0.415 (threshold=0.80) — OK
+Epoch completed in 678.75s
+
+MAML++ Pretraining: Epoch 16 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 484.21s
+Train loss/acc: 0.4888, 91.77%
+[LSLR Stats] Mean: 0.0084961 | Min: -0.0326847 | Max: 0.0726177
+Val completed in 177.41s
+Val loss/acc: 0.4393, 88.81%
+Epoch completed in 661.63s
+
+MAML++ Pretraining: Epoch 17 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 482.61s
+Train loss/acc: 0.4732, 92.20%
+[LSLR Stats] Mean: 0.0085322 | Min: -0.0353380 | Max: 0.0735743
+Val completed in 180.69s
+Val loss/acc: 0.4632, 87.70%
+Epoch completed in 663.30s
+
+MAML++ Pretraining: Epoch 18 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 487.39s
+Train loss/acc: 0.4592, 91.73%
+[LSLR Stats] Mean: 0.0085015 | Min: -0.0382718 | Max: 0.0739543
+Val completed in 186.54s
+Val loss/acc: 0.4709, 86.86%
+Epoch completed in 673.93s
+
+MAML++ Pretraining: Epoch 19 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 486.75s
+Train loss/acc: 0.4618, 91.80%
+[LSLR Stats] Mean: 0.0084008 | Min: -0.0399407 | Max: 0.0741477
+Val completed in 178.83s
+Val loss/acc: 0.4481, 88.09%
+Epoch completed in 665.58s
+
+MAML++ Pretraining: Epoch 20 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 486.29s
+Train loss/acc: 0.4397, 92.49%
+[LSLR Stats] Mean: 0.0082346 | Min: -0.0404552 | Max: 0.0752625
+Val completed in 184.09s
+Val loss/acc: 0.4206, 89.51%
+[MOE] Epoch 20 collapse check: max_load=0.390 (threshold=0.80) — OK
+Epoch completed in 675.67s
+
+MAML++ Pretraining: Epoch 21 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 487.07s
+Train loss/acc: 0.4210, 93.26%
+[LSLR Stats] Mean: 0.0080412 | Min: -0.0432016 | Max: 0.0763295
+Val completed in 179.63s
+Val loss/acc: 0.4873, 87.48%
+Epoch completed in 666.71s
+
+MAML++ Pretraining: Epoch 22 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 488.90s
+Train loss/acc: 0.4283, 93.00%
+[LSLR Stats] Mean: 0.0080727 | Min: -0.0439481 | Max: 0.0752859
+Val completed in 178.30s
+Val loss/acc: 0.4387, 89.69%
+Epoch completed in 667.21s
+
+MAML++ Pretraining: Epoch 23 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 482.18s
+Train loss/acc: 0.4115, 93.23%
+[LSLR Stats] Mean: 0.0080155 | Min: -0.0439564 | Max: 0.0753063
+Val completed in 177.91s
+Val loss/acc: 0.5102, 85.06%
+Epoch completed in 660.10s
+
+MAML++ Pretraining: Epoch 24 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 479.24s
+Train loss/acc: 0.4053, 92.74%
+[LSLR Stats] Mean: 0.0079510 | Min: -0.0448626 | Max: 0.0771354
+Val completed in 178.81s
+Val loss/acc: 0.4562, 87.79%
+Epoch completed in 658.06s
+
+MAML++ Pretraining: Epoch 25 of 50
+--- Episode 0/500 | Target Meta-Batch Size: 24 ---
+--- Episode 100/500 | Target Meta-Batch Size: 24 ---
+--- Episode 200/500 | Target Meta-Batch Size: 24 ---
+--- Episode 300/500 | Target Meta-Batch Size: 24 ---
+--- Episode 400/500 | Target Meta-Batch Size: 24 ---
+Train completed in 481.79s
+Train loss/acc: 0.4107, 92.49%
+[LSLR Stats] Mean: 0.0078482 | Min: -0.0465775 | Max: 0.0799357
+Val completed in 180.27s
+Val loss/acc: 0.4421, 87.73%
+[EarlyStopping] epoch 25: val loss stalled. Stopping.
+[MAML++] loaded best model (val acc=0.898)
+  [Trial 89] epochs_run=25, global_best=89.80% (ep13), burnin_best=89.80% (ep13)
+  [Trial 89] Checkpoint saved: trial_89_fold0_best.pt
+  [Trial 89] Final HPO score (post-burnin adapt-eval): 90.05%
+[M0 | Trial 89] Done in 16944.6s → val_acc=90.05%
+[I 2026-04-22 20:48:37,422] Trial 89 finished with value: 0.9005208333333334 and parameters: {'outer_lr': 0.00019506115991520216, 'wd': 0.0008873572502558012, 'maml_inner_steps': 10, 'maml_alpha_init': 0.0009734890497675034, 'maml_alpha_init_eval': 0.00506597432775958, 'maml_use_lslr': True, 'use_lslr_at_eval': False, 'use_maml_msl': 'hybrid', 'maml_msl_num_epochs': 31, 'episodes_per_epoch_train': 500, 'num_experts': 22, 'MOE_top_k': 9, 'MOE_gate_temperature': 1.5290172211651742, 'MOE_aux_coeff': 0.03282324399711515, 'MOE_ctx_out_dim': 64, 'MOE_ctx_hidden_dim': 32, 'MOE_dropout': 0.03653577545411608, 'MOE_aux_loss_plcmt': 'outer'}. Best is trial 89 with value: 0.9005208333333334.
+JOB_END date=$(date)
