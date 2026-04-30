@@ -990,7 +990,7 @@ if __name__ == "__main__":
         help=f"Number of val episodes per config. Default: {NUM_VAL_EPISODES}.",
     )
     parser.add_argument(
-        "--ft-mode", type=str, default="head_only",
+        "--ft-mode", type=str, default="full",
         choices=["head_only", "full"], dest="ft_mode",
         help="Finetuning mode for supervised / a11. Default: head_only.",
     )
