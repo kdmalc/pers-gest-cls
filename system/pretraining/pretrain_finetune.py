@@ -127,7 +127,7 @@ def finetune_and_eval_user(
     ft_lr    = float(config['ft_lr'])
     ft_steps = int(config['ft_steps'])
     ft_wd    = float(config.get('ft_weight_decay', 0.0))
-    ft_opt   = config.get('ft_optimizer', 'adam').lower()
+    ft_opt   = config.get('ft_optimizer', 'SGD').lower()
     ls       = float(config['ft_label_smooth'])
 
     if ft_opt == 'adam':

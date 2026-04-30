@@ -11,8 +11,12 @@ Changes from M0:
   - Episodic evaluation with head-only and full fine-tuning (same as A1).
 
 test_procedure:
-  'hpo_test_split' : Fixed split, single run at FIXED_SEED.
+  'hpo_test_split' : Fixed split, single run at FIXED_SEED.  [DEFAULT]
   'L2SO'           : Leave-2-Subjects-Out over all_PIDs. One run per fold.
+
+CLI args:
+  --test-procedure  {hpo_test_split, L2SO}   overrides config default
+  --ft-lr           float                     overrides FT_LR default (1e-3)
 """
 
 import os, sys, copy, json
@@ -42,11 +46,11 @@ print(f"CUDA Available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
-FT_STEPS = 25
+FT_STEPS = 10
 FT_LR    = 1e-3
 
 
-def build_config() -> dict:
+def build_config(ft_lr: float) -> dict:
     config = make_base_config(ablation_id="A2")
     config["meta_learning"]   = False
     config["use_MOE"]         = False
@@ -55,7 +59,7 @@ def build_config() -> dict:
     config["val_reps"]        = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     config["augment"]         = False
     config["ft_steps"]        = FT_STEPS
-    config["ft_lr"]           = FT_LR
+    config["ft_lr"]           = ft_lr
     config["ft_optimizer"]    = "adam"
     config["ft_weight_decay"] = config["weight_decay"]
     return config
@@ -187,11 +191,29 @@ def run_l2so(config: dict, tensor_dict: dict) -> list:
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--test-procedure", choices=["hpo_test_split", "L2SO"],
-                        default=None)
+    parser.add_argument(
+        "--test-procedure",
+        choices=["hpo_test_split", "L2SO"],
+        default=None,
+        help="Overrides config default (hpo_test_split) when provided.",
+    )
+    parser.add_argument(
+        "--ft-lr",
+        type=float,
+        default=None,
+        help=(
+            f"Fine-tuning learning rate. Overrides the hardcoded default "
+            f"FT_LR={FT_LR}. Example: --ft-lr 5e-4"
+        ),
+    )
     args = parser.parse_args()
 
-    config = build_config()
+    # Resolve ft_lr: CLI wins over module-level default.
+    ft_lr = args.ft_lr if args.ft_lr is not None else FT_LR
+    print(f"[A2] ft_lr = {ft_lr}" + (" (from --ft-lr CLI arg)" if args.ft_lr is not None else " (default)"))
+
+    config = build_config(ft_lr=ft_lr)
+
     if args.test_procedure is not None:
         config["test_procedure"] = args.test_procedure  # CLI overrides config default
     test_procedure = config["test_procedure"]
@@ -217,7 +239,7 @@ def main():
             "test_head_only_acc": result["test_head_only"]["mean_acc"],
             "test_full_ft_acc":   result["test_full_ft"]["mean_acc"],
             "ft_steps":           FT_STEPS,
-            "ft_lr":              FT_LR,
+            "ft_lr":              ft_lr,
             "config_snapshot":    {k: str(v) for k, v in config.items()},
         }
     else:  # L2SO
@@ -236,7 +258,7 @@ def main():
             "mean_test_full_ft":   float(np.mean(full_accs)),
             "std_test_full_ft":    float(np.std(full_accs)),
             "ft_steps":            FT_STEPS,
-            "ft_lr":               FT_LR,
+            "ft_lr":               ft_lr,
             "num_folds":           len(all_results),
             "config_snapshot":     {k: str(v) for k, v in config.items()},
         }
@@ -256,6 +278,7 @@ def main():
         print(f"[A2] FINAL full-ft   (L2SO): "
               f"{summary['mean_test_full_ft']*100:.2f}% ± {summary['std_test_full_ft']*100:.2f}%")
         print(f"     over {summary['num_folds']} L2SO folds (one per test subject)")
+    print(f"     ft_lr={ft_lr}  ft_steps={FT_STEPS}")
     print(f"     {config['n_way']}-way {config['k_shot']}-shot")
     print(f"{'='*70}")
 
