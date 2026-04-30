@@ -76,7 +76,7 @@ mkdir -p "$EVAL_OUT_BASE" "$LOG_DIR"
 # steps_A11 does not need a checkpoint (Meta model loads its own weights).
 # =============================================================================
 # Best M0 checkpoint from Trial 89 HPO (maml_alpha_init_eval = 5.066e-3).
-STEPS_M0_CHECKPOINT="/projects/my13/kai/meta-pers-gest/pers-gest-cls/hpo_best_models/M0_best.pt"
+STEPS_M0_CHECKPOINT="/projects/my13/kai/meta-pers-gest/pers-gest-cls/models/final_eval_models/best_M0_model.pt"
 STEPS_M0_ALPHA="0.005066"   # maml_alpha_init_eval from Trial 89 — fixed, no alpha sweep needed
 
 # Best A7 checkpoint. Set --ft-lr to whatever you've been using for A7 finetuning.

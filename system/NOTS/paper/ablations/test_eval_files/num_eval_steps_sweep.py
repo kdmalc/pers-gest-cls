@@ -2,15 +2,21 @@
 num_eval_steps_sweep.py
 =========================
 Post-hoc sweep over the number of test-time adaptation steps for trained
-checkpoints. No training. No HPO. No Optuna. Pure grid sweep.
+checkpoints. No training (except A2, which is trained inline). No HPO.
+No Optuna. Pure grid sweep.
 
 Purpose
 -------
 Answer: "How many adaptation steps does each model need before it plateaus?"
 
-This is run AFTER training. It loads a frozen checkpoint and sweeps the
-number of test-time gradient steps over a fixed grid. The model weights are
-NEVER modified — each episode starts from the same checkpoint init.
+For MAML and A7, this is run AFTER training. It loads a frozen checkpoint
+and sweeps the number of test-time gradient steps over a fixed grid. The
+model weights are NEVER modified — each episode starts from the same
+checkpoint init.
+
+For A2, training takes ~2 min on the cluster. The model is trained inline
+(single seed, FIXED_SEED), then the trained weights are deepcopied and used
+for the eval sweep exactly as with A7. The checkpoint is also saved to disk.
 
 Supported model types
 ---------------------
@@ -20,20 +26,25 @@ Supported model types
     (2D grid: steps x alpha). Use --sweep-alpha to find the best alpha
     first, then fix it with --alpha for the paper-curve run.
 
-  Non-MAML supervised (A7 = CNN-LSTM, no MoE):
+  Non-MAML supervised (A7 = CNN-LSTM, no MoE — loads from checkpoint):
     Sweeps `num_ft_steps` in finetune_and_eval_user().
-    Requires --ft-lr (fixed finetuning LR — take the best from A11 HPO
-    or run this with --sweep-lr to find the plateau jointly).
+    --checkpoint defaults to the known best A7 path; override if needed.
+    ft_mode: 'head_only' by default; override with --ft-mode full.
+    ft_lr fixed at 0.001.
+
+  Non-MAML A2 (CNN-LSTM, no MoE — trained inline, no checkpoint needed):
+    Trains A2 from scratch at FIXED_SEED, saves checkpoint, then sweeps
+    adaptation steps. ft_lr fixed at 0.001.
     ft_mode: 'head_only' by default; override with --ft-mode full.
 
   Non-MAML Meta pretrained (A11):
-    Same as A7 but uses MetaEMGWrapper + 2kHz EMG data.
-    The MetaEMGWrapper class is defined inline below (copied from
-    A11_eval_hpo_extended.py so this script is self-contained).
+    Same sweep logic as A7/A2, but uses MetaEMGWrapper + 2kHz EMG data.
+    No --checkpoint needed (MetaEMGWrapper loads from hardcoded Meta path).
+    ft_lr fixed at 0.01 (from A11 HPO v1 best).
 
 Workflow
 --------
-  # Step 1: MAML — find best (steps, alpha) jointly on val set
+  # MAML — find best (steps, alpha) jointly on val set
   python num_eval_steps_sweep.py \\
       --model-type maml \\
       --checkpoint /path/to/M0_best.pt \\
@@ -41,36 +52,37 @@ Workflow
       --sweep-alpha \\
       --out-dir /scratch/.../steps_sweep/M0
 
-  # Step 2: MAML — paper curve at fixed best alpha
+  # MAML — paper curve at fixed best alpha
   python num_eval_steps_sweep.py \\
       --model-type maml \\
       --checkpoint /path/to/M0_best.pt \\
       --ablation-id M0 \\
-      --alpha <best_alpha_from_step1> \\
+      --alpha <best_alpha_from_sweep> \\
       --out-dir /scratch/.../steps_sweep/M0
 
-  # Step 3: Non-MAML A7 — find plateau (sweep LR + steps jointly)
+  # A7 — find plateau (sweep LR + steps jointly)
   python num_eval_steps_sweep.py \\
       --model-type supervised \\
-      --checkpoint /path/to/A7_best.pt \\
       --ablation-id A7 \\
       --sweep-lr \\
       --out-dir /scratch/.../steps_sweep/A7
 
-  # Step 4: Non-MAML A7 — paper curve at fixed best LR
+  # A7 — paper curve at fixed LR (ft_lr defaults to 0.001)
   python num_eval_steps_sweep.py \\
       --model-type supervised \\
-      --checkpoint /path/to/A7_best.pt \\
       --ablation-id A7 \\
-      --ft-lr <best_lr_from_step3> \\
       --out-dir /scratch/.../steps_sweep/A7
 
-  # A11 (Meta pretrained) — identical to A7 steps above but --model-type a11
-  # No --checkpoint needed for A11 (uses hardcoded Meta ckpt path).
+  # A2 — train inline, then paper curve (ft_lr defaults to 0.001)
+  python num_eval_steps_sweep.py \\
+      --model-type a2 \\
+      --ablation-id A2 \\
+      --out-dir /scratch/.../steps_sweep/A2
+
+  # A11 — paper curve (no checkpoint needed)
   python num_eval_steps_sweep.py \\
       --model-type a11 \\
       --ablation-id A11 \\
-      --sweep-lr \\
       --out-dir /scratch/.../steps_sweep/A11
 
 Output
@@ -84,8 +96,7 @@ SLURM
   Single-GPU job, no array needed. Estimated wall times:
     MAML 2D sweep  (8 steps x 9 alphas x ~2 min):  ~2-3h
     MAML paper curve (10 steps x ~2.5 min):          ~25 min
-    Supervised 2D sweep (5 steps x 7 LRs x ~5 min): ~3h
-    Supervised paper curve (10 steps x ~5 min):      ~50 min
+    Supervised/A2 paper curve (10 steps x ~5 min):  ~50 min + 2 min training for A2
     A11 similar to supervised (no-MoE backbone).
 
 Notes on comparability
@@ -161,24 +172,37 @@ EMG_2KHZ_IN_CH   = 16
 EMG_2KHZ_SEQ_LEN = 4300
 
 # =============================================================================
+# Supervised model defaults
+# =============================================================================
+
+# Default checkpoint for A7 (no-MAML no-MoE, pretrained). Override via
+# --checkpoint if you have a different best model.
+DEFAULT_A7_CHECKPOINT = Path(
+    "/projects/my13/kai/meta-pers-gest/pers-gest-cls/hpo_best_models/A7_best.pt"
+)
+
+# Fixed finetuning LRs for all supervised (non-A11) models.
+# A11 uses its own HPO-derived best (0.01).
+SUPERVISED_FT_LR = 0.001
+A11_FT_LR        = 0.01
+
+# =============================================================================
 # Step / LR / alpha grids
 # =============================================================================
 
-# MAML: paper figure trajectory — includes low step counts to show
-# adaptation speed advantage relative to the supervised baseline.
-MAML_PAPER_STEPS_GRID = [0, 3]  #[1, 5, 10, 25, 50, 100, 150, 200]
+# MAML: paper figure trajectory — truncated intentionally (runs already done).
+MAML_PAPER_STEPS_GRID = [0, 3]
 
 # MAML: 2D sweep grid for finding (steps, alpha) jointly.
-# Starts at 50 because you already know < 50 is suboptimal for M0.
-MAML_HPO_STEPS_GRID   = [0, 1, 3, 5, 10]  #[25, 50, 75, 100, 125, 150, 175, 200, 250]
+MAML_HPO_STEPS_GRID   = [0, 1, 3, 5, 10]
 MAML_ALPHA_GRID       = [0.001, 0.002, 0.003, 0.005, 0.007, 0.010, 0.015, 0.020, 0.030]
 
-# Supervised / A11: paper figure trajectory — same range as MAML for a
-# fair visual comparison on the same x-axis.
-SUP_PAPER_STEPS_GRID  = [0, 1, 3, 5, 10]  #[1, 5, 10, 25, 50, 100, 150, 200, 250, 300]
+# Supervised / A2 / A11: paper figure trajectory — extended to cover the full
+# range needed to find the plateau for slower-adapting supervised models.
+SUP_PAPER_STEPS_GRID  = [0, 1, 3, 5, 10, 25, 50, 100, 150, 200]
 
-# Supervised / A11: 2D sweep grid for finding (ft_steps, ft_lr) jointly.
-SUP_HPO_STEPS_GRID    = [0, 1, 3, 5, 10]  #[25, 50, 100, 150, 200]
+# Supervised / A2 / A11: 2D sweep grid for finding (ft_steps, ft_lr) jointly.
+SUP_HPO_STEPS_GRID    = [0, 1, 3, 5, 10, 25, 50, 100, 150, 200]
 # LR grid — centered around A11 v1 best (0.01) and expanded upward since
 # both ft_lr and ft_steps hit the upper bound in the original HPO.
 SUP_LR_GRID           = [0.001, 0.005, 0.01, 0.05, 0.1, 0.3, 1.0]
@@ -273,7 +297,7 @@ class MetaEMGWrapper(nn.Module):
 
 
 # =============================================================================
-# Checkpoint loader (MAML and supervised)
+# Checkpoint loaders (MAML and supervised)
 # =============================================================================
 
 def load_maml_checkpoint(checkpoint_path: Path) -> tuple:
@@ -379,6 +403,94 @@ def load_supervised_checkpoint(checkpoint_path: Path) -> tuple:
 
 
 # =============================================================================
+# A2 inline training
+# =============================================================================
+
+def build_a2_config() -> dict:
+    """
+    Build the A2 config. Mirrors build_config() in A2_no_maml_no_moe.py.
+    ft_lr is fixed at SUPERVISED_FT_LR (0.001) — no CLI override for this path.
+    """
+    from ablation_config import make_base_config
+    config = make_base_config(ablation_id="A2")
+    config["meta_learning"]   = False
+    config["use_MOE"]         = False
+    config["batch_size"]      = 64
+    config["train_reps"]      = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["val_reps"]        = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    config["augment"]         = False
+    config["ft_steps"]        = 10    # default; overridden per-config during sweep
+    config["ft_lr"]           = SUPERVISED_FT_LR
+    config["ft_optimizer"]    = "adam"
+    config["ft_weight_decay"] = config["weight_decay"]
+    return config
+
+
+def train_a2_model(out_dir: Path) -> tuple:
+    """
+    Train A2 from scratch at FIXED_SEED. Saves checkpoint to out_dir.
+    Returns (trained_model, config, tensor_dict_path).
+
+    This mirrors run_one_fold() in A2_no_maml_no_moe.py but is trimmed to
+    only what the sweep needs: training + checkpoint save. No test eval here
+    — the sweep handles that.
+    """
+    from ablation_config import (
+        build_supervised_no_moe_model, set_seeds, save_model_checkpoint,
+        count_parameters,
+    )
+    from pretraining.pretrain_data_pipeline import get_pretrain_dataloaders
+    from pretraining.pretrain_trainer import pretrain
+    from MAML.maml_data_pipeline import reorient_tensor_dict
+
+    config = build_a2_config()
+    config["seed"] = FIXED_SEED
+    set_seeds(FIXED_SEED)
+
+    print(f"\n{'='*70}")
+    print(f"[A2] Training inline at seed={FIXED_SEED}")
+    print(f"  train_PIDs : {config['train_PIDs']}")
+    print(f"  val_PIDs   : {config['val_PIDs']}")
+    print(f"  test_PIDs  : {config['test_PIDs']}")
+    print(f"{'='*70}")
+
+    tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
+    with open(tensor_dict_path, "rb") as f:
+        full_dict = pickle.load(f)
+    tensor_dict = reorient_tensor_dict(full_dict, config)
+
+    model = build_supervised_no_moe_model(config)
+    n_params = count_parameters(model)
+    print(f"  Parameters : {n_params:,}")
+
+    train_dl, val_dl, n_classes = get_pretrain_dataloaders(config, tensor_dict)
+    assert n_classes == config["num_classes"], (
+        f"Expected {config['num_classes']} classes, got {n_classes}."
+    )
+
+    trained_model, history = pretrain(model, train_dl, val_dl, config)
+    best_val_acc = max(history["val_acc"]) if history["val_acc"] else float("nan")
+    print(f"[A2] Training complete. Best val acc = {best_val_acc:.4f}")
+
+    # Save checkpoint to out_dir so there is a record on disk.
+    ckpt_state = {
+        "fold_id":          f"steps_sweep_seed{FIXED_SEED}",
+        "seed":             FIXED_SEED,
+        "model_state_dict": trained_model.state_dict(),
+        "config":           config,
+        "best_val_acc":     best_val_acc,
+        "train_loss_log":   history["train_loss"],
+        "val_acc_log":      history["val_acc"],
+    }
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    ckpt_path = out_dir / f"A2_steps_sweep_trained_{timestamp}.pt"
+    torch.save(ckpt_state, ckpt_path)
+    print(f"[A2] Checkpoint saved to: {ckpt_path}")
+
+    return trained_model, config, tensor_dict_path
+
+
+# =============================================================================
 # Single-config evaluators
 # =============================================================================
 
@@ -417,7 +529,7 @@ def eval_maml_one_config(
         tensor_dict,
         target_pids             = val_pids,
         target_gesture_classes  = eval_config["maml_gesture_classes"],
-        target_trial_indices    = eval_config["target_trial_indices"],
+        target_trial_reps       = eval_config["target_trial_reps"],
         n_way                   = eval_config["n_way"],
         k_shot                  = eval_config["k_shot"],
         q_query                 = eval_config["q_query"],
@@ -483,13 +595,13 @@ def eval_supervised_one_config(
     from torch.utils.data import DataLoader
 
     eval_config = copy.deepcopy(base_config)
-    eval_config["ft_steps"]       = ft_steps
-    eval_config["num_ft_steps"]   = ft_steps   # cover both key names defensively
-    eval_config["ft_lr"]          = ft_lr
+    eval_config["ft_steps"]        = ft_steps
+    eval_config["num_ft_steps"]    = ft_steps   # cover both key names defensively
+    eval_config["ft_lr"]           = ft_lr
     eval_config["ft_label_smooth"] = 0.0
     eval_config["ft_weight_decay"] = 0.0
-    eval_config["ft_optimizer"]   = "SGD"  # Switching to SGD to match MAML
-    eval_config["val_PIDs"]       = val_pids
+    eval_config["ft_optimizer"]    = "adam"
+    eval_config["val_PIDs"]        = val_pids
 
     with open(tensor_dict_path, "rb") as f:
         full_dict = pickle.load(f)
@@ -499,7 +611,7 @@ def eval_supervised_one_config(
         tensor_dict,
         target_pids             = val_pids,
         target_gesture_classes  = eval_config["maml_gesture_classes"],
-        target_trial_indices    = eval_config["target_trial_indices"],
+        target_trial_reps       = eval_config["target_trial_reps"],
         n_way                   = eval_config["n_way"],
         k_shot                  = eval_config["k_shot"],
         q_query                 = eval_config["q_query"],
@@ -577,7 +689,7 @@ def eval_a11_one_config(
     eval_config["ft_lr"]           = ft_lr
     eval_config["ft_label_smooth"] = 0.0
     eval_config["ft_weight_decay"] = 0.0
-    eval_config["ft_optimizer"]    = "SGD"  # Switching to SGD to match MAMLAny other i
+    eval_config["ft_optimizer"]    = "adam"
     eval_config["val_PIDs"]        = val_pids
     eval_config["num_eval_episodes"] = num_val_episodes
     eval_config["device"]          = device
@@ -590,7 +702,7 @@ def eval_a11_one_config(
         tensor_dict,
         target_pids             = val_pids,
         target_gesture_classes  = eval_config["maml_gesture_classes"],
-        target_trial_indices    = eval_config["target_trial_indices"],
+        target_trial_reps       = eval_config["target_trial_reps"],
         n_way                   = eval_config["n_way"],
         k_shot                  = eval_config["k_shot"],
         q_query                 = eval_config["q_query"],
@@ -753,7 +865,7 @@ def run_maml_sweep(
 
     if sweep_alpha:
         print(f"\nNext step — generate paper curve with best alpha:")
-        print(f"  python adaptation_steps_sweep.py \\")
+        print(f"  python num_eval_steps_sweep.py \\")
         print(f"      --model-type maml \\")
         print(f"      --checkpoint {checkpoint_path} \\")
         print(f"      --ablation-id {ablation_id} \\")
@@ -768,21 +880,25 @@ def run_supervised_sweep(
     val_pids:         list,
     num_val_episodes: int,
     sweep_lr:         bool,
-    fixed_lr:         float | None,
+    fixed_lr:         float,
     ft_mode:          str,
-    model_type:       str,       # "supervised" or "a11"
+    model_type:       str,          # "supervised", "a2", or "a11"
     a11_base_config:  dict | None,
+    trained_model:    torch.nn.Module | None,  # pre-trained A2 model (or None)
+    trained_config:   dict | None,             # config from A2 training (or None)
+    trained_tensor_dict_path: str | None,      # tensor dict path from A2 training (or None)
 ) -> None:
     """
-    Supervised (non-MAML) adaptation steps sweep for A7 and A11.
+    Supervised (non-MAML) adaptation steps sweep for A7, A2, and A11.
 
     If sweep_lr=True  → 2D grid: SUP_HPO_STEPS_GRID x SUP_LR_GRID.
     If sweep_lr=False → paper curve: SUP_PAPER_STEPS_GRID at fixed_lr.
-    """
-    if not sweep_lr:
-        assert fixed_lr is not None, \
-            "--ft-lr must be provided when not using --sweep-lr."
 
+    For A2: model, config, and tensor_dict_path come from train_a2_model()
+    and are passed in directly. No checkpoint loading happens here.
+    For A7: loaded from checkpoint_path.
+    For A11: loaded fresh per config call inside eval_a11_one_config().
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     mode_tag  = "2d_sweep" if sweep_lr else "paper_curve"
@@ -794,12 +910,20 @@ def run_supervised_sweep(
         tensor_dict_path   = os.path.join(
             base_config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl"
         )
+    elif model_type == "a2":
+        # Trained inline before this call — receive everything directly.
+        assert trained_model is not None, "trained_model must be provided for a2."
+        assert trained_config is not None, "trained_config must be provided for a2."
+        assert trained_tensor_dict_path is not None, \
+            "trained_tensor_dict_path must be provided for a2."
+        model            = trained_model
+        base_config      = trained_config
+        tensor_dict_path = trained_tensor_dict_path
     else:
         # A11: no checkpoint arg needed; MetaEMGWrapper loads its own weights.
-        # base_config and tensor_dict_path are handled inside eval_a11_one_config.
         assert a11_base_config is not None
-        model         = None
-        base_config   = a11_base_config
+        model            = None
+        base_config      = a11_base_config
         tensor_dict_path = EMG_2KHZ_PKL_PATH
 
     if sweep_lr:
@@ -818,6 +942,7 @@ def run_supervised_sweep(
         print(f"  Checkpoint     : {checkpoint_path}")
     print(f"  Model type     : {model_type}")
     print(f"  FT mode        : {ft_mode}")
+    print(f"  FT LR          : {fixed_lr if not sweep_lr else 'sweep'}")
     print(f"  Val PIDs       : {val_pids}")
     print(f"  Val episodes   : {num_val_episodes}")
     print(f"  Steps grid     : {steps_grid}")
@@ -826,19 +951,19 @@ def run_supervised_sweep(
     print(f"  Output dir     : {out_dir}")
     print(f"{'='*70}\n")
 
-    results      = []
-    best_acc     = -1.0
-    best_steps   = None
+    results       = []
+    best_acc      = -1.0
+    best_steps    = None
     best_lr_found = None
-    sweep_start  = time.time()
-    out_path     = out_dir / f"steps_sweep_{ablation_id}_{mode_tag}_{timestamp}.json"
+    sweep_start   = time.time()
+    out_path      = out_dir / f"steps_sweep_{ablation_id}_{mode_tag}_{timestamp}.json"
 
     for i, (steps, lr) in enumerate(grid):
         t0 = time.time()
         print(f"[{i+1:>3}/{n_configs}] ft_steps={steps:>4}, ft_lr={lr:.4f} ...",
               end="", flush=True)
 
-        if model_type == "supervised":
+        if model_type in ("supervised", "a2"):
             result = eval_supervised_one_config(
                 model            = model,
                 base_config      = base_config,
@@ -873,7 +998,10 @@ def run_supervised_sweep(
             "model_type":           model_type,
             "ft_mode":              ft_mode,
             "mode":                 mode_tag,
-            "checkpoint":           str(checkpoint_path) if checkpoint_path else "MetaEMGWrapper",
+            "checkpoint":           str(checkpoint_path) if checkpoint_path else (
+                                        "trained_inline" if model_type == "a2"
+                                        else "MetaEMGWrapper"
+                                    ),
             "val_pids":             val_pids,
             "num_val_episodes":     num_val_episodes,
             "steps_grid":           steps_grid,
@@ -900,7 +1028,7 @@ def run_supervised_sweep(
 
     if sweep_lr:
         print(f"\nNext step — generate paper curve with best LR:")
-        print(f"  python adaptation_steps_sweep.py \\")
+        print(f"  python num_eval_steps_sweep.py \\")
         print(f"      --model-type {model_type} \\")
         if checkpoint_path:
             print(f"      --checkpoint {checkpoint_path} \\")
@@ -934,7 +1062,7 @@ def build_a11_base_config() -> dict:
         "q_query":                9,
         "num_eval_episodes":      NUM_VAL_EPISODES,
         "maml_gesture_classes":   [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-        "target_trial_indices":   [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        "target_trial_reps":      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
         "train_reps":             [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
         "val_reps":               [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
         "use_imu":                False,
@@ -954,28 +1082,33 @@ def build_a11_base_config() -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
-            "Post-hoc adaptation steps sweep for MAML and supervised checkpoints. "
-            "No training. No HPO. Pure grid sweep."
+            "Post-hoc adaptation steps sweep for MAML, supervised, A2 (trained inline), "
+            "and A11 checkpoints. No training except A2."
         )
     )
 
     parser.add_argument(
         "--model-type", type=str, required=True,
-        choices=["maml", "supervised", "a11"],
+        choices=["maml", "supervised", "a2", "a11"],
         dest="model_type",
         help=(
-            "maml       : MAML checkpoint (M0, A3, A4, A5, A8, A12). "
-            "supervised : Supervised CNN-LSTM checkpoint (A7). "
-            "a11        : Meta pretrained EMG model (no --checkpoint needed)."
+            "maml       : MAML checkpoint (M0, A3, A4, A5, A8, A12). Requires --checkpoint. "
+            "supervised : Supervised CNN-LSTM checkpoint (A7). Defaults to known best A7 path. "
+            "a2         : Vanilla CNN-LSTM (A2), trained inline. No --checkpoint needed. "
+            "a11        : Meta pretrained EMG model. No --checkpoint needed."
         ),
     )
     parser.add_argument(
         "--ablation-id", type=str, required=True, dest="ablation_id",
-        help="e.g. M0, A7, A11. Used for output file naming only.",
+        help="e.g. M0, A2, A7, A11. Used for output file naming only.",
     )
     parser.add_argument(
         "--checkpoint", type=str, default=None, dest="checkpoint",
-        help="Path to .pt checkpoint. Required for maml and supervised; ignored for a11.",
+        help=(
+            "Path to .pt checkpoint. Required for --model-type maml. "
+            "Optional for --model-type supervised (defaults to known best A7 path). "
+            "Ignored for a2 and a11."
+        ),
     )
     parser.add_argument(
         "--out-dir", type=str, default=None, dest="out_dir",
@@ -992,7 +1125,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ft-mode", type=str, default="full",
         choices=["head_only", "full"], dest="ft_mode",
-        help="Finetuning mode for supervised / a11. Default: head_only.",
+        help="Finetuning mode for supervised / a2 / a11. Default: head_only.",
     )
 
     # ── MAML-specific ─────────────────────────────────────────────────────────
@@ -1013,8 +1146,8 @@ if __name__ == "__main__":
         ),
     )
 
-    # ── Supervised / A11 specific ─────────────────────────────────────────────
-    sup_group = parser.add_argument_group("Supervised / A11 options")
+    # ── Supervised / A2 / A11 specific ────────────────────────────────────────
+    sup_group = parser.add_argument_group("Supervised / A2 / A11 options")
     sup_mode  = sup_group.add_mutually_exclusive_group()
     sup_mode.add_argument(
         "--sweep-lr", action="store_true", dest="sweep_lr",
@@ -1026,8 +1159,9 @@ if __name__ == "__main__":
     sup_group.add_argument(
         "--ft-lr", type=float, default=None, dest="ft_lr",
         help=(
-            "Fixed ft_lr for the supervised / a11 paper curve. "
-            "Take best_lr_so_far from the 2D sweep JSON."
+            "Fixed ft_lr for the supervised / a2 / a11 paper curve. "
+            f"Defaults to {SUPERVISED_FT_LR} for supervised/a2 and {A11_FT_LR} for a11. "
+            "Override here if desired."
         ),
     )
 
@@ -1037,7 +1171,7 @@ if __name__ == "__main__":
     if args.model_type == "maml":
         assert args.checkpoint is not None, "--checkpoint is required for --model-type maml."
         assert not (args.sweep_lr or args.ft_lr is not None), (
-            "--sweep-lr and --ft-lr are for supervised/a11, not maml. "
+            "--sweep-lr and --ft-lr are for supervised/a2/a11, not maml. "
             "Use --sweep-alpha / --alpha instead."
         )
         if not args.sweep_alpha:
@@ -1046,25 +1180,41 @@ if __name__ == "__main__":
                 "provide --alpha <best_alpha_init_eval>."
             )
 
-    if args.model_type in ("supervised", "a11"):
+    if args.model_type in ("supervised", "a2", "a11"):
         assert not (args.sweep_alpha or args.alpha is not None), (
-            "--sweep-alpha and --alpha are for maml, not supervised/a11. "
+            "--sweep-alpha and --alpha are for maml, not supervised/a2/a11. "
             "Use --sweep-lr / --ft-lr instead."
         )
-        if args.model_type == "supervised":
-            assert args.checkpoint is not None, \
-                "--checkpoint is required for --model-type supervised."
-        if not args.sweep_lr:
-            assert args.ft_lr is not None, (
-                "For --model-type supervised/a11 without --sweep-lr, "
-                "provide --ft-lr <best_ft_lr>."
-            )
+
+    if args.model_type == "a2":
+        assert args.checkpoint is None, (
+            "--checkpoint is not used for --model-type a2 (model is trained inline). "
+            "Remove --checkpoint from your command."
+        )
+
+    # ── Resolve ft_lr default based on model type ─────────────────────────────
+    if args.model_type in ("supervised", "a2"):
+        ft_lr = args.ft_lr if args.ft_lr is not None else SUPERVISED_FT_LR
+    else:  # a11
+        ft_lr = args.ft_lr if args.ft_lr is not None else A11_FT_LR
+
+    # ── Resolve checkpoint for supervised (A7) ────────────────────────────────
+    if args.model_type == "supervised":
+        checkpoint_path = (
+            Path(args.checkpoint).resolve()
+            if args.checkpoint is not None
+            else DEFAULT_A7_CHECKPOINT
+        )
+        if args.checkpoint is None:
+            print(f"[supervised] No --checkpoint provided; using default: {checkpoint_path}")
+    elif args.model_type == "maml":
+        checkpoint_path = Path(args.checkpoint).resolve()
+    else:
+        checkpoint_path = None  # a2 and a11 don't use a checkpoint path
 
     # ── Resolve paths / defaults ──────────────────────────────────────────────
     out_dir = Path(args.out_dir).resolve() if args.out_dir else RUN_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    checkpoint_path = Path(args.checkpoint).resolve() if args.checkpoint else None
 
     # Resolve val PIDs: CLI > fold-0 default from ablation_config
     if args.val_pids:
@@ -1086,18 +1236,41 @@ if __name__ == "__main__":
             fixed_alpha      = args.alpha,
         )
 
-    else:   # supervised or a11
+    elif args.model_type == "a2":
+        # Train A2 inline, then run the supervised sweep on the trained model.
+        trained_model, trained_config, trained_tensor_dict_path = train_a2_model(out_dir)
+
+        run_supervised_sweep(
+            checkpoint_path          = None,
+            ablation_id              = args.ablation_id,
+            out_dir                  = out_dir,
+            val_pids                 = val_pids,
+            num_val_episodes         = args.num_val_episodes,
+            sweep_lr                 = args.sweep_lr,
+            fixed_lr                 = ft_lr,
+            ft_mode                  = args.ft_mode,
+            model_type               = "a2",
+            a11_base_config          = None,
+            trained_model            = trained_model,
+            trained_config           = trained_config,
+            trained_tensor_dict_path = trained_tensor_dict_path,
+        )
+
+    else:  # supervised or a11
         a11_base_config = build_a11_base_config() if args.model_type == "a11" else None
 
         run_supervised_sweep(
-            checkpoint_path  = checkpoint_path,
-            ablation_id      = args.ablation_id,
-            out_dir          = out_dir,
-            val_pids         = val_pids,
-            num_val_episodes = args.num_val_episodes,
-            sweep_lr         = args.sweep_lr,
-            fixed_lr         = args.ft_lr,
-            ft_mode          = args.ft_mode,
-            model_type       = args.model_type,
-            a11_base_config  = a11_base_config,
+            checkpoint_path          = checkpoint_path,
+            ablation_id              = args.ablation_id,
+            out_dir                  = out_dir,
+            val_pids                 = val_pids,
+            num_val_episodes         = args.num_val_episodes,
+            sweep_lr                 = args.sweep_lr,
+            fixed_lr                 = ft_lr,
+            ft_mode                  = args.ft_mode,
+            model_type               = args.model_type,
+            a11_base_config          = a11_base_config,
+            trained_model            = None,
+            trained_config           = None,
+            trained_tensor_dict_path = None,
         )
