@@ -47,7 +47,7 @@ if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
 FT_STEPS = 10
-FT_LR    = 1e-3
+FT_LR    = 0.001
 
 
 def build_config(ft_lr: float) -> dict:
