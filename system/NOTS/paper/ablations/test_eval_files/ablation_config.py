@@ -152,9 +152,6 @@ def make_base_config(ablation_id: str) -> dict:
     # ── Modality flags ────────────────────────────────────────────────────────
     config["multimodal"]       = True
     config["use_imu"]          = True
-    # CHANGED: Trial 89 had use_demographics=False. The HPO apparently found
-    # demographics unhelpful (or at least the best trial didn't use them).
-    # All ablations should be consistent with this.
     config["use_demographics"] = False   # was True
     config["use_film_x_demo"]  = False
     config["FILM_on_context_or_demo"] = "context"  # TODO: I dont think this is used at all yet?
@@ -176,17 +173,13 @@ def make_base_config(ablation_id: str) -> dict:
     config["pretrain_num_classes"] = 10
 
     # ── Architecture ──────────────────────────────────────────────────────────
-    # CHANGED: Trial 89 used cnn_base_filters=64, lstm_hidden=64 (was 128 each).
-    # These are smaller than the old defaults but are what actually achieved 90.05%.
     config["cnn_base_filters"]    = 64    # was 128
     config["cnn_layers"]          = 3
     config["cnn_kernel"]          = 5
     config["lstm_hidden"]         = 64    # was 128
     config["lstm_layers"]         = 3
     config["bidirectional"]       = True
-    # CHANGED: Trial 89 used groupnorm_num_groups=8 (was 4).
     config["groupnorm_num_groups"] = 8    # was 4
-    # CHANGED: Trial 89 had use_GlobalAvgPooling=True (was False).
     config["use_GlobalAvgPooling"] = True  # was False
     config["use_batch_norm"]       = False
     config["dropout"]              = 0.1
@@ -208,17 +201,13 @@ def make_base_config(ablation_id: str) -> dict:
     config["front_end_stride"]     = 0
 
     # ── Best hyperparameters (Trial 89) ───────────────────────────────────────
-    # CHANGED: learning_rate 3e-4 → 1.9506e-4 (Trial 89 Optuna value)
     config["learning_rate"]  = 1.9506115991520216e-4   # was 3e-4
-    # CHANGED: weight_decay 5.6e-4 → 8.874e-4 (Trial 89 Optuna value)
     config["weight_decay"]   = 8.873572502558012e-4    # was 5.6e-4
-    # CHANGED: label_smooth 0.15 → 0.05 (Trial 89 Optuna value)
     config["label_smooth"]   = 0.05                    # was 0.15
     config["gradient_clip_max_norm"] = 10.0
 
     # ── Training schedule ─────────────────────────────────────────────────────
     config["num_epochs"]              = 23
-    # CHANGED: episodes_per_epoch_train 200 → 500 (Trial 89 Optuna value)
     config["episodes_per_epoch_train"] = 500   # was 200
     config["num_eval_episodes"]        = NUM_VAL_EPISODES
     config["batch_size"]               = 64    # flat dataloader default
@@ -250,24 +239,18 @@ def make_base_config(ablation_id: str) -> dict:
     # ── MoE (Trial 89 values) ─────────────────────────────────────────────────
     config["use_MOE"]                         = True
     config["MOE_placement"]                   = "encoder"   # FIXED per spec
-    # CHANGED: num_experts 32 → 22 (Trial 89 Optuna value)
     config["num_experts"]                     = 22          # was 32
     config["MOE_top_k"]                       = 9           # unchanged
     config["top_k"]                           = config["MOE_top_k"]
-    # CHANGED: MOE_gate_temperature 0.65 → 1.5290 (Trial 89 Optuna value)
     config["MOE_gate_temperature"]            = 1.5290172211651742   # was 0.65
-    # CHANGED: MOE_aux_coeff 0.023 → 0.03282 (Trial 89 Optuna value)
     config["MOE_aux_coeff"]                   = 0.03282324399711515  # was 0.023
-    # CHANGED: MOE_ctx_out_dim 32 → 64 (Trial 89 Optuna value)
     config["MOE_ctx_out_dim"]                 = 64    # was 32
     config["MOE_ctx_hidden_dim"]              = 32    # unchanged
-    # CHANGED: MOE_dropout 0.05 → 0.03654 (Trial 89 Optuna value)
     config["MOE_dropout"]                     = 0.03653577545411608  # was 0.05
     config["MOE_expert_expand"]               = 1.0
     config["MOE_mlp_hidden_mult"]             = 1.0
     config["MOE_log_every"]                   = 5
     config["MOE_plot_dir"]                    = None
-    # CHANGED: apply_MOE_aux_loss_inner_outer "inner" → "outer" (Trial 89 Optuna value)
     config["apply_MOE_aux_loss_inner_outer"]  = "outer"   # was "inner"
     # Legacy keys kept for compatibility
     config["gate_type"]              = "context_feature_demo"
@@ -291,9 +274,10 @@ def make_base_config(ablation_id: str) -> dict:
     config["val_reps"]   = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     config["augment"]    = False
     # For finetuning
+    config["ft_label_smooth"] = 0.0
+    # I think these are actually unused bc for eval we are using the MAML finetuning not the pretrain finetuning I think?
     config["ft_support_reps"] = [1]
     config["ft_query_reps"]   = [2, 3, 4, 5, 6, 7, 8, 9, 10]
-    config["ft_label_smooth"] = 0.0
 
     # ── Augmentation ─────────────────────────────────────────────────────────
     config["use_label_shuf_meta_aug"] = True
