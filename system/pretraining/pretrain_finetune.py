@@ -368,17 +368,9 @@ def evaluate_all_val_users(
     n_episodes  = int(config['num_eval_episodes'])
     use_imu     = bool(config['use_imu'])
     all_classes = list(config['maml_gesture_classes'])
-    all_reps    = list(config['target_trial_reps'])  # 1-indexed
 
-    # TODO: This implements a train/val split within the novel user...
-    ## This really should be in the config...
-    # Support/query rep split.  Default: rep 1 → support, rest → query.
-    # This mirrors 1-shot: the user provides 1 example per class.
-    #support_reps = list(config['ft_train_reps'])
-    #query_reps   = list(config['ft_val_reps'])
-    # TODO: I think finetuning is done correctly (ie we finetune and then toss, episodes are independent), so we can just use train/val as normal (they should be the same right...)
-    support_reps = list(config['train_reps'])
-    query_reps   = list(config['val_reps'])
+    support_reps = list(config['ft_support_reps'])   # e.g. [1]
+    query_reps   = list(config['ft_query_reps'])      # e.g. [2,3,4,5,6,7,8,9,10]
 
     assert len(support_reps) >= k_shot, (
         f"k_shot={k_shot} but only {len(support_reps)} support reps defined."
