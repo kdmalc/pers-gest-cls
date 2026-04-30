@@ -38,6 +38,10 @@
 #   bash eval_launcher.sh M0 --dry-run          # print without submitting
 #   bash eval_launcher.sh A1 --debug            # debug partition, 15 min limit
 #   bash eval_launcher.sh A5 --partition commons
+# 
+#   For A2:
+#   bash eval_launcher.sh A2 → no flag passed → Python argparse default (set to L2SO) runs L2SO
+#   bash eval_launcher.sh A2 --test-procedure hpo_test_split → overrides to hpo_test_split
 #
 #   bash eval_launcher.sh steps_M0 steps_A7 steps_A11   # adaptation steps sweeps
 #
@@ -133,6 +137,7 @@ ABLATIONS=()
 DRY_RUN=false
 DEBUG=false
 OVERRIDE_PARTITION=""
+TEST_PROCEDURE_ARG=""
 
 i=0
 args_array=("$@")
@@ -142,6 +147,7 @@ while [[ $i -lt ${#args_array[@]} ]]; do
     case "$arg" in
         --dry-run)   DRY_RUN=true ;;
         --debug)     DEBUG=true ;;
+        --test-procedure) i=$((i+1)); TEST_PROCEDURE_ARG="--test-procedure ${args_array[$i]}" ;;
         --partition) i=$((i+1)); OVERRIDE_PARTITION="${args_array[$i]}" ;;
         all)         ABLATIONS+=("${VALID_ABLATIONS[@]}") ;;
         -*)          echo "WARNING: Unknown flag '$arg' -- ignoring." ;;
@@ -395,7 +401,7 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "$TIME" \
             "$MEM" \
             "$EFFECTIVE_PARTITION" \
-            "--test-procedure L2SO"   # or hpo_test_split
+            "${TEST_PROCEDURE_ARG:-}"
 
     elif [[ "$ABLATION" == "A3" || "$ABLATION" == "A4" ]]; then
         # ── A3 / A4: shared script, --ablation flag selects the variant ───────
