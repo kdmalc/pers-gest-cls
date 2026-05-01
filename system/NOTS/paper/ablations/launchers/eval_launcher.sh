@@ -81,7 +81,8 @@ STEPS_M0_CHECKPOINT="/projects/my13/kai/meta-pers-gest/pers-gest-cls/models/fina
 STEPS_M0_ALPHA="0.005066"   # maml_alpha_init_eval from Trial 89 — fixed, no alpha sweep needed
 
 # Best A7 checkpoint. ft_lr defaults to 0.001 in the sweep script.
-STEPS_A7_CHECKPOINT="/projects/my13/kai/meta-pers-gest/pers-gest-cls/hpo_best_models/A7_best.pt"
+# TODO: Make A7 just train its own model... or just dont test A7....
+#STEPS_A7_CHECKPOINT="/projects/my13/kai/meta-pers-gest/pers-gest-cls/hpo_best_models/A7_best.pt"
 
 # A2: no checkpoint path needed — model is trained inline (~2 min).
 # ft_lr defaults to 0.001 in the sweep script.

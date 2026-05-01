@@ -772,6 +772,8 @@ def run_maml_sweep(
     mode_tag  = "2d_sweep" if sweep_alpha else "paper_curve"
 
     model, base_config = load_maml_checkpoint(checkpoint_path)
+    if base_config.get("target_trial_reps", None) is None:
+        base_config["target_trial_reps"]   = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # This was missing from the loaded one...
     tensor_dict_path   = os.path.join(
         base_config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl"
     )
