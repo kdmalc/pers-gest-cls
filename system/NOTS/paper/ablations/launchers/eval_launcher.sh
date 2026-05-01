@@ -91,7 +91,7 @@ STEPS_A7_CHECKPOINT="/projects/my13/kai/meta-pers-gest/pers-gest-cls/hpo_best_mo
 
 # ft_mode for supervised models. head_only is standard for 1-shot.
 # Override per-run with --ft-mode full if you want the full-finetuning curve.
-STEPS_FT_MODE="head_only"
+STEPS_FT_MODE="full"
 
 # =============================================================================
 # A5 expert count sweep definition.
