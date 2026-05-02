@@ -4,8 +4,10 @@
 # Submit final evaluation jobs for one or more ablation IDs.
 #
 # Most ablations are a single (non-array) SLURM job calling their dedicated
-# Python script. Two exceptions spawn multiple parallel jobs:
+# Python script. Exceptions that spawn multiple parallel jobs:
 #
+#   M0      : L2SO mode spawns one job per subject fold (--fold-idx 0..N-1).
+#             hpo_test_split mode spawns a single job (pass --test-procedure hpo_test_split).
 #   A5      : sweeps num_experts over 8 values -> 8 jobs (see A5_EXPERT_COUNTS)
 #   grid    : k-shot x n-way grid (M0/MAML+MoE) -> 9 jobs
 #   grid_A2 : k-shot x n-way grid (A2/supervised CNN-LSTM) -> 9 jobs
@@ -28,16 +30,17 @@
 #   steps_A11 → num_eval_steps_sweep.py    --model-type a11         [steps sweep, no training]
 #
 # Usage:
-#   bash eval_launcher.sh M0                    # eval M0
-#   bash eval_launcher.sh A3                    # eval A3 only
-#   bash eval_launcher.sh A4                    # eval A4 only
-#   bash eval_launcher.sh A1 A2 A4              # multiple ablations
-#   bash eval_launcher.sh all                   # all ablations (no grid)
-#   bash eval_launcher.sh grid                  # k-shot/n-way grid (M0/MAML+MoE)
-#   bash eval_launcher.sh grid_A2               # k-shot/n-way grid (A2/supervised)
-#   bash eval_launcher.sh all grid grid_A2      # everything
-#   bash eval_launcher.sh M0 --dry-run          # print without submitting
-#   bash eval_launcher.sh A1 --debug            # debug partition, 15 min limit
+#   bash eval_launcher.sh M0                              # L2SO (default): 32 parallel fold jobs
+#   bash eval_launcher.sh M0 --test-procedure hpo_test_split  # single fixed-split job
+#   bash eval_launcher.sh A3                              # eval A3 only
+#   bash eval_launcher.sh A4                              # eval A4 only
+#   bash eval_launcher.sh A1 A2 A4                       # multiple ablations
+#   bash eval_launcher.sh all                             # all ablations (no grid)
+#   bash eval_launcher.sh grid                            # k-shot/n-way grid (M0/MAML+MoE)
+#   bash eval_launcher.sh grid_A2                         # k-shot/n-way grid (A2/supervised)
+#   bash eval_launcher.sh all grid grid_A2                # everything
+#   bash eval_launcher.sh M0 --dry-run                   # print without submitting
+#   bash eval_launcher.sh A1 --debug                     # debug partition, 15 min limit
 #   bash eval_launcher.sh A5 --partition commons
 #
 #   For A2:
@@ -48,11 +51,12 @@
 #   bash eval_launcher.sh steps_A2 --ft-mode full                 # A2 steps sweep, full finetuning
 #
 # Output layout:
-#   $EVAL_OUT_BASE/<ID>/                (M0, A1, A2, A3, A4, A7, A8, A11)
-#   $EVAL_OUT_BASE/A5/E<N>/             (A5, one subdir per expert count)
-#   $EVAL_OUT_BASE/grid/k<K>_n<N>/     (grid M0, one subdir per cell)
-#   $EVAL_OUT_BASE/grid_A2/k<K>_n<N>/  (grid A2, one subdir per cell)
-#   $EVAL_OUT_BASE/steps_sweep/<ID>/    (steps_M0, steps_A2, steps_A7, steps_A11)
+#   $EVAL_OUT_BASE/<ID>/                          (M0 hpo_test_split, A1, A2, A3, A4, A7, A8, A11)
+#   $EVAL_OUT_BASE/M0/fold<NN>/                   (M0 L2SO, one subdir per fold)
+#   $EVAL_OUT_BASE/A5/E<N>/                       (A5, one subdir per expert count)
+#   $EVAL_OUT_BASE/grid/k<K>_n<N>/               (grid M0, one subdir per cell)
+#   $EVAL_OUT_BASE/grid_A2/k<K>_n<N>/            (grid A2, one subdir per cell)
+#   $EVAL_OUT_BASE/steps_sweep/<ID>/              (steps_M0, steps_A2, steps_A7, steps_A11)
 #   $LOG_DIR/eval_<ID>_<jobid>.out
 
 set -euo pipefail
@@ -69,6 +73,34 @@ LOG_DIR=/scratch/my13/kai/runs/paper/ablations/eval/logs
 ENV_PATH=/projects/my13/kai/meta-pers-gest/envs/fl-torch
 
 mkdir -p "$EVAL_OUT_BASE" "$LOG_DIR"
+
+# =============================================================================
+# M0 L2SO: subject IDs.
+# MUST match the order of all_PIDs in ablation_config.py (TRAIN + VAL + TEST
+# from fold 0 of hpo_strat_kapanji_split.json, concatenated in that order).
+# The fold index i passed to --fold-idx corresponds to all_PIDs[i], so the
+# ordering here must be IDENTICAL to config["all_PIDs"] in Python.
+#
+# To verify: run `python -c "from ablation_config import make_base_config; c=make_base_config('M0'); print(c['all_PIDs'])"` 
+# and paste the output here.
+# =============================================================================
+M0_L2SO_ALL_PIDS=($(python -c "
+import sys, os
+sys.path.insert(0, '$CODE_DIR')
+sys.path.insert(0, '$CODE_DIR/system')
+from ablation_config import make_base_config
+c = make_base_config('M0')
+print(' '.join(str(p) for p in c['all_PIDs']))
+" 2>/dev/null))
+
+if [[ ${#M0_L2SO_ALL_PIDS[@]} -eq 0 ]]; then
+    echo "ERROR: Could not resolve M0 all_PIDs from ablation_config.py."
+    echo "       Make sure CODE_DIR is correct and ablation_config.py is importable."
+    echo "       CODE_DIR=$CODE_DIR"
+    exit 1
+fi
+
+M0_NUM_FOLDS=${#M0_L2SO_ALL_PIDS[@]}
 
 # =============================================================================
 # Adaptation steps sweep — checkpoint paths and eval HPs.
@@ -156,7 +188,7 @@ while [[ $i -lt ${#args_array[@]} ]]; do
     case "$arg" in
         --dry-run)        DRY_RUN=true ;;
         --debug)          DEBUG=true ;;
-        --test-procedure) i=$((i+1)); TEST_PROCEDURE_ARG="--test-procedure ${args_array[$i]}" ;;
+        --test-procedure) i=$((i+1)); TEST_PROCEDURE_ARG="${args_array[$i]}" ;;
         --partition)      i=$((i+1)); OVERRIDE_PARTITION="${args_array[$i]}" ;;
         --ft-mode)        i=$((i+1)); FT_MODE_ARG="${args_array[$i]}" ;;
         all)              ABLATIONS+=("${VALID_ABLATIONS[@]}") ;;
@@ -168,7 +200,7 @@ done
 
 if [[ ${#ABLATIONS[@]} -eq 0 ]]; then
     echo "ERROR: No ablations specified."
-    echo "Usage: bash eval_launcher.sh [$(IFS='|'; echo "${ALL_TOKENS[*]}")|all] [--dry-run] [--debug] [--partition PARTITION] [--ft-mode head_only|full]"
+    echo "Usage: bash eval_launcher.sh [$(IFS='|'; echo "${ALL_TOKENS[*]}")|all] [--dry-run] [--debug] [--partition PARTITION] [--ft-mode head_only|full] [--test-procedure hpo_test_split|L2SO]"
     echo "       'all' expands to: ${VALID_ABLATIONS[*]}  (grid, grid_A2, and steps sweeps are opt-in, not included in 'all')"
     exit 1
 fi
@@ -344,7 +376,60 @@ for ABLATION in "${ABLATIONS[@]}"; do
     # Resolve ft_mode for steps sweeps: CLI --ft-mode overrides STEPS_FT_MODE default.
     RESOLVED_FT_MODE="${FT_MODE_ARG:-$STEPS_FT_MODE}"
 
-    if [[ "$ABLATION" == "A5" ]]; then
+    if [[ "$ABLATION" == "M0" ]]; then
+        # ── M0: behaviour depends on --test-procedure ──────────────────────────
+        #
+        # hpo_test_split → single job, mirrors the HPO fixed split (debugging only).
+        # L2SO (default) → one job per subject fold, submitted in parallel.
+        #                   Each job receives --fold-idx <i> and writes its results
+        #                   to $EVAL_OUT_BASE/M0/fold<NN>/.
+        #                   Aggregate stats are computed offline (see README / notebook).
+        #
+        # The resolved procedure:
+        #   - If --test-procedure was passed on the CLI, use that.
+        #   - Otherwise default to L2SO (matches the Python config default).
+
+        RESOLVED_TEST_PROCEDURE="${TEST_PROCEDURE_ARG:-L2SO}"
+
+        if [[ "$RESOLVED_TEST_PROCEDURE" == "hpo_test_split" ]]; then
+            echo ""
+            echo "##################################################"
+            echo "  M0 hpo_test_split: single job"
+            echo "##################################################"
+            submit_single_job \
+                "M0_hpo" \
+                "$SCRIPT_PATH" \
+                "$EVAL_OUT_BASE/M0" \
+                "$TIME" \
+                "$MEM" \
+                "$EFFECTIVE_PARTITION" \
+                "--test-procedure hpo_test_split"
+
+        else
+            # L2SO: one job per fold
+            echo ""
+            echo "##################################################"
+            echo "  M0 L2SO: ${M0_NUM_FOLDS} parallel fold jobs"
+            echo "  Subject IDs: ${M0_L2SO_ALL_PIDS[*]}"
+            echo "  Each job: --test-procedure L2SO --fold-idx <i>"
+            echo "  Output  : $EVAL_OUT_BASE/M0/fold<NN>/"
+            echo "##################################################"
+
+            for FOLD_IDX in $(seq 0 $((M0_NUM_FOLDS - 1))); do
+                PID="${M0_L2SO_ALL_PIDS[$FOLD_IDX]}"
+                FOLD_LABEL=$(printf "fold%02d" "$FOLD_IDX")
+                submit_single_job \
+                    "M0_${FOLD_LABEL}_pid${PID}" \
+                    "$SCRIPT_PATH" \
+                    "$EVAL_OUT_BASE/M0/${FOLD_LABEL}" \
+                    "$TIME" \
+                    "$MEM" \
+                    "$EFFECTIVE_PARTITION" \
+                    "--test-procedure L2SO --fold-idx ${FOLD_IDX}"
+            done
+        fi
+
+    elif [[ "$ABLATION" == "A5" ]]; then
         # ── A5: one job per expert count ──────────────────────────────────────
         echo ""
         echo "##################################################"
@@ -417,7 +502,7 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "$TIME" \
             "$MEM" \
             "$EFFECTIVE_PARTITION" \
-            "${TEST_PROCEDURE_ARG:-}"
+            "${TEST_PROCEDURE_ARG:+--test-procedure ${TEST_PROCEDURE_ARG}}"
 
     elif [[ "$ABLATION" == "A3" || "$ABLATION" == "A4" ]]; then
         # ── A3 / A4: shared script, --ablation flag selects the variant ───────

@@ -3,19 +3,24 @@ M0_full_model.py
 ================
 Ablation M0: Full Model — MAML + MoE  [PRIMARY RESULT]
 
-Supports two test procedures via config['test_procedure']:
+Supports two test procedures via --test-procedure CLI arg (or config default):
   'hpo_test_split' : Fixed 24/4/4 split, single run at FIXED_SEED.
                      Used during HPO / early development.
   'L2SO'           : Leave-2-Subjects-Out over all N subjects.
                      For fold i: test=subjects[i], val=subjects[(i+1) % N].
                      One run per fold, paired t-test across folds for stats.
 
+Parallelism:
+  L2SO folds are submitted as SEPARATE SLURM jobs by eval_launcher.sh.
+  Each job passes --fold-idx <i> to run exactly one fold.
+  If --fold-idx is NOT passed, all folds run sequentially (legacy / local dev).
+
 Training : Episodic dataloader
 Evaluation: Episodic (1-shot 3-way), 500 episodes over test_PIDs
 Reported  : single result (hpo_test_split) or mean ± std across folds (L2SO)
 """
 
-import os, sys, copy, json
+import os, sys, copy, json, argparse
 import numpy as np
 import torch
 
@@ -41,9 +46,36 @@ if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
 
-def build_config() -> dict:
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="M0: Full Model (MAML + MoE)")
+    parser.add_argument(
+        "--test-procedure",
+        choices=["hpo_test_split", "L2SO"],
+        default=None,
+        help=(
+            "Override config['test_procedure']. "
+            "'hpo_test_split' = fixed 24/4/4 split, single run (debugging/HPO). "
+            "'L2SO' = Leave-2-Subjects-Out, one fold per subject (default for final results)."
+        ),
+    )
+    parser.add_argument(
+        "--fold-idx",
+        type=int,
+        default=None,
+        help=(
+            "If set, run only this single L2SO fold index (0-based) and exit. "
+            "Used by eval_launcher.sh to run each fold as a separate SLURM job. "
+            "Ignored when --test-procedure is hpo_test_split."
+        ),
+    )
+    return parser.parse_args()
+
+
+def build_config(args: argparse.Namespace) -> dict:
     config = make_base_config(ablation_id="M0")
-    # No changes — M0 is the full model with all defaults.
+    # Apply CLI override if provided; otherwise the config default (L2SO) stands.
+    if args.test_procedure is not None:
+        config["test_procedure"] = args.test_procedure
     return config
 
 
@@ -155,37 +187,37 @@ def build_l2so_folds(all_pids: list) -> list:
     return folds
 
 
-def run_l2so(config: dict) -> list:
+def run_single_l2so_fold(config: dict, fold: dict) -> dict:
+    """Run and save results for a single L2SO fold dict (as built by build_l2so_folds)."""
+    fold_idx = fold["fold_idx"]
+    print(f"\n{'='*70}")
+    print(f"[M0] L2SO fold {fold_idx}  "
+          f"test={fold['test_pid']}  val={fold['val_pid']}")
+    print(f"{'='*70}")
+
+    fold_config = copy.deepcopy(config)
+    fold_config["train_PIDs"] = fold["train_pids"]
+    fold_config["val_PIDs"]   = [fold["val_pid"]]
+    fold_config["test_PIDs"]  = [fold["test_pid"]]
+
+    result = run_one_fold(
+        fold_id=f"l2so_fold{fold_idx:02d}_test{fold['test_pid']}",
+        seed=FIXED_SEED,
+        config=fold_config,
+    )
+    return result
+
+
+def run_l2so_all_folds(config: dict) -> list:
     """
-    L2SO procedure. One training run per fold (no seed loop).
-    Statistical power comes from the N subject-level test accuracies.
+    L2SO procedure — runs ALL folds sequentially.
+    Only used when --fold-idx is NOT passed (local dev / legacy).
+    For cluster runs, the launcher submits one job per fold via --fold-idx.
     """
     all_pids = config["all_PIDs"]
     assert len(all_pids) >= 3, "Need at least 3 subjects for L2SO."
-
     folds = build_l2so_folds(all_pids)
-    results = []
-
-    for fold in folds:
-        fold_idx = fold["fold_idx"]
-        print(f"\n{'='*70}")
-        print(f"[M0] L2SO fold {fold_idx+1}/{len(folds)}  "
-              f"test={fold['test_pid']}  val={fold['val_pid']}")
-        print(f"{'='*70}")
-
-        fold_config = copy.deepcopy(config)
-        fold_config["train_PIDs"] = fold["train_pids"]
-        fold_config["val_PIDs"]   = [fold["val_pid"]]
-        fold_config["test_PIDs"]  = [fold["test_pid"]]
-
-        result = run_one_fold(
-            fold_id=f"l2so_fold{fold_idx:02d}_test{fold['test_pid']}",
-            seed=FIXED_SEED,
-            config=fold_config,
-        )
-        results.append(result)
-
-    return results
+    return [run_single_l2so_fold(config, fold) for fold in folds]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -193,19 +225,25 @@ def run_l2so(config: dict) -> list:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    config = build_config()
+    args   = parse_args()
+    config = build_config(args)
     test_procedure = config["test_procedure"]
 
     print("\nM0 CONFIG:")
     print(json.dumps({k: str(v) for k, v in config.items()}, indent=2))
-    print(f"\nTest procedure: {test_procedure}")
+    print(f"\nTest procedure : {test_procedure}")
+    if args.fold_idx is not None:
+        print(f"Fold index     : {args.fold_idx}  (single-fold SLURM job)")
 
     assert test_procedure in ("hpo_test_split", "L2SO"), (
         f"Unknown test_procedure '{test_procedure}'. "
         f"Must be 'hpo_test_split' or 'L2SO'."
     )
 
+    # ── hpo_test_split: single run, ignore --fold-idx ─────────────────────────
     if test_procedure == "hpo_test_split":
+        if args.fold_idx is not None:
+            print(f"[M0] WARNING: --fold-idx {args.fold_idx} is ignored for hpo_test_split.")
         result = run_hpo_test_split(config)
         summary = {
             "ablation_id":     "M0",
@@ -217,35 +255,74 @@ def main():
             "test_acc":        result["test_results"]["mean_acc"],
             "config_snapshot": {k: str(v) for k, v in config.items()},
         }
-    else:  # L2SO
-        all_results = run_l2so(config)
-        # One accuracy per test subject — this is the distribution for your paired t-test
-        test_accs = [r["test_results"]["mean_acc"] for r in all_results]
-        summary = {
-            "ablation_id":     "M0",
-            "description":     "Full Model: MAML + MoE",
-            "test_procedure":  "L2SO",
-            "seed":            FIXED_SEED,
-            "n_params":        all_results[0]["n_params"],
-            "fold_results":    all_results,
-            "mean_test_acc":   float(np.mean(test_accs)),
-            "std_test_acc":    float(np.std(test_accs)),
-            "num_folds":       len(all_results),
-            "config_snapshot": {k: str(v) for k, v in config.items()},
-        }
+        save_results(summary, config, tag="summary")
 
-    save_results(summary, config, tag="summary")
-
-    print(f"\n{'='*70}")
-    if test_procedure == "hpo_test_split":
+        print(f"\n{'='*70}")
         print(f"[M0] FINAL (hpo_test_split): {summary['test_acc']*100:.2f}%  "
               f"single run, seed={FIXED_SEED}")
+        print(f"     {config['n_way']}-way {config['k_shot']}-shot")
+        print(f"{'='*70}")
+
+    # ── L2SO: one fold per SLURM job (preferred) or all sequential (fallback) ──
     else:
-        print(f"[M0] FINAL (L2SO): "
-              f"{summary['mean_test_acc']*100:.2f}% ± {summary['std_test_acc']*100:.2f}%")
-        print(f"     over {summary['num_folds']} L2SO folds (one per test subject)")
-    print(f"     {config['n_way']}-way {config['k_shot']}-shot")
-    print(f"{'='*70}")
+        all_pids = config["all_PIDs"]
+        assert len(all_pids) >= 3, "Need at least 3 subjects for L2SO."
+        folds = build_l2so_folds(all_pids)
+
+        if args.fold_idx is not None:
+            # ── Single-fold path: used by eval_launcher.sh ─────────────────────
+            assert 0 <= args.fold_idx < len(folds), (
+                f"--fold-idx {args.fold_idx} is out of range for {len(folds)} subjects "
+                f"(valid: 0 – {len(folds)-1})."
+            )
+            fold   = folds[args.fold_idx]
+            result = run_single_l2so_fold(config, fold)
+            summary = {
+                "ablation_id":    "M0",
+                "description":    "Full Model: MAML + MoE",
+                "test_procedure": "L2SO",
+                "fold_idx":       args.fold_idx,
+                "seed":           FIXED_SEED,
+                "n_params":       result["n_params"],
+                "fold_result":    result,
+                "test_acc":       result["test_results"]["mean_acc"],
+                "config_snapshot": {k: str(v) for k, v in config.items()},
+            }
+            save_results(summary, config, tag=f"fold{args.fold_idx:02d}_summary")
+
+            print(f"\n{'='*70}")
+            print(f"[M0] FOLD {args.fold_idx} RESULT (L2SO): "
+                  f"{result['test_results']['mean_acc']*100:.2f}%  "
+                  f"test={fold['test_pid']}  seed={FIXED_SEED}")
+            print(f"     {config['n_way']}-way {config['k_shot']}-shot")
+            print(f"{'='*70}")
+
+        else:
+            # ── All-folds path: sequential fallback for local dev ───────────────
+            print("[M0] WARNING: --fold-idx not set. Running all L2SO folds sequentially.")
+            print("     On the cluster, prefer submitting one job per fold via eval_launcher.sh.")
+            all_results = run_l2so_all_folds(config)
+            test_accs   = [r["test_results"]["mean_acc"] for r in all_results]
+            summary = {
+                "ablation_id":     "M0",
+                "description":     "Full Model: MAML + MoE",
+                "test_procedure":  "L2SO",
+                "seed":            FIXED_SEED,
+                "n_params":        all_results[0]["n_params"],
+                "fold_results":    all_results,
+                "mean_test_acc":   float(np.mean(test_accs)),
+                "std_test_acc":    float(np.std(test_accs)),
+                "num_folds":       len(all_results),
+                "config_snapshot": {k: str(v) for k, v in config.items()},
+            }
+            save_results(summary, config, tag="summary")
+
+            print(f"\n{'='*70}")
+            print(f"[M0] FINAL (L2SO, all folds sequential): "
+                  f"{summary['mean_test_acc']*100:.2f}% ± {summary['std_test_acc']*100:.2f}%")
+            print(f"     over {summary['num_folds']} L2SO folds (one per test subject)")
+            print(f"     {config['n_way']}-way {config['k_shot']}-shot")
+            print(f"{'='*70}")
 
 
 if __name__ == "__main__":
