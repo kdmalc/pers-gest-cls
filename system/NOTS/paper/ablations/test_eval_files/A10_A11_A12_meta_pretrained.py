@@ -115,8 +115,8 @@ EMG_2KHZ_PKL_PATH  = "/projects/my13/kai/meta-pers-gest/pers-gest-cls/dataset/me
 EMG_2KHZ_IN_CH     = 16
 EMG_2KHZ_SEQ_LEN   = 4300
 
-A11_FT_LR    = 0.01
-A11_FT_STEPS = 10
+A11_FT_LR    = None   # set dynamically in build_config_meta from maml_alpha_init_eval
+A11_FT_STEPS = None   # set dynamically in build_config_meta from maml_inner_steps_eval
 
 
 # =============================================================================
@@ -309,17 +309,42 @@ def prototypical_zeroshot_eval(model, config, tensor_dict_path, test_pids, num_e
 # =============================================================================
 
 def build_config_meta(ablation_id: str) -> dict:
+    """
+    Shared config base for A10 and A11.
+
+    Data-format overrides (not HPO-tuned, structurally necessary for 2kHz data):
+      use_imu = False, emg_in_ch = EMG_2KHZ_IN_CH, sequence_length = EMG_2KHZ_SEQ_LEN
+      dfs_load_path → 2kHz data directory
+
+    Eval-time adaptation (A11 only — A10 is zero-shot so ft_* keys are unused):
+      ft_steps      = maml_inner_steps_eval  (mirrors M0's MAML inner-loop)
+      ft_lr         = maml_alpha_init_eval   (mirrors M0's MAML inner-loop eval LR)
+      ft_optimizer  = "sgd"                  (mirrors MAML update rule: theta' = theta - alpha*grad)
+      ft_weight_decay = 0.0                  (MAML inner loop has no WD)
+
+    ⚠ IMPORTANT CAVEAT on ft_lr for A11:
+      maml_alpha_init_eval was tuned for M0's architecture and gradient scale —
+      it is NOT necessarily optimal for Meta's DiscreteGesturesArchitecture.
+      We use it here for methodological consistency (same ft setup across all
+      non-MAML ablations) so the comparison isolates the backbone/pretrain
+      contribution, not finetuning LR differences. Flag this in the paper.
+    """
     _check_2khz_data_configured()
     config = make_base_config(ablation_id=ablation_id)
+
+    # ── Data-format overrides (2kHz EMG-only) ────────────────────────────────
     config["use_imu"]         = False
     config["emg_in_ch"]       = EMG_2KHZ_IN_CH
     config["sequence_length"] = EMG_2KHZ_SEQ_LEN
     config["dfs_load_path"]   = str(Path(EMG_2KHZ_PKL_PATH).parent) + "/"
-    config["ft_lr"]           = A11_FT_LR
-    config["ft_steps"]        = A11_FT_STEPS
-    config["ft_optimizer"]    = "adam"
-    config["ft_weight_decay"] = config["weight_decay"]
+
+    # ── Eval-time adaptation: mirror M0's MAML inner-loop eval exactly ───────
+    config["ft_steps"]        = config["maml_inner_steps_eval"]  # = 10
+    config["ft_lr"]           = config["maml_alpha_init_eval"]   # = 5.066e-3
+    config["ft_optimizer"]    = "sgd"   # MAML inner loop is SGD: theta' = theta - alpha*grad
+    config["ft_weight_decay"] = 0.0    # MAML inner loop has no weight decay
     config["ft_label_smooth"] = 0.0
+
     return config
 
 
@@ -501,8 +526,9 @@ def run_a11():
             "data_note":           "2kHz EMG-only — compare only against A10/A12, not M0–A9",
             "test_procedure":      "hpo_test_split",
             "seed":                FIXED_SEED,
-            "ft_lr":               A11_FT_LR,
-            "ft_steps":            A11_FT_STEPS,
+            "ft_lr":               config["ft_lr"],
+            "ft_steps":            config["ft_steps"],
+            "ft_optimizer":        config["ft_optimizer"],
             "n_params":            result["n_params"],
             "result":              result,
             "test_head_only_acc":  result["test_head_only"]["mean_acc"],
@@ -519,8 +545,9 @@ def run_a11():
             "data_note":           "2kHz EMG-only — compare only against A10/A12, not M0–A9",
             "test_procedure":      "L2SO",
             "seed":                FIXED_SEED,
-            "ft_lr":               A11_FT_LR,
-            "ft_steps":            A11_FT_STEPS,
+            "ft_lr":               config["ft_lr"],
+            "ft_steps":            config["ft_steps"],
+            "ft_optimizer":        config["ft_optimizer"],
             "n_params":            all_results[0]["n_params"],
             "fold_results":        all_results,
             "mean_test_head_only": float(np.mean(head_accs)),
@@ -552,7 +579,7 @@ def run_a11():
 def _run_a11_hpo_test_split(config, tensor_dict_path):
     print(f"\n{'='*70}")
     print(f"[A11] hpo_test_split: single run (seed={FIXED_SEED})")
-    print(f"      ft_lr={A11_FT_LR}, ft_steps={A11_FT_STEPS}")
+    print(f"      ft_lr={config['ft_lr']:.4e}, ft_steps={config['ft_steps']}, ft_optimizer={config['ft_optimizer']}")
     print(f"{'='*70}")
     set_seeds(FIXED_SEED)
     config_run         = copy.deepcopy(config)
@@ -589,7 +616,7 @@ def _run_a11_l2so(config, tensor_dict_path):
         print(f"\n{'='*70}")
         print(f"[A11] L2SO fold {fold_idx+1}/{len(folds)}  "
               f"test={fold['test_pid']}  val={fold['val_pid']}")
-        print(f"      ft_lr={A11_FT_LR}, ft_steps={A11_FT_STEPS}")
+        print(f"      ft_lr={config['ft_lr']:.4e}, ft_steps={config['ft_steps']}, ft_optimizer={config['ft_optimizer']}")
         print(f"{'='*70}")
 
         # A11 has no cross-subject training phase (pretrained backbone is fixed).

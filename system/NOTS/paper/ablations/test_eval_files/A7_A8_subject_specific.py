@@ -58,6 +58,7 @@ from ablation_config import (
     replace_head_for_eval,
     set_seeds, FIXED_SEED, NUM_TEST_EPISODES,
     save_results, save_model_checkpoint, count_parameters, RUN_DIR,
+    compute_matched_filters_for_ablation,
 )
 from pretraining.pretrain_data_pipeline import get_pretrain_dataloaders
 from pretraining.pretrain_trainer import pretrain
@@ -169,21 +170,74 @@ def build_ss_eval_episodes(tensor_dict, pid, config, support_trial_idx,
 # ─────────────────────────────────────────────────────────────────────────────
 # A7 config + per-subject runner
 # ─────────────────────────────────────────────────────────────────────────────
-FT_STEPS = 10
-FT_LR = 0.001
+
 def build_config_a7() -> dict:
+    """
+    A7 config: M0's HPO values inherited; only ablation-defining flags set.
+
+    Justified deviations from M0 (not HPO-tuned values, structurally necessary):
+      batch_size = 10    : subject-specific training has only 10 samples
+                           (1 rep × 10 gestures). M0's batch_size=64 is
+                           impossible here — this is a data constraint, not a HP.
+      num_epochs = A7_PRETRAIN_EPOCHS (100): subject-specific models see far
+                           less data per epoch, requiring more epochs to converge.
+      use_earlystopping = True / earlystopping_patience = 20: necessary to
+                           prevent overfitting on 10 training samples.
+
+    Eval-time adaptation mirrors M0's MAML inner-loop eval exactly:
+      ft_steps      = maml_inner_steps_eval  (same number of gradient steps)
+      ft_lr         = maml_alpha_init_eval   (same per-step learning rate)
+      ft_optimizer  = "sgd"                  (MAML inner loop is SGD:
+                                              theta' = theta - alpha * grad)
+      ft_weight_decay = 0.0                  (MAML inner loop has no WD)
+
+    Parameter matching:
+      A7's CNN encoder is scaled to match ALL of M0's expert CNNs combined,
+      identical to A2. This is required because A7 is the subject-specific
+      counterpart to A2 — they must have the same architecture so that the
+      only variable is cross-subject vs. subject-specific training.
+    """
     config = make_base_config(ablation_id="A7")
-    config["subject_specific_model"]  = True
-    config["meta_learning"]           = False
-    config["use_MOE"]                 = False
-    config["batch_size"]              = 10
-    config["num_epochs"]              = A7_PRETRAIN_EPOCHS
-    config["use_earlystopping"]       = True
-    config["earlystopping_patience"]  = 20
-    config["ft_steps"]                = FT_STEPS
-    config["ft_lr"]                   = FT_LR
-    config["ft_optimizer"]            = "adam"
-    config["ft_weight_decay"]         = config["weight_decay"]
+
+    # ── Ablation-defining overrides ───────────────────────────────────────────
+    config["subject_specific_model"] = True
+    config["meta_learning"]          = False
+    config["use_MOE"]                = False
+
+    # ── Structurally necessary deviations (data constraint, not HPO) ─────────
+    config["batch_size"]             = 10             # only 10 training samples
+    config["num_epochs"]             = A7_PRETRAIN_EPOCHS
+    config["use_earlystopping"]      = True
+    config["earlystopping_patience"] = 20
+
+    # ── Eval-time adaptation: mirror M0's MAML inner-loop eval exactly ───────
+    config["ft_steps"]               = config["maml_inner_steps_eval"]  # = 10
+    config["ft_lr"]                  = config["maml_alpha_init_eval"]   # = 5.066e-3
+    config["ft_optimizer"]           = "sgd"   # MAML inner loop is SGD: theta' = theta - alpha*grad
+    config["ft_weight_decay"]        = 0.0    # MAML inner loop has no weight decay
+
+    # ── Parameter matching ────────────────────────────────────────────────────
+    # Target: SUM of all M0 expert CNN params (same target as A2).
+    # A7 is the subject-specific counterpart to A2, so they must share the
+    # same encoder architecture — the only difference is training regime
+    # (per-subject vs. cross-subject). LSTM and head are excluded from the
+    # match, as they are identical across all models.
+    match_info = compute_matched_filters_for_ablation(
+        ablation_id="A7",
+        ablation_config=config,
+        match_target="all_experts",
+    )
+    config["cnn_base_filters"] = match_info["matched_filters"]
+
+    # Stash matching metadata for the saved config snapshot / auditing
+    config["_param_match_target"]          = "all_experts_cnn"
+    config["_m0_total_params"]             = match_info["m0_total_params"]
+    config["_m0_all_expert_params"]        = match_info["m0_all_expert_params"]
+    config["_m0_one_expert_params"]        = match_info["m0_one_expert_params"]
+    config["_a7_matched_cnn_params"]       = match_info["matched_cnn_params"]
+    config["_a7_total_params_after_match"] = match_info["matched_total_params"]
+    config["_a7_param_ratio"]              = match_info["param_ratio"]
+
     return config
 
 
@@ -323,6 +377,19 @@ def run_a7_one_subject(pid, config, tensor_dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_config_a8() -> dict:
+    """
+    A8 config: M0's HPO values inherited; only ablation-defining flags set.
+
+    A8 uses MAML inner-loop adaptation at eval time (mamlpp_adapt_and_eval),
+    NOT gradient finetuning — so no ft_* keys are needed. The MAML inner-loop
+    LR (maml_alpha_init_eval) and step count (maml_inner_steps_eval) are
+    inherited from make_base_config() / M0's Trial 89 values.
+
+    Justified deviations from M0 (data constraint, not HPO):
+      batch_size = 10    : only 10 training samples (1 rep × 10 gestures)
+      num_epochs = A8_PRETRAIN_EPOCHS (100): far less data per epoch
+      use_earlystopping = True / earlystopping_patience = 20: prevent overfit
+    """
     config = make_base_config(ablation_id="A8")
     config["subject_specific_model"]  = True
     # meta_learning=False during the supervised pretraining phase so the model
@@ -509,8 +576,15 @@ def run_a7_ablation(config, tensor_dict):
         "seed":                 FIXED_SEED,
         "seed_idx":             FIXED_SEED_IDX,
         "n_params":             all_results[0]["n_params"],
-        "ft_steps":             FT_STEPS,
-        "ft_lr":                FT_LR,
+        "ft_steps":             config["ft_steps"],
+        "ft_lr":                config["ft_lr"],
+        "ft_optimizer":         config["ft_optimizer"],
+        "ft_weight_decay":      config["ft_weight_decay"],
+        "cnn_base_filters":     config["cnn_base_filters"],
+        "param_match_target":   "all_experts_cnn",
+        "m0_all_expert_params": config["_m0_all_expert_params"],
+        "matched_cnn_params":   config["_a7_matched_cnn_params"],
+        "param_ratio":          config["_a7_param_ratio"],
         "all_results":          all_results,
         "per_subject_head_acc": per_subject_head,
         "per_subject_full_acc": per_subject_full,

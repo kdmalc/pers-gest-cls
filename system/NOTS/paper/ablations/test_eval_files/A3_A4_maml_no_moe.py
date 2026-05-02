@@ -4,8 +4,16 @@ A3_A4_maml_no_moe.py
 =====================
 Ablations A3 and A4: MAML + No-MoE
 
-A3: Single encoder, natural (smaller) parameter count.
-A4: Single encoder scaled to match M0 expert CNN parameter count. CRITICAL ablation.
+A3: Single encoder matched to ONE M0 expert (natural small baseline).
+    This answers: "what does a single-expert-capacity model + MAML achieve?"
+
+A4: Single encoder matched to ALL M0 experts combined (CRITICAL capacity ablation).
+    This answers: "does MoE help beyond just having more parameters?"
+    A4 architecture is identical to A2 — only the training regime differs (MAML vs supervised).
+    Comparing A4 vs A2 isolates MAML. Comparing A4 vs M0 isolates MoE.
+
+LSTM and head are identical to M0 and are NOT part of the matching equation.
+Only the CNN encoder (what M0 implements as an expert pool) is scaled.
 
 test_procedure:
   'hpo_test_split' : Fixed split, single seed run (FIXED_SEED).
@@ -15,7 +23,6 @@ test_procedure:
 import os, sys, copy, json, argparse
 import numpy as np
 import torch
-import torch.nn as nn
 
 from pathlib import Path
 CODE_DIR = Path(os.environ.get("CODE_DIR", "./")).resolve()
@@ -26,15 +33,15 @@ sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
-    make_base_config, build_maml_moe_model, build_maml_no_moe_model,
+    make_base_config, build_maml_no_moe_model,
     set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
     make_periodic_checkpoint_fn, make_periodic_test_eval_fn,
+    compute_matched_filters_for_ablation,
     RUN_DIR,
 )
 from MAML.maml_data_pipeline import get_maml_dataloaders
 from MAML.mamlpp import mamlpp_pretrain
-from pretraining.pretrain_models import build_model
 
 print(f"CUDA Available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
@@ -42,101 +49,61 @@ if torch.cuda.is_available():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Parameter matching utilities
-# ─────────────────────────────────────────────────────────────────────────────
-
-def count_moe_encoder_params(moe_model: nn.Module) -> int:
-    if hasattr(moe_model, "experts"):
-        return sum(p.numel() for p in moe_model.experts.parameters() if p.requires_grad)
-    expert_params = 0
-    for name, module in moe_model.named_modules():
-        if "expert" in name.lower() and len(list(module.children())) == 0:
-            expert_params += sum(p.numel() for p in module.parameters() if p.requires_grad)
-    assert expert_params > 0, (
-        "Could not find 'experts' submodule in MoE model. "
-        "Inspect the model architecture and update count_moe_encoder_params()."
-    )
-    return expert_params
-
-
-def find_matched_cnn_filters(target_cnn_params: int, config_template: dict,
-                              lstm_hidden: int, search_range=(64, 512)) -> int:
-    from pretraining.pretrain_models import build_model as _build
-    import math
-
-    gn_groups = config_template["groupnorm_num_groups"]
-
-    def _cnn_param_count(filters: int) -> int:
-        cfg = copy.deepcopy(config_template)
-        cfg["cnn_base_filters"] = filters
-        cfg["lstm_hidden"]      = lstm_hidden
-        cfg["use_MOE"]          = False
-        m = _build(cfg)
-        if hasattr(m, "cnn") or hasattr(m, "conv"):
-            cnn_mod = getattr(m, "cnn", None) or getattr(m, "conv", None)
-            return sum(p.numel() for p in cnn_mod.parameters() if p.requires_grad)
-        total = 0
-        for name, p in m.named_parameters():
-            if p.requires_grad and "lstm" not in name.lower() and "head" not in name.lower():
-                total += p.numel()
-        return total
-
-    lo, hi = search_range
-    lo = math.ceil(lo / gn_groups) * gn_groups
-
-    best_filters = lo
-    best_diff = abs(_cnn_param_count(lo) - target_cnn_params)
-
-    for f in range(lo, hi + 1, gn_groups):
-        diff = abs(_cnn_param_count(f) - target_cnn_params)
-        if diff < best_diff:
-            best_diff = diff
-            best_filters = f
-
-    return best_filters
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Config builders
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_config_a3() -> dict:
+    """
+    A3: MAML + single encoder sized to match ONE M0 expert.
+    Natural small baseline — shows what MAML alone achieves at low capacity.
+    cnn_base_filters will be at or near the M0 default (64), since we're
+    matching just one expert's CNN params.
+    """
     config = make_base_config(ablation_id="A3")
     config["use_MOE"] = False
+
+    match_info = compute_matched_filters_for_ablation(
+        ablation_id="A3",
+        ablation_config=config,
+        match_target="one_expert",
+    )
+    config["cnn_base_filters"] = match_info["matched_filters"]
+
+    config["_param_match_target"]          = "one_expert_cnn"
+    config["_m0_total_params"]             = match_info["m0_total_params"]
+    config["_m0_all_expert_params"]        = match_info["m0_all_expert_params"]
+    config["_m0_one_expert_params"]        = match_info["m0_one_expert_params"]
+    config["_a3_matched_cnn_params"]       = match_info["matched_cnn_params"]
+    config["_a3_total_params_after_match"] = match_info["matched_total_params"]
+    config["_a3_param_ratio"]              = match_info["param_ratio"]
+
     return config
 
 
-def build_config_a4(moe_config: dict) -> dict:
+def build_config_a4() -> dict:
+    """
+    A4: MAML + single encoder sized to match ALL M0 experts combined.
+    Critical capacity-controlled ablation. Architecturally identical to A2
+    (same cnn_base_filters, same LSTM, same head). Only the training regime
+    differs: A4 uses MAML, A2 uses supervised pretraining.
+    """
     config = make_base_config(ablation_id="A4")
     config["use_MOE"] = False
 
-    moe_model = build_maml_moe_model(moe_config)
-    m0_total_params  = count_parameters(moe_model)
-    m0_expert_params = count_moe_encoder_params(moe_model)
-    del moe_model
-
-    print(f"\n[A4] M0 total params       : {m0_total_params:,}")
-    print(f"[A4] M0 expert CNN params  : {m0_expert_params:,}  (A4 encoder must match this)")
-
-    matched_filters = find_matched_cnn_filters(
-        target_cnn_params=m0_expert_params,
-        config_template=config,
-        lstm_hidden=config["lstm_hidden"],
+    match_info = compute_matched_filters_for_ablation(
+        ablation_id="A4",
+        ablation_config=config,
+        match_target="all_experts",
     )
-    config["cnn_base_filters"] = matched_filters
+    config["cnn_base_filters"] = match_info["matched_filters"]
 
-    a4_model = build_maml_no_moe_model(config)
-    a4_total_params = count_parameters(a4_model)
-    del a4_model
-
-    print(f"[A4] Selected cnn_base_filters = {matched_filters}")
-    print(f"[A4] A4 total params           = {a4_total_params:,}")
-    print(f"[A4] Parameter ratio (A4 / M0 experts) = "
-          f"{a4_total_params / max(m0_expert_params, 1):.3f}  (target ≈ 1.0)")
-
-    config["_a4_matched_filters"] = matched_filters
-    config["_m0_expert_params"]   = m0_expert_params
-    config["_a4_total_params"]    = a4_total_params
+    config["_param_match_target"]          = "all_experts_cnn"
+    config["_m0_total_params"]             = match_info["m0_total_params"]
+    config["_m0_all_expert_params"]        = match_info["m0_all_expert_params"]
+    config["_m0_one_expert_params"]        = match_info["m0_one_expert_params"]
+    config["_a4_matched_cnn_params"]       = match_info["matched_cnn_params"]
+    config["_a4_total_params_after_match"] = match_info["matched_total_params"]
+    config["_a4_param_ratio"]              = match_info["param_ratio"]
 
     return config
 
@@ -150,14 +117,20 @@ def run_one_fold(ablation_id: str, fold_id: str, seed: int, config: dict) -> dic
     config = copy.deepcopy(config)
     config["seed"] = seed
 
+    match_target = config.get("_param_match_target", "unknown")
+    param_ratio_key = f"_{ablation_id.lower()}_param_ratio"
+    param_ratio = config.get(param_ratio_key, float("nan"))
+
     print(f"\n[{ablation_id} | {fold_id} | seed={seed}]")
-    print(f"  train_PIDs : {config['train_PIDs']}")
-    print(f"  val_PIDs   : {config['val_PIDs']}")
-    print(f"  test_PIDs  : {config['test_PIDs']}")
+    print(f"  train_PIDs       : {config['train_PIDs']}")
+    print(f"  val_PIDs         : {config['val_PIDs']}")
+    print(f"  test_PIDs        : {config['test_PIDs']}")
+    print(f"  cnn_base_filters : {config['cnn_base_filters']}  (match_target={match_target})")
+    print(f"  CNN param ratio  : {param_ratio:.4f}")
 
     model = build_maml_no_moe_model(config)
     n_params = count_parameters(model)
-    print(f"  Parameters : {n_params:,}")
+    print(f"  Total parameters : {n_params:,}")
 
     tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
     train_dl, val_dl = get_maml_dataloaders(config, tensor_dict_path=tensor_dict_path)
@@ -209,7 +182,6 @@ def run_one_fold(ablation_id: str, fold_id: str, seed: int, config: dict) -> dic
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_hpo_test_split(ablation_id: str, config: dict) -> list:
-    """Single deterministic run on the fixed train/val/test split."""
     print(f"\n{'='*70}")
     print(f"[{ablation_id}] hpo_test_split: single run (seed={FIXED_SEED})")
     print(f"{'='*70}")
@@ -280,48 +252,62 @@ def run_ablation(ablation_id: str, config: dict, description: str):
     print(f"\nTest procedure: {test_procedure}")
 
     assert test_procedure in ("hpo_test_split", "L2SO"), (
-        f"Unknown test_procedure '{test_procedure}'. Must be 'hpo_test_split' or 'L2SO'."
+        f"Unknown test_procedure '{test_procedure}'."
     )
+
+    param_ratio_key = f"_{ablation_id.lower()}_param_ratio"
+    matched_cnn_key = f"_{ablation_id.lower()}_matched_cnn_params"
 
     if test_procedure == "hpo_test_split":
         all_results = run_hpo_test_split(ablation_id, config)
         test_accs = [r["test_results"]["mean_acc"] for r in all_results]
         summary = {
-            "ablation_id":     ablation_id,
-            "description":     description,
-            "test_procedure":  "hpo_test_split",
-            "n_params":        all_results[0]["n_params"],
-            "fold_results":    all_results,
-            "mean_test_acc":   float(np.mean(test_accs)),
-            "std_test_acc":    float(np.std(test_accs)),
-            "seed":            FIXED_SEED,
-            "config_snapshot": {k: str(v) for k, v in config.items()},
+            "ablation_id":        ablation_id,
+            "description":        description,
+            "test_procedure":     "hpo_test_split",
+            "n_params":           all_results[0]["n_params"],
+            "fold_results":       all_results,
+            "mean_test_acc":      float(np.mean(test_accs)),
+            "std_test_acc":       float(np.std(test_accs)),
+            "seed":               FIXED_SEED,
+            "cnn_base_filters":   config["cnn_base_filters"],
+            "param_match_target": config["_param_match_target"],
+            "matched_cnn_params": config[matched_cnn_key],
+            "param_ratio":        config[param_ratio_key],
+            "config_snapshot":    {k: str(v) for k, v in config.items()},
         }
     else:  # L2SO
         all_results = run_l2so(ablation_id, config)
         test_accs = [r["test_results"]["mean_acc"] for r in all_results]
         summary = {
-            "ablation_id":     ablation_id,
-            "description":     description,
-            "test_procedure":  "L2SO",
-            "n_params":        all_results[0]["n_params"],
-            "fold_results":    all_results,
-            "mean_test_acc":   float(np.mean(test_accs)),
-            "std_test_acc":    float(np.std(test_accs)),
-            "num_folds":       len(all_results),
-            "config_snapshot": {k: str(v) for k, v in config.items()},
+            "ablation_id":        ablation_id,
+            "description":        description,
+            "test_procedure":     "L2SO",
+            "n_params":           all_results[0]["n_params"],
+            "fold_results":       all_results,
+            "mean_test_acc":      float(np.mean(test_accs)),
+            "std_test_acc":       float(np.std(test_accs)),
+            "num_folds":          len(all_results),
+            "cnn_base_filters":   config["cnn_base_filters"],
+            "param_match_target": config["_param_match_target"],
+            "matched_cnn_params": config[matched_cnn_key],
+            "param_ratio":        config[param_ratio_key],
+            "config_snapshot":    {k: str(v) for k, v in config.items()},
         }
 
     save_results(summary, config, tag="summary")
 
+    param_ratio = config[param_ratio_key]
     print(f"\n{'='*70}")
     print(f"[{ablation_id}] FINAL ({test_procedure}): "
           f"{summary['mean_test_acc']*100:.2f}%")
     if test_procedure == "L2SO":
         print(f"     ± {summary['std_test_acc']*100:.2f}%  "
-              f"over {summary['num_folds']} L2SO folds (one per test subject)")
+              f"over {summary['num_folds']} L2SO folds")
     else:
-        print(f"     single run, seed={FIXED_SEED}, fixed split")
+        print(f"     single run, seed={FIXED_SEED}")
+    print(f"     cnn_base_filters={config['cnn_base_filters']}  "
+          f"(match_target={config['_param_match_target']}, ratio={param_ratio:.4f})")
     print(f"     {config['n_way']}-way {config['k_shot']}-shot")
     print(f"{'='*70}")
 
@@ -333,20 +319,23 @@ def main():
     parser.add_argument(
         "--ablation",
         choices=["A3", "A4"],
-        required=True,  # no default — must be explicit to avoid running the wrong thing
-        help="Which ablation to run: A3 (natural params) or A4 (parameter-matched to M0 experts).",
+        required=True,
+        help=(
+            "A3: MAML, single encoder matched to ONE M0 expert (small baseline). "
+            "A4: MAML, single encoder matched to ALL M0 experts combined (critical ablation)."
+        ),
     )
     args = parser.parse_args()
 
     if args.ablation == "A3":
         config_a3 = build_config_a3()
-        run_ablation("A3", config_a3, "MAML + No-MoE (Single Expert, Reduced Parameters)")
+        run_ablation("A3", config_a3,
+                     "MAML + No-MoE (single encoder matched to ONE M0 expert)")
 
     elif args.ablation == "A4":
-        moe_config = make_base_config(ablation_id="M0_ref")
-        config_a4  = build_config_a4(moe_config)
+        config_a4 = build_config_a4()
         run_ablation("A4", config_a4,
-                     "MAML + No-MoE (Parameter-Matched Encoder) ← CRITICAL")
+                     "MAML + No-MoE (single encoder matched to ALL M0 experts) ← CRITICAL")
 
 
 if __name__ == "__main__":

@@ -46,13 +46,21 @@ NOTE on num_eval_episodes: Trial 89 used 100 val episodes during HPO (faster
 iteration). We keep NUM_VAL_EPISODES = 200 here for the final ablation runs
 to give tighter val accuracy estimates, consistent with ablation spec §1.3.
 If you want to exactly reproduce the HPO regime, set NUM_VAL_EPISODES = 100.
+
+NOTE on test_procedure: HPO was performed on the fixed 'hpo_test_split'.
+All ablation final results use 'L2SO' (Leave-2-Subjects-Out) so that the
+evaluation subjects were never part of the HPO process — comparing ablations
+on the same split HPO was tuned on would conflate HPO effects with ablation
+effects. 'hpo_test_split' is retained for development/debugging only.
 """
 
 import os
 import json
 import copy
+import math
 import warnings
 import torch
+import torch.nn as nn
 import numpy as np
 import random
 from pathlib import Path
@@ -104,6 +112,12 @@ print(f"Using fold {FOLD_IDX}: {len(TRAIN_PIDS)} train | "
 
 # =============================================================================
 # BASE CONFIG  (shared across all ablations; override in each script)
+#
+# This IS the M0 config. Every ablation script calls make_base_config() and
+# then overrides ONLY the keys that define its ablation (e.g. meta_learning,
+# use_MOE, model_type). No HPO-tuned hyperparameter should ever be changed
+# in an ablation's build_config() — doing so would confound the ablation
+# with a hyperparameter effect.
 # =============================================================================
 
 def make_base_config(ablation_id: str) -> dict:
@@ -141,7 +155,11 @@ def make_base_config(ablation_id: str) -> dict:
     config["val_PIDs"]   = VAL_PIDS
     config["test_PIDs"]  = TEST_PIDS
     config["all_PIDs"]   = TRAIN_PIDS + VAL_PIDS + TEST_PIDS
-    config["test_procedure"] = 'hpo_test_split'  # Either 'hpo_test_split' or "L2SO"
+
+    # DEFAULT is L2SO for all final ablation results.
+    # 'hpo_test_split' is only for development/debugging — HPO was run on that
+    # split, so using it for ablation comparison conflates HPO with ablation effects.
+    config["test_procedure"] = "L2SO"
 
     # ── Input dimensions (FIXED per spec) ─────────────────────────────────────
     config["sequence_length"] = 64
@@ -359,8 +377,258 @@ def build_supervised_no_moe_model(config: dict):
 
 
 # =============================================================================
-# Head replacement for eval-time transfer learning
+# Parameter matching utilities  (shared by A2, A3, A4)
+#
+# All models share the same LSTM and MLP output head — those are fixed and
+# identical across M0, A2, A3, A4. The ONLY architectural difference is the
+# CNN encoder block (what M0 implements as a MoE expert pool).
+#
+#   M0 : num_experts CNN encoders in a MoE pool (self.expert_cnns)
+#   A3 : 1 CNN encoder, sized to match 1 M0 expert  (natural small baseline)
+#   A4 : 1 CNN encoder, sized to match ALL M0 experts combined (capacity-matched, MAML)
+#   A2 : same single encoder size as A4, trained supervised (no MAML)
+#
+# The match is CNN-params-only on BOTH sides:
+#   - Target (A4/A2) = sum of params across ALL experts in M0's pool
+#   - Target (A3)    = params of ONE expert in M0's pool
+#   - Candidate      = CNN-only params of the no-MoE encoder at a given cnn_base_filters
+#
+# LSTM and head params are excluded from both sides so the width search solves:
+#   CNN_params(single encoder, filters=F) ≈ target_cnn_params
+# ...and is not confounded by params that are identical across all models.
+#
+# Verified against MOE_encoder.py: DeepCNNLSTM_EncoderMOE stores experts as
+# self.expert_cnns (nn.ModuleList). DeepCNNLSTM stores its CNN as self.cnn.
 # =============================================================================
+
+def _count_all_expert_params(moe_model: nn.Module) -> int:
+    """
+    Sum trainable params across ALL experts in the MoE pool.
+    This is the CNN-encoder match target for A2 and A4.
+
+    DeepCNNLSTM_EncoderMOE stores its expert CNNs as self.expert_cnns
+    (an nn.ModuleList). Verified against MOE_encoder.py line 861.
+    Raises loudly if not found so failures are never silent.
+    """
+    assert hasattr(moe_model, "expert_cnns"), (
+        "_count_all_expert_params: moe_model has no 'expert_cnns' attribute.\n"
+        "Run: for name, _ in moe_model.named_modules(): print(name)\n"
+        "Then update this function to point at the nn.ModuleList of expert CNNs.\n"
+        "Note: DeepCNNLSTM_EncoderMOE uses 'expert_cnns'; other variants may differ."
+    )
+    total = sum(p.numel() for p in moe_model.expert_cnns.parameters() if p.requires_grad)
+    assert total > 0, (
+        "_count_all_expert_params: moe_model.expert_cnns has zero trainable params."
+    )
+    return total
+
+
+def _count_one_expert_params(moe_model: nn.Module) -> int:
+    """
+    Count trainable params of a single expert (expert_cnns[0]).
+    This is the CNN-encoder match target for A3.
+
+    Assumes all experts are identical in architecture (they are — see
+    DeepCNNLSTM_EncoderMOE.__init__ which builds them in a loop with the
+    same _build_cnn_block call).
+    """
+    assert hasattr(moe_model, "expert_cnns"), (
+        "_count_one_expert_params: moe_model has no 'expert_cnns' attribute.\n"
+        "Run: for name, _ in moe_model.named_modules(): print(name)\n"
+        "Then update this function to point at the nn.ModuleList of expert CNNs."
+    )
+    assert len(moe_model.expert_cnns) > 0, (
+        "_count_one_expert_params: moe_model.expert_cnns is empty."
+    )
+    total = sum(p.numel() for p in moe_model.expert_cnns[0].parameters() if p.requires_grad)
+    assert total > 0, (
+        "_count_one_expert_params: expert_cnns[0] has zero trainable params."
+    )
+    return total
+
+
+def _count_cnn_params_only(model: nn.Module) -> int:
+    """
+    Count trainable params in the CNN backbone of a no-MoE model only,
+    excluding LSTM and head params.
+
+    This makes the candidate count symmetric with the expert-side count:
+    both sides measure only the CNN encoder capacity.
+
+    Scans leaf modules (no children) whose name contains 'cnn' or 'conv'
+    but NOT 'lstm' or 'head'. DeepCNNLSTM names its backbone self.cnn, so
+    leaf modules are 'cnn.0', 'cnn.3', etc. — all matched correctly.
+
+    If your build_model uses different module names, update the conditions
+    below — a wrong name silently undercounts, and the printed param_ratio
+    will reveal it (should be close to 1.0 after matching).
+    """
+    total = 0
+    found_any = False
+    for name, module in model.named_modules():
+        name_lower = name.lower()
+        is_cnn_or_conv  = ("cnn" in name_lower or "conv" in name_lower)
+        is_lstm_or_head = ("lstm" in name_lower or "head" in name_lower)
+        is_leaf         = (len(list(module.children())) == 0)
+        if is_cnn_or_conv and not is_lstm_or_head and is_leaf:
+            total += sum(p.numel() for p in module.parameters() if p.requires_grad)
+            found_any = True
+
+    assert found_any, (
+        "_count_cnn_params_only: found no leaf modules with 'cnn'/'conv' in their "
+        "name (excluding 'lstm'/'head').\n"
+        "Run: for name, _ in model.named_modules(): print(name)\n"
+        "Then update _count_cnn_params_only() to match your architecture's naming."
+    )
+    return total
+
+
+def find_matched_cnn_filters(
+    target_cnn_params: int,
+    config_template: dict,
+    search_range: tuple = (64, 1024),
+) -> int:
+    """
+    Grid-search over cnn_base_filters (stepping by groupnorm_num_groups to keep
+    GroupNorm valid) to find the value whose no-MoE CNN-only param count is
+    closest to target_cnn_params.
+
+    Both sides count CNN params only (LSTM and head excluded), so the search
+    solves the symmetric equation:
+        CNN_params(single_encoder, filters=F) ≈ target_cnn_params
+
+    Args:
+        target_cnn_params : the CNN-only param count to match.
+                            For A4/A2: sum of ALL M0 experts' params.
+                            For A3:    params of ONE M0 expert.
+        config_template   : base config dict used as template (NOT mutated).
+        search_range      : (lo, hi) inclusive filter range.
+                            Upper bound of 1024 handles A4/A2 which need to
+                            compress 22 experts' capacity into one encoder.
+                            Raise it further if the warning fires.
+
+    Returns:
+        int: cnn_base_filters value minimising |CNN_params - target|.
+    """
+    from pretraining.pretrain_models import build_model as _build_model
+
+    gn_groups = config_template["groupnorm_num_groups"]
+    lo, hi = search_range
+    lo = math.ceil(lo / gn_groups) * gn_groups  # ensure lo is a valid GN multiple
+
+    best_filters = lo
+    best_diff = float("inf")
+
+    for f in range(lo, hi + 1, gn_groups):
+        cfg = copy.deepcopy(config_template)
+        cfg["cnn_base_filters"] = f
+        cfg["use_MOE"] = False
+        m = _build_model(cfg)
+        cnn_params = _count_cnn_params_only(m)
+        diff = abs(cnn_params - target_cnn_params)
+        if diff < best_diff:
+            best_diff = diff
+            best_filters = f
+
+    return best_filters
+
+
+def compute_matched_filters_for_ablation(
+    ablation_id: str,
+    ablation_config: dict,
+    match_target: str,
+) -> dict:
+    """
+    Top-level helper: build M0, compute the correct expert param target,
+    run the filter search, verify the match, and return metadata.
+
+    Args:
+        ablation_id    : label for print output, e.g. "A2", "A3", "A4".
+        ablation_config: the ablation's config (already built via make_base_config
+                         + ablation overrides, use_MOE=False). NOT mutated.
+        match_target   : "all_experts"  → A2/A4: single encoder ≈ ALL M0 experts combined
+                         "one_expert"   → A3:    single encoder ≈ ONE M0 expert
+
+    Returns dict with keys:
+        matched_filters       – set this as config["cnn_base_filters"]
+        m0_total_params       – M0 total param count (for reference/reporting)
+        m0_all_expert_params  – sum of all M0 expert CNN params
+        m0_one_expert_params  – params of one M0 expert CNN
+        target_params         – the actual search target used
+        matched_cnn_params    – CNN-only params of the matched model (≈ target)
+        matched_total_params  – total params of the matched model (for reporting)
+        param_ratio           – matched_cnn_params / target_params (should be ~1.0)
+    """
+    assert match_target in ("all_experts", "one_expert"), (
+        f"compute_matched_filters_for_ablation: match_target must be "
+        f"'all_experts' or 'one_expert', got '{match_target}'."
+    )
+
+    from pretraining.pretrain_models import build_model as _build_model
+
+    # Build M0 and extract expert param counts
+    moe_config = make_base_config(ablation_id="M0_ref")
+    moe_model  = build_maml_moe_model(moe_config)
+    m0_total_params      = count_parameters(moe_model)
+    m0_all_expert_params = _count_all_expert_params(moe_model)
+    m0_one_expert_params = _count_one_expert_params(moe_model)
+    num_experts          = moe_config["num_experts"]
+    del moe_model
+
+    target_params = (m0_all_expert_params if match_target == "all_experts"
+                     else m0_one_expert_params)
+
+    print(f"\n[{ablation_id}] Parameter matching — target: '{match_target}'")
+    print(f"  M0 total params            : {m0_total_params:,}")
+    print(f"  M0 num_experts             : {num_experts}")
+    print(f"  M0 all-expert CNN params   : {m0_all_expert_params:,}")
+    print(f"  M0 one-expert CNN params   : {m0_one_expert_params:,}")
+    print(f"  Search target              : {target_params:,}")
+
+    matched_filters = find_matched_cnn_filters(
+        target_cnn_params=target_params,
+        config_template=ablation_config,
+    )
+
+    # Verify the match by building the matched model
+    matched_cfg = copy.deepcopy(ablation_config)
+    matched_cfg["cnn_base_filters"] = matched_filters
+    matched_cfg["use_MOE"] = False
+    matched_model = _build_model(matched_cfg)
+    matched_cnn_params   = _count_cnn_params_only(matched_model)
+    matched_total_params = count_parameters(matched_model)
+    del matched_model
+
+    param_ratio = matched_cnn_params / target_params
+
+    print(f"  Matched cnn_base_filters   : {matched_filters}")
+    print(f"  Matched CNN-only params    : {matched_cnn_params:,}  (target={target_params:,})")
+    print(f"  Matched total params       : {matched_total_params:,}")
+    print(f"  CNN param ratio            : {param_ratio:.4f}  (target=1.0000)")
+
+    if abs(param_ratio - 1.0) > 0.05:
+        print(
+            f"\n  WARNING [{ablation_id}]: CNN param ratio {param_ratio:.4f} is more than 5% "
+            f"from 1.0. This means the grid search could not find a close match within "
+            f"search_range=(64, 1024). Options:\n"
+            f"    1. Raise the upper bound in find_matched_cnn_filters() if the target "
+            f"       is very large (ratio < 1 means we hit the ceiling).\n"
+            f"    2. Check that _count_cnn_params_only() is naming the right modules "
+            f"       (ratio > 1 means candidate is overcounting; ratio < 1 means undercounting).\n"
+            f"    3. Check that _count_all_expert_params() / _count_one_expert_params() "
+            f"       are pointing at the correct submodule in the MoE model."
+        )
+
+    return {
+        "matched_filters":       matched_filters,
+        "m0_total_params":       m0_total_params,
+        "m0_all_expert_params":  m0_all_expert_params,
+        "m0_one_expert_params":  m0_one_expert_params,
+        "target_params":         target_params,
+        "matched_cnn_params":    matched_cnn_params,
+        "matched_total_params":  matched_total_params,
+        "param_ratio":           param_ratio,
+    }
 
 def replace_head_for_eval(model: torch.nn.Module, config: dict) -> torch.nn.Module:
     """

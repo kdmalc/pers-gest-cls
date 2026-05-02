@@ -9,19 +9,32 @@ training uses a flat dataloader with standard cross-entropy (no meta-learning).
 At eval time we finetune on the 1-shot support set before episodic evaluation,
 reporting BOTH head-only and full fine-tuning results (per spec).
 
-Changes from M0:
-  - No MAML inner/outer loop.
-  - Flat (standard supervised) training dataloader.
-  - All MoE components identical to M0.
+Changes from M0 (make_base_config):
+  - meta_learning = False  → flat supervised training, not episodic
+  - ft_steps     = maml_inner_steps_eval  (mirrors MAML inner-loop step count)
+  - ft_lr        = maml_alpha_init_eval   (mirrors MAML inner-loop eval LR)
+  - ft_optimizer = "sgd"                  (mirrors MAML inner-loop update rule:
+                                           θ' = θ - α∇L is vanilla SGD)
+  - ft_weight_decay = 0.0                 (MAML inner loop has no weight decay)
 
-Training : Flat dataloader
+All HPO-tuned hyperparameters (lr, wd, label_smooth, architecture, MoE params,
+etc.) are inherited unchanged from make_base_config() / M0's Trial 89 values.
+Do NOT add overrides here for anything that was tuned during HPO.
+
+The eval-time adaptation setup directly mirrors M0's MAML inner-loop eval so
+that the only difference between M0 and A1 is whether the loss surface was
+shaped by meta-learning — isolating exactly MAML's contribution.
+
+Training : Flat dataloader (get_pretrain_dataloaders)
 Evaluation: Episodic (1-shot 3-way), finetune before eval
             → reported as (head_only, full_ft)
 
 test_procedure:
-  'hpo_test_split' : Fixed split, single run at FIXED_SEED.
+  'hpo_test_split' : Fixed split, single run at FIXED_SEED. Dev/debug only —
+                     HPO was run on this split.
   'L2SO'           : Leave-2-Subjects-Out over all_PIDs. One run per fold.
                      test=subjects[i], val=subjects[(i+1)%N], train=rest.
+                     DEFAULT — use this for all reported results.
 """
 
 import os, sys, copy, json
@@ -52,21 +65,36 @@ print(f"CUDA Available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
-FT_STEPS = 10
-FT_LR    = 0.001
-
 
 def build_config() -> dict:
+    """
+    A1 config: M0's HPO values unchanged; only ablation-defining flags set.
+
+    Eval-time adaptation mirrors M0's MAML inner-loop eval setup exactly:
+      ft_steps      = maml_inner_steps_eval  (same number of gradient steps)
+      ft_lr         = maml_alpha_init_eval   (same per-step learning rate)
+      ft_optimizer  = "sgd"                  (MAML inner loop is SGD:
+                                              theta' = theta - alpha * grad)
+      ft_weight_decay = 0.0                  (MAML inner loop has no WD)
+
+    This means the only difference between M0 and A1 at eval time is whether
+    the model's loss surface was shaped by meta-learning (M0) or standard
+    supervised training (A1) — isolating exactly MAML's contribution.
+    """
     config = make_base_config(ablation_id="A1")
-    config["meta_learning"]       = False
-    config["batch_size"]          = 64
-    config["train_reps"]          = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    config["val_reps"]            = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    config["augment"]             = False
-    config["ft_steps"]            = FT_STEPS
-    config["ft_lr"]               = FT_LR
-    config["ft_optimizer"]        = "adam"
-    config["ft_weight_decay"]     = config["weight_decay"]
+
+    # ── Ablation-defining override ────────────────────────────────────────────
+    # Disable meta-learning → flat supervised training loop instead of MAML.
+    config["meta_learning"] = False
+
+    # ── Eval-time adaptation: mirror M0's MAML inner-loop eval exactly ───────
+    # maml_inner_steps_eval and maml_alpha_init_eval are set in make_base_config
+    # from Trial 89 values and are guaranteed to exist.
+    config["ft_steps"]        = config["maml_inner_steps_eval"]   # = 10
+    config["ft_lr"]           = config["maml_alpha_init_eval"]    # = 5.066e-3
+    config["ft_optimizer"]    = "sgd"    # MAML inner loop is SGD: theta' = theta - alpha*grad
+    config["ft_weight_decay"] = 0.0     # MAML inner loop has no weight decay
+
     return config
 
 
@@ -154,6 +182,8 @@ def run_one_fold(fold_id: str, seed: int, config: dict, tensor_dict: dict) -> di
 def run_hpo_test_split(config: dict, tensor_dict: dict) -> dict:
     print(f"\n{'='*70}")
     print(f"[A1] hpo_test_split: single run (seed={FIXED_SEED})")
+    print(f"[A1] WARNING: hpo_test_split uses the split HPO was run on.")
+    print(f"     Use L2SO for reported ablation results.")
     print(f"{'='*70}")
     return run_one_fold(
         fold_id=f"fixed_seed{FIXED_SEED}",
@@ -233,17 +263,19 @@ def main():
     if test_procedure == "hpo_test_split":
         result = run_hpo_test_split(config, tensor_dict)
         summary = {
-            "ablation_id":          "A1",
-            "description":          "No-MAML + MoE (Supervised MoE)",
-            "test_procedure":       "hpo_test_split",
-            "seed":                 FIXED_SEED,
-            "n_params":             result["n_params"],
-            "result":               result,
-            "test_head_only_acc":   result["test_head_only"]["mean_acc"],
-            "test_full_ft_acc":     result["test_full_ft"]["mean_acc"],
-            "ft_steps":             FT_STEPS,
-            "ft_lr":                FT_LR,
-            "config_snapshot":      {k: str(v) for k, v in config.items()},
+            "ablation_id":        "A1",
+            "description":        "No-MAML + MoE (Supervised MoE)",
+            "test_procedure":     "hpo_test_split",
+            "seed":               FIXED_SEED,
+            "n_params":           result["n_params"],
+            "result":             result,
+            "test_head_only_acc": result["test_head_only"]["mean_acc"],
+            "test_full_ft_acc":   result["test_full_ft"]["mean_acc"],
+            "ft_steps":           config["ft_steps"],
+            "ft_lr":              config["ft_lr"],
+            "ft_optimizer":       config["ft_optimizer"],
+            "ft_weight_decay":    config["ft_weight_decay"],
+            "config_snapshot":    {k: str(v) for k, v in config.items()},
         }
     else:  # L2SO
         all_results = run_l2so(config, tensor_dict)
@@ -251,20 +283,22 @@ def main():
         head_accs = [r["test_head_only"]["mean_acc"] for r in all_results]
         full_accs = [r["test_full_ft"]["mean_acc"]   for r in all_results]
         summary = {
-            "ablation_id":          "A1",
-            "description":          "No-MAML + MoE (Supervised MoE)",
-            "test_procedure":       "L2SO",
-            "seed":                 FIXED_SEED,
-            "n_params":             all_results[0]["n_params"],
-            "fold_results":         all_results,
-            "mean_test_head_only":  float(np.mean(head_accs)),
-            "std_test_head_only":   float(np.std(head_accs)),
-            "mean_test_full_ft":    float(np.mean(full_accs)),
-            "std_test_full_ft":     float(np.std(full_accs)),
-            "ft_steps":             FT_STEPS,
-            "ft_lr":                FT_LR,
-            "num_folds":            len(all_results),
-            "config_snapshot":      {k: str(v) for k, v in config.items()},
+            "ablation_id":         "A1",
+            "description":         "No-MAML + MoE (Supervised MoE)",
+            "test_procedure":      "L2SO",
+            "seed":                FIXED_SEED,
+            "n_params":            all_results[0]["n_params"],
+            "fold_results":        all_results,
+            "mean_test_head_only": float(np.mean(head_accs)),
+            "std_test_head_only":  float(np.std(head_accs)),
+            "mean_test_full_ft":   float(np.mean(full_accs)),
+            "std_test_full_ft":    float(np.std(full_accs)),
+            "ft_steps":            config["ft_steps"],
+            "ft_lr":               config["ft_lr"],
+            "ft_optimizer":        config["ft_optimizer"],
+            "ft_weight_decay":     config["ft_weight_decay"],
+            "num_folds":           len(all_results),
+            "config_snapshot":     {k: str(v) for k, v in config.items()},
         }
 
     save_results(summary, config, tag="summary")
@@ -282,6 +316,8 @@ def main():
         print(f"[A1] FINAL full-ft   (L2SO): "
               f"{summary['mean_test_full_ft']*100:.2f}% ± {summary['std_test_full_ft']*100:.2f}%")
         print(f"     over {summary['num_folds']} L2SO folds (one per test subject)")
+    print(f"     ft_steps={config['ft_steps']}  ft_lr={config['ft_lr']:.4e}"
+          f"  ft_optimizer={config['ft_optimizer']}")
     print(f"     {config['n_way']}-way {config['k_shot']}-shot")
     print(f"{'='*70}")
 

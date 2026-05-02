@@ -2,21 +2,26 @@
 """
 A2_no_maml_no_moe.py
 =====================
-Ablation A2: No-MAML + No-MoE (Vanilla CNN-LSTM Baseline)
+Ablation A2: No-MAML + No-MoE (Vanilla CNN-LSTM, Parameter-Matched to ALL M0 Experts)
 
 Changes from M0:
-  - No MAML.
-  - No MoE (single CNN-LSTM encoder).
-  - Flat training dataloader.
-  - Episodic evaluation with head-only and full fine-tuning (same as A1).
+  - No MAML (flat supervised pretraining via pretrain_trainer).
+  - No MoE: single CNN-LSTM encoder instead of expert pool.
+  - cnn_base_filters is grid-searched so the single encoder's CNN-only param
+    count matches the SUM of all M0 expert CNN params. LSTM and head are
+    identical to M0 and are excluded from the matching equation.
+
+This is architecturally identical to A4 (same encoder size, same LSTM, same head).
+The only difference is training regime: A2 uses supervised pretraining, A4 uses MAML.
+Comparing A2 vs A4 isolates the contribution of MAML at equal model capacity.
+Comparing A4 vs M0 isolates the contribution of MoE at equal total expert capacity.
 
 test_procedure:
   'hpo_test_split' : Fixed split, single run at FIXED_SEED.  [DEFAULT]
   'L2SO'           : Leave-2-Subjects-Out over all_PIDs. One run per fold.
 
 CLI args:
-  --test-procedure  {hpo_test_split, L2SO}   overrides config default
-  --ft-lr           float                     overrides FT_LR default (1e-3)
+  --test-procedure  {hpo_test_split, L2SO}   overrides config default (L2SO)
 """
 
 import os, sys, copy, json
@@ -36,6 +41,7 @@ from ablation_config import (
     make_base_config, build_supervised_no_moe_model,
     set_seeds, FIXED_SEED,
     run_supervised_test_eval, save_results, save_model_checkpoint, count_parameters,
+    compute_matched_filters_for_ablation,
     RUN_DIR,
 )
 from pretraining.pretrain_data_pipeline import get_pretrain_dataloaders
@@ -46,22 +52,49 @@ print(f"CUDA Available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
-FT_STEPS = 10
-FT_LR    = 0.001
+def build_config() -> dict:
+    """
+    A2 config: M0's HPO values inherited; only ablation-defining flags set.
 
-
-def build_config(ft_lr: float) -> dict:
+    Eval-time adaptation mirrors M0's MAML inner-loop eval exactly:
+      ft_steps      = maml_inner_steps_eval  (same number of gradient steps)
+      ft_lr         = maml_alpha_init_eval   (same per-step learning rate)
+      ft_optimizer  = "sgd"                  (MAML inner loop is SGD:
+                                              theta' = theta - alpha * grad)
+      ft_weight_decay = 0.0                  (MAML inner loop has no WD)
+    """
     config = make_base_config(ablation_id="A2")
-    config["meta_learning"]   = False
-    config["use_MOE"]         = False
-    config["batch_size"]      = 64
-    config["train_reps"]      = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    config["val_reps"]        = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    config["augment"]         = False
-    config["ft_steps"]        = FT_STEPS
-    config["ft_lr"]           = ft_lr
-    config["ft_optimizer"]    = "adam"
-    config["ft_weight_decay"] = config["weight_decay"]
+
+    # ── Ablation-defining overrides ───────────────────────────────────────────
+    config["meta_learning"] = False
+    config["use_MOE"]       = False
+
+    # ── Eval-time adaptation: mirror M0's MAML inner-loop eval exactly ───────
+    config["ft_steps"]        = config["maml_inner_steps_eval"]  # = 10
+    config["ft_lr"]           = config["maml_alpha_init_eval"]   # = 5.066e-3
+    config["ft_optimizer"]    = "sgd"   # MAML inner loop is SGD: theta' = theta - alpha*grad
+    config["ft_weight_decay"] = 0.0    # MAML inner loop has no weight decay
+
+    # ── Parameter matching ────────────────────────────────────────────────────
+    # Target: SUM of all M0 expert CNN params (not one expert — that's A3).
+    # LSTM and head are excluded from both sides of the match so we're only
+    # scaling the CNN encoder to have the same total capacity as M0's expert pool.
+    match_info = compute_matched_filters_for_ablation(
+        ablation_id="A2",
+        ablation_config=config,
+        match_target="all_experts",
+    )
+    config["cnn_base_filters"] = match_info["matched_filters"]
+
+    # Stash matching metadata for the saved config snapshot / auditing
+    config["_param_match_target"]          = "all_experts_cnn"
+    config["_m0_total_params"]             = match_info["m0_total_params"]
+    config["_m0_all_expert_params"]        = match_info["m0_all_expert_params"]
+    config["_m0_one_expert_params"]        = match_info["m0_one_expert_params"]
+    config["_a2_matched_cnn_params"]       = match_info["matched_cnn_params"]
+    config["_a2_total_params_after_match"] = match_info["matched_total_params"]
+    config["_a2_param_ratio"]              = match_info["param_ratio"]
+
     return config
 
 
@@ -71,17 +104,19 @@ def run_one_fold(fold_id: str, seed: int, config: dict, tensor_dict: dict) -> di
     config["seed"] = seed
 
     print(f"\n[A2 | {fold_id} | seed={seed}]")
-    print(f"  train_PIDs : {config['train_PIDs']}")
-    print(f"  val_PIDs   : {config['val_PIDs']}")
-    print(f"  test_PIDs  : {config['test_PIDs']}")
+    print(f"  train_PIDs          : {config['train_PIDs']}")
+    print(f"  val_PIDs            : {config['val_PIDs']}")
+    print(f"  test_PIDs           : {config['test_PIDs']}")
+    print(f"  cnn_base_filters    : {config['cnn_base_filters']}  (matched to all M0 experts)")
+    print(f"  CNN param ratio     : {config['_a2_param_ratio']:.4f}")
 
     model = build_supervised_no_moe_model(config)
     n_params = count_parameters(model)
-    print(f"  Parameters : {n_params:,}")
+    print(f"  Total parameters    : {n_params:,}")
 
     train_dl, val_dl, n_classes = get_pretrain_dataloaders(config, tensor_dict)
-    assert n_classes == config["num_classes"], (
-        f"Expected {config['num_classes']} classes, got {n_classes}."
+    assert n_classes == config["pretrain_num_classes"], (
+        f"Expected {config['pretrain_num_classes']} classes (pretrain_num_classes), got {n_classes}."
     )
 
     trained_model, history = pretrain(model, train_dl, val_dl, config)
@@ -195,31 +230,20 @@ def main():
         "--test-procedure",
         choices=["hpo_test_split", "L2SO"],
         default=None,
-        help="Overrides config default (hpo_test_split) when provided.",
-    )
-    parser.add_argument(
-        "--ft-lr",
-        type=float,
-        default=None,
-        help=(
-            f"Fine-tuning learning rate. Overrides the hardcoded default "
-            f"FT_LR={FT_LR}. Example: --ft-lr 5e-4"
-        ),
+        help="Overrides config['test_procedure'] default (L2SO) when provided.",
     )
     args = parser.parse_args()
 
-    # Resolve ft_lr: CLI wins over module-level default.
-    ft_lr = args.ft_lr if args.ft_lr is not None else FT_LR
-    print(f"[A2] ft_lr = {ft_lr}" + (" (from --ft-lr CLI arg)" if args.ft_lr is not None else " (default)"))
-
-    config = build_config(ft_lr=ft_lr)
+    config = build_config()
+    print(f"[A2] ft_lr={config['ft_lr']:.4e}  ft_steps={config['ft_steps']}  "
+          f"ft_optimizer={config['ft_optimizer']}  (mirroring M0 MAML inner-loop eval)")
 
     if args.test_procedure is not None:
-        config["test_procedure"] = args.test_procedure  # CLI overrides config default
+        config["test_procedure"] = args.test_procedure
     test_procedure = config["test_procedure"]
 
     assert test_procedure in ("hpo_test_split", "L2SO"), (
-        f"Unknown test_procedure '{test_procedure}'. Must be 'hpo_test_split' or 'L2SO'."
+        f"Unknown test_procedure '{test_procedure}'."
     )
 
     tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
@@ -230,55 +254,69 @@ def main():
     if test_procedure == "hpo_test_split":
         result = run_hpo_test_split(config, tensor_dict)
         summary = {
-            "ablation_id":        "A2",
-            "description":        "No-MAML + No-MoE (Vanilla CNN-LSTM Baseline)",
-            "test_procedure":     "hpo_test_split",
-            "seed":               FIXED_SEED,
-            "n_params":           result["n_params"],
-            "result":             result,
-            "test_head_only_acc": result["test_head_only"]["mean_acc"],
-            "test_full_ft_acc":   result["test_full_ft"]["mean_acc"],
-            "ft_steps":           FT_STEPS,
-            "ft_lr":              ft_lr,
-            "config_snapshot":    {k: str(v) for k, v in config.items()},
+            "ablation_id":             "A2",
+            "description":             "No-MAML + No-MoE (CNN matched to ALL M0 experts combined)",
+            "test_procedure":          "hpo_test_split",
+            "seed":                    FIXED_SEED,
+            "n_params":                result["n_params"],
+            "result":                  result,
+            "test_head_only_acc":      result["test_head_only"]["mean_acc"],
+            "test_full_ft_acc":        result["test_full_ft"]["mean_acc"],
+            "ft_steps":                config["ft_steps"],
+            "ft_lr":                config["ft_lr"],
+            "ft_optimizer":         config["ft_optimizer"],
+            "ft_weight_decay":      config["ft_weight_decay"],
+            "cnn_base_filters":        config["cnn_base_filters"],
+            "param_match_target":      "all_experts_cnn",
+            "m0_all_expert_params":    config["_m0_all_expert_params"],
+            "matched_cnn_params":      config["_a2_matched_cnn_params"],
+            "param_ratio":             config["_a2_param_ratio"],
+            "config_snapshot":         {k: str(v) for k, v in config.items()},
         }
     else:  # L2SO
         all_results = run_l2so(config, tensor_dict)
         head_accs = [r["test_head_only"]["mean_acc"] for r in all_results]
         full_accs = [r["test_full_ft"]["mean_acc"]   for r in all_results]
         summary = {
-            "ablation_id":         "A2",
-            "description":         "No-MAML + No-MoE (Vanilla CNN-LSTM Baseline)",
-            "test_procedure":      "L2SO",
-            "seed":                FIXED_SEED,
-            "n_params":            all_results[0]["n_params"],
-            "fold_results":        all_results,
-            "mean_test_head_only": float(np.mean(head_accs)),
-            "std_test_head_only":  float(np.std(head_accs)),
-            "mean_test_full_ft":   float(np.mean(full_accs)),
-            "std_test_full_ft":    float(np.std(full_accs)),
-            "ft_steps":            FT_STEPS,
-            "ft_lr":               ft_lr,
-            "num_folds":           len(all_results),
-            "config_snapshot":     {k: str(v) for k, v in config.items()},
+            "ablation_id":             "A2",
+            "description":             "No-MAML + No-MoE (CNN matched to ALL M0 experts combined)",
+            "test_procedure":          "L2SO",
+            "seed":                    FIXED_SEED,
+            "n_params":                all_results[0]["n_params"],
+            "fold_results":            all_results,
+            "mean_test_head_only":     float(np.mean(head_accs)),
+            "std_test_head_only":      float(np.std(head_accs)),
+            "mean_test_full_ft":       float(np.mean(full_accs)),
+            "std_test_full_ft":        float(np.std(full_accs)),
+            "ft_steps":                config["ft_steps"],
+            "ft_lr":                config["ft_lr"],
+            "ft_optimizer":         config["ft_optimizer"],
+            "ft_weight_decay":      config["ft_weight_decay"],
+            "num_folds":               len(all_results),
+            "cnn_base_filters":        config["cnn_base_filters"],
+            "param_match_target":      "all_experts_cnn",
+            "m0_all_expert_params":    config["_m0_all_expert_params"],
+            "matched_cnn_params":      config["_a2_matched_cnn_params"],
+            "param_ratio":             config["_a2_param_ratio"],
+            "config_snapshot":         {k: str(v) for k, v in config.items()},
         }
 
     save_results(summary, config, tag="summary")
 
     print(f"\n{'='*70}")
     if test_procedure == "hpo_test_split":
-        print(f"[A2] FINAL head-only (hpo_test_split): "
-              f"{summary['test_head_only_acc']*100:.2f}%")
-        print(f"[A2] FINAL full-ft   (hpo_test_split): "
-              f"{summary['test_full_ft_acc']*100:.2f}%")
+        print(f"[A2] FINAL head-only : {summary['test_head_only_acc']*100:.2f}%")
+        print(f"[A2] FINAL full-ft   : {summary['test_full_ft_acc']*100:.2f}%")
         print(f"     single run, seed={FIXED_SEED}")
     else:
         print(f"[A2] FINAL head-only (L2SO): "
               f"{summary['mean_test_head_only']*100:.2f}% ± {summary['std_test_head_only']*100:.2f}%")
         print(f"[A2] FINAL full-ft   (L2SO): "
               f"{summary['mean_test_full_ft']*100:.2f}% ± {summary['std_test_full_ft']*100:.2f}%")
-        print(f"     over {summary['num_folds']} L2SO folds (one per test subject)")
-    print(f"     ft_lr={ft_lr}  ft_steps={FT_STEPS}")
+        print(f"     over {summary['num_folds']} L2SO folds")
+    print(f"     ft_lr={config['ft_lr']:.4e}  ft_steps={config['ft_steps']}  ft_optimizer={config['ft_optimizer']}")
+    print(f"     cnn_base_filters={config['cnn_base_filters']}  "
+          f"(matched to ALL M0 experts, ratio={config['_a2_param_ratio']:.4f})")
     print(f"     {config['n_way']}-way {config['k_shot']}-shot")
     print(f"{'='*70}")
 
