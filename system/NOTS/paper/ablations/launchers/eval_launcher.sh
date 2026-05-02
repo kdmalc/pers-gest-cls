@@ -84,6 +84,15 @@ mkdir -p "$EVAL_OUT_BASE" "$LOG_DIR"
 # To verify: run `python -c "from ablation_config import make_base_config; c=make_base_config('M0'); print(c['all_PIDs'])"` 
 # and paste the output here.
 # =============================================================================
+# Activate env on the login node so we can import ablation_config to get all_PIDs.
+# This mirrors the same activation block used inside the --wrap body.
+source /etc/profile.d/modules.sh
+module purge
+module load Mamba/23.11.0-0
+source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/conda.sh
+source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/mamba.sh
+mamba activate "$ENV_PATH"
+
 M0_L2SO_ALL_PIDS=($(python -c "
 import sys, os
 sys.path.insert(0, '$CODE_DIR')
