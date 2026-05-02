@@ -1,83 +1,145 @@
 """
 M0_MOE_hpo.py
-==========
-Optuna HPO for the MoE architecture and loss hyperparameters.
+=============
+Optuna HPO for 1-shot 10-way MAML+MoE.
+
+Searches BOTH MoE structure HPs and the MAML HPs most likely to shift at
+10-way (inner_steps, learning rates). Everything else (backbone architecture,
+MSL schedule, LSLR config) is fixed.
 
 IMPORTANT — execution model
 ────────────────────────────
-This script runs EXACTLY ONE Optuna trial per invocation and then exits.
-It is designed to be called from hpo_ablation_launcher.sh as one task in a
-SLURM array job, where each array task is one trial.  All tasks share a
-single JournalStorage (.log file) so TPE learns from completed trials as the
-array progresses.
+Runs EXACTLY ONE Optuna trial per invocation and exits.
+Called from hpo_ablation_launcher.sh as one SLURM array task per trial.
+All tasks share a single JournalStorage (.log file) so TPE learns across them.
 
-This mirrors the exact pattern used by ablation_hpo.py for all other ablations.
-
-Environment variables consumed (set by the launcher via --export):
-    HPO_USE_JOURNAL : "1" = use JournalFileBackend (production, default)
-                      "0" = use InMemoryStorage (debug, results discarded)
-    HPO_DB_DIR      : path to directory for Optuna journal files
-    RUN_DIR         : per-trial output directory (set by launcher per task)
+Environment variables (set by launcher via --export):
+    HPO_USE_JOURNAL : "1" = JournalFileBackend (production)
+                      "0" = InMemoryStorage (debug — results discarded)
+    HPO_DB_DIR      : directory for Optuna journal files
+    RUN_DIR         : per-trial output directory
     CODE_DIR        : root of the codebase
     DATA_DIR        : root of the data directory
-    N_TRIALS        : always "1" when called from launcher (1 trial per task)
 
 CLI args:
-    --ablation M0_MOE_hpo   (must be passed; the launcher always passes --ablation)
-    --dry-run            print sampled config without training
+    --ablation M0_MOE_hpo   (passed by launcher; used for logging only)
+    --dry-run               print sampled config without running training
 
-Study name  : moe_hpo_1s3w_hpo_v1
-Journal file: $HPO_DB_DIR/moe_hpo_1s3w_hpo_v1.log
+Study name  : moe_hpo_1s10w_v1
+Journal file: $HPO_DB_DIR/moe_hpo_1s10w_v1.log
 
-Scavenge / preemption safety
-─────────────────────────────
-- JournalFileBackend writes each completed trial result atomically.
-  A killed task loses its own (incomplete) trial only; all previously
-  completed trials in the journal are safe.
-- SIGTERM handler writes a best-summary JSON before SIGKILL arrives.
-  HPC schedulers typically give 30-60s between SIGTERM and SIGKILL.
-- Resubmitting the array job continues from the existing journal automatically
-  via load_if_exists=True.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FULL SEARCH SPACE REFERENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Search space
+MAML HPs  (re-tuned — old Trial 89 values were for 1s3w, not 1s10w)
+─────────────────────────────────────────────────────────────────────
+  outer_lr              log-uniform [5e-5, 5e-4]
+                        Meta-optimizer learning rate. Controls how fast the
+                        meta-initialisation moves on each outer step.
+
+  weight_decay          log-uniform [1e-5, 1e-3]
+                        L2 regularisation on outer parameters. Helps prevent
+                        meta-overfitting, particularly at 10-way.
+
+  maml_inner_steps      categorical {5, 10, 15, 20, 25}
+                        Number of gradient steps in the inner loop (both train
+                        AND eval — always matched). More steps = better
+                        per-task adaptation but slower training and higher risk
+                        of meta-overfitting (the model learns to overfit the
+                        support set rather than meta-learn). If you previously
+                        saw performance peak at epoch 1 and decay, that was
+                        caused by too many inner steps — the meta-gradient was
+                        optimising for fitting the support set rather than
+                        generalising. 50 is intentionally excluded for this
+                        reason. inner_steps_eval is ALWAYS set equal to
+                        inner_steps (matched train/eval protocol).
+
+  maml_alpha_init       log-uniform [1e-4, 1e-2]
+                        Inner-loop step size during training. Operates in
+                        tandem with LSLR (which learns per-parameter per-step
+                        multipliers on top of this base rate).
+
+  maml_alpha_init_eval  log-uniform [1e-4, 5e-2]
+                        Inner-loop step size at evaluation / fine-tuning time.
+                        Slightly wider range than train alpha because test-time
+                        adaptation can tolerate a more aggressive step (no
+                        meta-gradient to worry about).
+
+MoE structure HPs
+─────────────────
+  num_experts           categorical {2, 4, 6, 8, 10, 12, 16, 20, 24, 28, 32}
+                        Number of CNN expert encoders. Encoder-placement MoE
+                        forward-pass cost scales linearly with this. Small
+                        values (2-8) test whether fewer, more specialised
+                        experts may generalise better at 10-way.
+
+  utilization_ratio     categorical {0.1, 0.2, 0.3, 0.4, 0.5}
+                        Fraction of experts selected per sample. top_k =
+                        max(1, round(num_experts * ratio)). Sampled as a ratio
+                        (not top_k directly) so the search space dimension is
+                        fixed regardless of num_experts (required for TPE).
+
+  MOE_gate_temperature  log-uniform [0.3, 3.0]
+                        Softmax temperature on gate logits. Higher = flatter
+                        routing (more expert sharing). Lower = sharper routing
+                        (more specialisation). Wider range than 1s3w because
+                        10-way may benefit from flatter routing so the harder
+                        classification signal gets more expert coverage.
+
+  MOE_use_shared_expert {True, False}
+                        Adds an always-on universal expert summed with the
+                        weighted mixture. Stabilises early training and may
+                        reduce collapse by giving the router less pressure to
+                        always use one expert.
+
+  MOE_routing_signal    {linear_proj_input, context_proj}
+                        Router architecture. linear_proj_input is simpler
+                        (GAP + one linear). context_proj is richer (lightweight
+                        CNN + two-layer MLP).
+
+MoE loss HPs
 ────────────
-  num_experts            : {4, 8, 12, 16, 20, 24, 28}
-                           Capped at 28: encoder-placement MoE scales linearly
-                           with num_experts; Trial 89 found 22 optimal so
-                           exploring 32-40 adds wall time without expected gain.
-  utilization_ratio      : {0.1, 0.2, 0.3, 0.4, 0.5}
-                           top_k = max(1, round(num_experts * ratio))
-                           Both utilization_ratio and effective top_k are
-                           stored in the trial config so downstream code that
-                           reads config["MOE_top_k"] works without modification.
-  MOE_routing_signal     : {linear_proj_input, context_proj,
-                            context_proj_with_demo}  (last only if use_demographics)
-  MOE_gate_temperature   : {0.5, 1.0, 2.0}
-  MOE_use_shared_expert  : {True, False}
-  MOE_aux_coeff          : log-uniform [1e-3, 1e-1]
-  MOE_importance_coeff   : log-uniform [1e-3, 1e-1]
-  MOE_ctx_hidden_dim     : {32, 64, 128}
-  MOE_ctx_out_dim        : {16, 32, 64}
+  MOE_aux_coeff         log-uniform [1e-3, 5e-1]
+                        Weight on Switch-style load-balance loss (f_i * P_i).
+                        Penalises uneven dispatch counts. Wider upper bound
+                        because small expert counts + 10-way may need stronger
+                        regularisation to prevent collapse.
 
-Constraint: expected samples per expert per batch >= MIN_SAMPLES_PER_EXPERT.
-Violated trials are pruned (not failed) so TPE avoids that region going forward.
-The constraint uses meta_batchsize (number of MAML episodes per outer step),
-which is the operationally correct batch size for expert load — not the flat
-supervised batch_size.
+  MOE_importance_coeff  log-uniform [1e-3, 5e-1]
+                        Weight on Shazeer importance loss (CV² of per-expert
+                        soft weight sums). Catches ordinal ranking dominance
+                        that the Switch loss misses — the specific failure mode
+                        you observed (large dispatch imbalance with near-uniform
+                        soft weights).
 
-HPO-mode training schedule
-──────────────────────────
-To reduce wall time per trial, HPO uses a shorter training schedule than the
-final ablation runs. These overrides are set in the config dict passed to
-mamlpp_pretrain and do NOT affect ablation_config defaults:
-    num_epochs              : HPO_NUM_EPOCHS (< final num_epochs)
-    episodes_per_epoch_train: HPO_EPISODES_PER_EPOCH (< final 500)
+MoE router capacity HPs
+────────────────────────
+  MOE_ctx_hidden_dim    categorical {32, 64, 128}
+  MOE_ctx_out_dim       categorical {16, 32, 64}
 
-Collapse detection is also tightened for HPO to abort bad trials faster:
-    hpo_collapse_grace_epochs     : 5  (vs 10 for final runs)
-    hpo_collapse_log_every        : 3  (vs MOE_log_every=5 for final runs)
-    hpo_collapse_abort_threshold  : 0.80 (same value, but earlier detection
-                                    fires faster due to tighter log_every/grace)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIXED (not HPO'd)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  n_way=10, k_shot=1, q_query=3   task definition
+  meta_batchsize=24               fixed per spec
+  maml_use_lslr=True              always on
+  use_lslr_at_eval=False          fixed
+  use_maml_msl="hybrid"           MSL annealing always on
+  maml_msl_num_epochs=31          fixed
+  label_smooth=0.05               unanimous in prior runs
+  MOE_placement="encoder"         fixed per spec
+  cnn_base_filters, lstm_hidden   fixed backbone
+  MOE_dropout=0.05                not a primary driver
+  apply_MOE_aux_loss_inner_outer="outer"  correct for MAML
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+META-OVERFITTING SAFEGUARD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+A trial is pruned if train_acc - val_acc > META_OVERFIT_THRESHOLD at any
+epoch after META_OVERFIT_GRACE_EPOCHS. This catches the "epoch 1 peaks then
+decays" failure mode without wasting remaining wall time. The gap is logged
+every epoch regardless so you can see it in the SLURM output.
 """
 
 from __future__ import annotations
@@ -95,7 +157,7 @@ from optuna.samplers import TPESampler
 from optuna.storages.journal import JournalStorage, JournalFileBackend
 import torch
 
-# ── Path setup (mirrors ablation_hpo.py) ────────────────────────────────────
+# ── Path setup ───────────────────────────────────────────────────────────────
 CODE_DIR = Path(os.environ.get("CODE_DIR", "./")).resolve()
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(CODE_DIR / "system"))
@@ -115,44 +177,42 @@ from MAML.maml_data_pipeline import get_maml_dataloaders
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-STUDY_NAME   = "moe_hpo_1s3w_hpo_v1"
-JOURNAL_NAME = "moe_hpo_1s3w_hpo_v1.log"
+# New study name — completely separate from the old 1s3w journal.
+# If you ever want to re-run 1s3w HPO, it will write to a different file.
+STUDY_NAME   = "moe_hpo_1s10w_v1"
+JOURNAL_NAME = "moe_hpo_1s10w_v1.log"
 
-# Minimum expected samples routed to each expert per batch step.
-# (k / E) * meta_batchsize >= this threshold.
-# meta_batchsize is the number of MAML episodes per outer step — the
-# operationally correct batch size for expert load (not the flat batch_size).
+# Task definition — the whole point of this script.
+HPO_N_WAY   = 10
+HPO_K_SHOT  = 1
+HPO_Q_QUERY = 3    # 3 query samples per class → 30 total per episode.
+                    # Matches roughly the same total query set size as 1s3w
+                    # (q_query=9 → 27 total), keeping per-trial wall time
+                    # comparable. More would be cleaner signal but 3× slower.
+
+# Minimum expected samples routed to each expert per forward pass.
 MIN_SAMPLES_PER_EXPERT = 2
 
-# ── HPO training schedule (shorter than final ablation runs) ─────────────────
-# These reduce wall time per trial so more of the 500-task budget completes
-# within the 8h time limit. Directional HPO signal does not need full training.
-HPO_NUM_EPOCHS         = 15    # final runs use 23 epochs
-HPO_EPISODES_PER_EPOCH = 300   # final runs use 500 episodes/epoch
+# ── HPO training schedule ─────────────────────────────────────────────────────
+HPO_NUM_EPOCHS         = 15    # directional signal; full runs use more
+HPO_EPISODES_PER_EPOCH = 300   # reduced for wall-time budget
 
-# ── HPO collapse detection (tighter than final runs) ─────────────────────────
-# Detect and abort collapsed trials faster to reclaim wall time.
-HPO_COLLAPSE_GRACE_EPOCHS    = 5    # final runs use 10
-HPO_COLLAPSE_LOG_EVERY       = 3    # final runs use MOE_log_every=5
-HPO_COLLAPSE_ABORT_THRESHOLD = 0.80 # same value; fires faster due to tighter schedule
+# ── Collapse detection overrides ──────────────────────────────────────────────
+HPO_COLLAPSE_GRACE_EPOCHS    = 5
+HPO_COLLAPSE_LOG_EVERY       = 3
+HPO_COLLAPSE_ABORT_THRESHOLD = 0.80
+
+# ── Meta-overfitting safeguard ────────────────────────────────────────────────
+# Prune if train_acc - val_acc exceeds this after the grace period.
+META_OVERFIT_THRESHOLD    = 0.35   # 35 percentage-point train/val gap
+META_OVERFIT_GRACE_EPOCHS = 5      # don't prune before this epoch
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Storage factory  (mirrors ablation_hpo.py pattern exactly)
+# Storage factory
 # ─────────────────────────────────────────────────────────────────────────────
 
-def make_storage(use_journal: bool,
-                 hpo_db_dir: str) -> optuna.storages.BaseStorage:
-    """
-    Production  (use_journal=True):
-        JournalStorage backed by a shared .log file in hpo_db_dir.
-        All array tasks append to the same file; JournalFileBackend handles
-        concurrent writes safely via file locking.  Survives preemption.
-
-    Debug       (use_journal=False):
-        InMemoryStorage — results discarded when the process exits.
-        Used when HPO_USE_JOURNAL=0 (launcher --debug mode).
-    """
+def make_storage(use_journal: bool, hpo_db_dir: str) -> optuna.storages.BaseStorage:
     if use_journal:
         Path(hpo_db_dir).mkdir(parents=True, exist_ok=True)
         journal_path = os.path.join(hpo_db_dir, JOURNAL_NAME)
@@ -168,13 +228,7 @@ def make_storage(use_journal: bool,
 # Constraint helper
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _expected_samples_per_expert(num_experts: int,
-                                  top_k: int,
-                                  batch_size: int) -> float:
-    """
-    Average number of samples routed to each expert per forward pass.
-    top_k is always an int here (dense routing is not offered in this search space).
-    """
+def _expected_samples_per_expert(num_experts: int, top_k: int, batch_size: int) -> float:
     return (top_k / num_experts) * batch_size
 
 
@@ -182,94 +236,111 @@ def _expected_samples_per_expert(num_experts: int,
 # Search space sampler
 # ─────────────────────────────────────────────────────────────────────────────
 
-def sample_moe_hparams(trial: optuna.Trial, base_config: dict) -> dict:
+def sample_hparams(trial: optuna.Trial, base_config: dict) -> dict:
     """
-    Sample one set of MoE hyperparameters and merge with base_config.
-    Raises optuna.exceptions.TrialPruned if the (E, k, B) combination
-    violates the minimum-samples-per-expert constraint.
+    Sample one complete set of hyperparameters for a 1-shot 10-way MAML+MoE run.
 
-    top_k is derived from num_experts * utilization_ratio rather than sampled
-    directly, so the search space is fixed and consistent across all trials
-    (required for TPE to build a valid probabilistic model).
+    MAML HPs are included in the search because the Trial 89 values were tuned
+    for 1s3w and will not transfer reliably to 1s10w.
 
-    The effective top_k is written into config["MOE_top_k"] (the canonical key).
+    top_k is derived from num_experts * utilization_ratio (not sampled directly)
+    so the Optuna search space dimension is fixed regardless of num_experts,
+    which is required for TPE to build a valid probabilistic model.
     """
-    # ── Core structure ───────────────────────────────────────────────────────
-    # Cap at 28: encoder-placement MoE scales linearly in forward-pass cost with
-    # num_experts. Trial 89 found 22 optimal; 32-40 just burns wall time.
+
+    # ── MAML HPs ─────────────────────────────────────────────────────────────
+
+    outer_lr     = trial.suggest_float("outer_lr",     5e-5, 5e-4, log=True)
+    weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True)
+
+    # 50 inner steps intentionally excluded: caused "epoch 1 peaks then decays"
+    # meta-overfitting in prior runs. The meta-overfit safeguard would catch it
+    # anyway, but excluding it avoids wasting those trial slots entirely.
+    inner_steps = trial.suggest_categorical("maml_inner_steps", [5, 10, 15, 20, 25])
+
+    alpha_init      = trial.suggest_float("maml_alpha_init",      1e-4, 1e-2,  log=True)
+    alpha_init_eval = trial.suggest_float("maml_alpha_init_eval", 1e-4, 5e-2,  log=True)
+
+    # ── MoE structure HPs ─────────────────────────────────────────────────────
+
     num_experts = trial.suggest_categorical(
-        "num_experts", [4, 8, 12, 16, 20, 24, 28]
+        "num_experts", [2, 4, 6, 8, 10, 12, 16, 20, 24, 28, 32]
     )
 
-    # Sample utilization ratio; top_k is derived, not sampled directly.
-    # This keeps the Optuna search space fixed regardless of num_experts,
-    # which is required for TPE to function correctly.
     ratio = trial.suggest_categorical(
         "utilization_ratio", [0.1, 0.2, 0.3, 0.4, 0.5]
     )
     top_k = max(1, round(num_experts * ratio))
 
-    # ── Constraint ───────────────────────────────────────────────────────────
-    # Use meta_batchsize: number of MAML episodes per outer step.
-    # This is the correct batch size for expert load — each episode is one
-    # forward pass through the MoE, so meta_batchsize determines how many
-    # samples are distributed across experts per step.
+    # ── Constraint: enough samples per expert per batch ───────────────────────
     meta_batchsize = base_config["meta_batchsize"]
     expected = _expected_samples_per_expert(num_experts, top_k, meta_batchsize)
     if expected < MIN_SAMPLES_PER_EXPERT:
         raise optuna.exceptions.TrialPruned(
-            f"Constraint violated: E={num_experts}, ratio={ratio}, "
-            f"k={top_k}, B={meta_batchsize} "
-            f"-> {expected:.2f} samples/expert/batch < {MIN_SAMPLES_PER_EXPERT}"
+            f"Constraint violated: E={num_experts}, ratio={ratio}, k={top_k}, "
+            f"B={meta_batchsize} -> {expected:.2f} samples/expert/batch "
+            f"< {MIN_SAMPLES_PER_EXPERT}"
         )
 
-    # ── Routing signal ───────────────────────────────────────────────────────
+    # Wider temperature range — 10-way may benefit from flatter routing so the
+    # harder classification signal spreads across more experts.
+    gate_temp = trial.suggest_float("MOE_gate_temperature", 0.3, 3.0, log=True)
+
+    use_shared = trial.suggest_categorical("MOE_use_shared_expert", [True, False])
+
+    # Demographics option excluded (use_demographics=False in config).
     routing_choices = ["linear_proj_input", "context_proj"]
-    if base_config["use_demographics"]:
+    if base_config.get("use_demographics", False):
         routing_choices.append("context_proj_with_demo")
-    routing_signal = trial.suggest_categorical(
-        "MOE_routing_signal", routing_choices
-    )
+    routing_signal = trial.suggest_categorical("MOE_routing_signal", routing_choices)
 
-    # ── Gate temperature ─────────────────────────────────────────────────────
-    gate_temp = trial.suggest_categorical(
-        "MOE_gate_temperature", [0.5, 1.0, 2.0]
-    )
+    # ── MoE loss HPs ──────────────────────────────────────────────────────────
+    # Wider upper bound (5e-1 vs 1e-1) — small expert counts + 10-way may need
+    # stronger load-balancing to resist collapse.
+    aux_coeff = trial.suggest_float("MOE_aux_coeff",        1e-3, 5e-1, log=True)
+    imp_coeff = trial.suggest_float("MOE_importance_coeff", 1e-3, 5e-1, log=True)
 
-    # ── Shared expert ────────────────────────────────────────────────────────
-    use_shared = trial.suggest_categorical(
-        "MOE_use_shared_expert", [True, False]
-    )
-
-    # ── Aux loss weights ─────────────────────────────────────────────────────
-    aux_coeff = trial.suggest_float("MOE_aux_coeff", 1e-3, 1e-1, log=True)
-    imp_coeff = trial.suggest_float("MOE_importance_coeff", 1e-3, 1e-1, log=True)
-
-    # ── Router capacity ──────────────────────────────────────────────────────
+    # ── Router capacity HPs ───────────────────────────────────────────────────
     ctx_hidden = trial.suggest_categorical("MOE_ctx_hidden_dim", [32, 64, 128])
     ctx_out    = trial.suggest_categorical("MOE_ctx_out_dim",    [16, 32, 64])
 
-    # ── Merge ────────────────────────────────────────────────────────────────
+    # ── Build config ──────────────────────────────────────────────────────────
     config = copy.deepcopy(base_config)
     config.update({
+        # Task — override ablation_config's 1s3w defaults
+        "n_way":    HPO_N_WAY,
+        "k_shot":   HPO_K_SHOT,
+        "q_query":  HPO_Q_QUERY,
+
+        # MAML
+        "learning_rate":         outer_lr,
+        "weight_decay":          weight_decay,
+        "maml_inner_steps":      inner_steps,
+        "maml_inner_steps_eval": inner_steps,   # always matched — no exceptions
+        "maml_alpha_init":       alpha_init,
+        "maml_alpha_init_eval":  alpha_init_eval,
+
+        # MoE structure
         "num_experts":           num_experts,
-        "utilization_ratio":     ratio,     # logged for analysis; not read by model
-        "MOE_top_k":             top_k,     # canonical key — the only one to use
-        "MOE_routing_signal":    routing_signal,
+        "utilization_ratio":     ratio,      # logged only; model reads MOE_top_k
+        "MOE_top_k":             top_k,
         "MOE_gate_temperature":  gate_temp,
         "MOE_use_shared_expert": use_shared,
+        "MOE_routing_signal":    routing_signal,
+
+        # MoE losses
         "MOE_aux_coeff":         aux_coeff,
         "MOE_importance_coeff":  imp_coeff,
+
+        # Router capacity
         "MOE_ctx_hidden_dim":    ctx_hidden,
         "MOE_ctx_out_dim":       ctx_out,
-        # ── HPO training schedule overrides ──────────────────────────────────
-        # Shorter than final ablation runs to fit within the SLURM time limit.
-        # These keys are read by mamlpp_pretrain and train_MAMLpp_one_epoch.
-        "num_epochs":                HPO_NUM_EPOCHS,
-        "episodes_per_epoch_train":  HPO_EPISODES_PER_EPOCH,
-        # ── HPO collapse detection overrides ─────────────────────────────────
-        # mamlpp_pretrain reads these keys and uses them instead of its defaults
-        # when they are present, so final runs are unaffected.
+
+        # HPO training schedule
+        "num_epochs":               HPO_NUM_EPOCHS,
+        "episodes_per_epoch_train": HPO_EPISODES_PER_EPOCH,
+
+        # HPO collapse detection overrides (read by mamlpp_pretrain)
         "hpo_collapse_grace_epochs":    HPO_COLLAPSE_GRACE_EPOCHS,
         "hpo_collapse_log_every":       HPO_COLLAPSE_LOG_EVERY,
         "hpo_collapse_abort_threshold": HPO_COLLAPSE_ABORT_THRESHOLD,
@@ -278,29 +349,46 @@ def sample_moe_hparams(trial: optuna.Trial, base_config: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Meta-overfitting check
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _check_meta_overfit(train_acc_log: list, val_acc_log: list) -> tuple[bool, float]:
+    """
+    Returns (is_overfitting, max_gap) where max_gap is the largest
+    train_acc - val_acc observed across all epochs after the grace period.
+
+    Uses the max gap (not the most recent) because the failure mode typically
+    forms early and persists — checking the max is more robust than a single
+    epoch snapshot.
+    """
+    n = min(len(train_acc_log), len(val_acc_log))
+    if n <= META_OVERFIT_GRACE_EPOCHS:
+        return False, 0.0
+
+    gaps = [train_acc_log[i] - val_acc_log[i] for i in range(META_OVERFIT_GRACE_EPOCHS, n)]
+    max_gap = max(gaps) if gaps else 0.0
+    return max_gap > META_OVERFIT_THRESHOLD, max_gap
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Objective
 # ─────────────────────────────────────────────────────────────────────────────
 
-def objective(trial: optuna.Trial, base_config: dict,
-              tensor_dict_path: str) -> float:
+def objective(trial: optuna.Trial, base_config: dict, tensor_dict_path: str) -> float:
     """
     Sample hyperparams, train one MAML++ run, return best val acc.
     Val accuracy (not test accuracy) is the HPO signal; test set is held out.
 
-    Collapse handling:
-        If mamlpp_pretrain aborts due to sustained MoE collapse AND best_val_acc
-        was never meaningfully updated (i.e. still at the -1.0 init), the trial
-        is pruned rather than returning -1.0. This prevents TPE from treating a
-        degenerate collapsed run as a valid (very bad) data point — it is instead
-        excluded from the surrogate model entirely.
-
-        If collapse happens after at least one val checkpoint has been recorded
-        (best_val_acc > -1.0), we return that val acc normally. The partially
-        trained model did produce signal before collapsing, and TPE should learn
-        from it (those HPs produced some useful routing before dying).
+    Pruning conditions (trial excluded from TPE surrogate model):
+      1. (E, k, B) constraint violated at sample time.
+      2. MoE collapse confirmed before any val checkpoint was ever recorded.
+         (If collapse fires after a valid checkpoint, return that partial signal.)
+      3. Meta-overfitting: train_acc - val_acc > META_OVERFIT_THRESHOLD after
+         the grace period. These trials wasted compute — the inner loop was
+         overfitting the support set rather than meta-learning.
     """
     try:
-        config = sample_moe_hparams(trial, base_config)
+        config = sample_hparams(trial, base_config)
     except optuna.exceptions.TrialPruned:
         raise
 
@@ -309,11 +397,17 @@ def objective(trial: optuna.Trial, base_config: dict,
     config["seed"] = trial_seed
 
     print(f"\n[MOE HPO | trial {trial.number}] Hyperparameters:")
-    for k in ["num_experts", "utilization_ratio", "MOE_top_k", "MOE_routing_signal",
-              "MOE_gate_temperature", "MOE_use_shared_expert",
-              "MOE_aux_coeff", "MOE_importance_coeff",
-              "MOE_ctx_hidden_dim", "MOE_ctx_out_dim",
-              "num_epochs", "episodes_per_epoch_train"]:
+    log_keys = [
+        "n_way", "k_shot", "q_query",
+        "learning_rate", "weight_decay",
+        "maml_inner_steps", "maml_alpha_init", "maml_alpha_init_eval",
+        "num_experts", "utilization_ratio", "MOE_top_k",
+        "MOE_gate_temperature", "MOE_use_shared_expert", "MOE_routing_signal",
+        "MOE_aux_coeff", "MOE_importance_coeff",
+        "MOE_ctx_hidden_dim", "MOE_ctx_out_dim",
+        "num_epochs", "episodes_per_epoch_train",
+    ]
+    for k in log_keys:
         print(f"  {k}: {config[k]}")
 
     try:
@@ -323,9 +417,7 @@ def objective(trial: optuna.Trial, base_config: dict,
         raise optuna.exceptions.TrialPruned(f"Model build failed: {e}")
 
     try:
-        train_dl, val_dl = get_maml_dataloaders(
-            config, tensor_dict_path=tensor_dict_path
-        )
+        train_dl, val_dl = get_maml_dataloaders(config, tensor_dict_path=tensor_dict_path)
     except Exception as e:
         print(f"[MOE HPO | trial {trial.number}] Dataloader build failed: {e}")
         raise optuna.exceptions.TrialPruned(f"Dataloader build failed: {e}")
@@ -342,21 +434,39 @@ def objective(trial: optuna.Trial, base_config: dict,
     moe_collapsed = train_history.get("moe_collapsed", False)
     val_acc       = float(train_history["best_val_acc"])
 
+    # ── Check 1: collapse before any val checkpoint ───────────────────────────
     if moe_collapsed and val_acc <= -1.0:
-        # Collapsed before any val checkpoint was ever set.
-        # Pruning (not failing) excludes this from TPE's surrogate model —
-        # returning -1.0 would be treated as valid signal for a legitimately
-        # bad config, which is wrong.
         print(f"[MOE HPO | trial {trial.number}] MoE collapsed before first val "
-              f"checkpoint. Pruning trial (not returning -1.0 to TPE).")
+              f"checkpoint. Pruning.")
         raise optuna.exceptions.TrialPruned(
-            f"MoE collapsed at epoch {train_history.get('best_val_epoch', '?')} "
-            f"before any val checkpoint (best_val_acc={val_acc:.4f})."
+            f"MoE collapsed (best_val_acc={val_acc:.4f}, never set)."
         )
 
+    # ── Check 2: meta-overfitting ─────────────────────────────────────────────
+    train_acc_log = train_history.get("train_acc_log", [])
+    val_acc_log   = train_history.get("val_acc_log", [])
+
+    # Always log the per-epoch gap so it's visible in SLURM output.
+    n = min(len(train_acc_log), len(val_acc_log))
+    if n > 0:
+        gaps = [train_acc_log[i] - val_acc_log[i] for i in range(n)]
+        print(f"[MOE HPO | trial {trial.number}] Train-val acc gap per epoch: "
+              f"{[f'{g:+.3f}' for g in gaps]}")
+
+    is_overfit, max_gap = _check_meta_overfit(train_acc_log, val_acc_log)
+    if is_overfit:
+        print(f"[MOE HPO | trial {trial.number}] Meta-overfitting detected: "
+              f"max train-val gap = {max_gap:.3f} > threshold {META_OVERFIT_THRESHOLD}. "
+              f"Pruning (inner_steps={config['maml_inner_steps']}, "
+              f"outer_lr={config['learning_rate']:.2e}).")
+        raise optuna.exceptions.TrialPruned(
+            f"Meta-overfitting: max train-val gap = {max_gap:.3f}."
+        )
+
+    # ── Normal return ─────────────────────────────────────────────────────────
     if moe_collapsed:
         print(f"[MOE HPO | trial {trial.number}] MoE collapsed but returning "
-              f"partial val_acc={val_acc:.4f} (meaningful signal before collapse).")
+              f"partial val_acc={val_acc:.4f} (pre-collapse signal is meaningful).")
     else:
         print(f"[MOE HPO | trial {trial.number}] val_acc = {val_acc:.4f}")
 
@@ -364,15 +474,14 @@ def objective(trial: optuna.Trial, base_config: dict,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Best summary  (written after every completed trial)
+# Best summary
 # ─────────────────────────────────────────────────────────────────────────────
 
 def save_best_summary(study: optuna.Study, output_dir: Path) -> None:
     """
-    Write a best-trial JSON to output_dir.  Called after the trial completes
-    and also by the SIGTERM handler so you always have an up-to-date snapshot.
-    Multiple array tasks write to the same file; the last writer wins, which
-    is fine since each write is the current global best from the shared journal.
+    Write best-trial JSON to output_dir. Called after each trial and on SIGTERM.
+    Multiple array tasks write to the same file; last writer wins (safe, since
+    each write reflects the current global best from the shared journal).
     """
     if study.best_trial is None:
         return
@@ -397,17 +506,12 @@ def save_best_summary(study: optuna.Study, output_dir: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="MoE HPO — runs exactly one Optuna trial per invocation."
+        description="MoE HPO (1-shot 10-way) — one Optuna trial per invocation."
     )
-    p.add_argument(
-        "--ablation", type=str, default="M0_MOE_hpo",
-        help="Passed by the launcher; used for logging only. "
-             "Study name and journal path are fixed constants in this script.",
-    )
-    p.add_argument(
-        "--dry-run", action="store_true",
-        help="Sample and print one config without running training.",
-    )
+    p.add_argument("--ablation", type=str, default="M0_MOE_hpo",
+                   help="Passed by launcher; used for logging only.")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Sample and print one config without running training.")
     return p.parse_args()
 
 
@@ -418,13 +522,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    # ── Environment (set by launcher via --export) ───────────────────────────
     use_journal = os.environ.get("HPO_USE_JOURNAL", "1") == "1"
     hpo_db_dir  = os.environ.get("HPO_DB_DIR",
                   str(Path(RUN_DIR).parent.parent / "optuna_dbs"))
-    run_dir     = Path(os.environ.get(
-        "RUN_DIR", str(Path(RUN_DIR) / "moe_hpo_debug")
-    ))
+    run_dir     = Path(os.environ.get("RUN_DIR", str(Path(RUN_DIR) / "moe_hpo_debug")))
 
     print(f"\n{'='*60}")
     print(f"[MOE HPO] ablation   : {args.ablation}")
@@ -432,26 +533,22 @@ def main() -> None:
     print(f"[MOE HPO] journal    : {os.path.join(hpo_db_dir, JOURNAL_NAME)}")
     print(f"[MOE HPO] run_dir    : {run_dir}")
     print(f"[MOE HPO] use_journal: {use_journal}")
+    print(f"[MOE HPO] task       : {HPO_K_SHOT}-shot {HPO_N_WAY}-way  "
+          f"(q_query={HPO_Q_QUERY}, total query={HPO_Q_QUERY * HPO_N_WAY}/episode)")
+    print(f"[MOE HPO] schedule   : {HPO_NUM_EPOCHS} epochs × "
+          f"{HPO_EPISODES_PER_EPOCH} episodes/epoch")
     print(f"[MOE HPO] CUDA       : {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         print(f"[MOE HPO] GPU        : {torch.cuda.get_device_name(0)}")
-    print(f"[MOE HPO] HPO schedule: {HPO_NUM_EPOCHS} epochs, "
-          f"{HPO_EPISODES_PER_EPOCH} episodes/epoch")
     print(f"{'='*60}\n")
 
-    # ── Base config ──────────────────────────────────────────────────────────
     base_config = make_base_config(ablation_id="M0")
     tensor_dict_path = os.path.join(
         base_config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl"
     )
 
-    # ── Storage ──────────────────────────────────────────────────────────────
     storage = make_storage(use_journal, hpo_db_dir)
 
-    # ── Study ────────────────────────────────────────────────────────────────
-    # load_if_exists=True: all 500 array tasks share one study; each appends
-    # exactly one trial to the shared journal.  TPE automatically benefits
-    # from earlier completed trials when sampling later ones.
     sampler = TPESampler(seed=FIXED_SEED)
     study = optuna.create_study(
         study_name     = STUDY_NAME,
@@ -461,11 +558,6 @@ def main() -> None:
         load_if_exists = True,
     )
 
-    # ── SIGTERM handler ───────────────────────────────────────────────────────
-    # Scavenge sends SIGTERM before SIGKILL (typically 30-60s gap on NOTS).
-    # We use the window to write the best-summary JSON.
-    # The current trial's weights are not recoverable if mid-training —
-    # that is unavoidable.  All completed trials in the journal are already safe.
     def _sigterm_handler(signum, frame):
         print("\n[MOE HPO] SIGTERM received — writing best summary before SIGKILL.")
         try:
@@ -476,17 +568,21 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, _sigterm_handler)
 
-    # ── Dry run ──────────────────────────────────────────────────────────────
     if args.dry_run:
         dummy_trial = study.ask()
         try:
-            config = sample_moe_hparams(dummy_trial, base_config)
+            config = sample_hparams(dummy_trial, base_config)
             print("[DRY RUN] Sampled config:")
-            for k in ["num_experts", "utilization_ratio", "MOE_top_k",
-                      "MOE_routing_signal", "MOE_gate_temperature",
-                      "MOE_use_shared_expert", "MOE_aux_coeff",
-                      "MOE_importance_coeff", "MOE_ctx_hidden_dim", "MOE_ctx_out_dim",
-                      "num_epochs", "episodes_per_epoch_train"]:
+            for k in [
+                "n_way", "k_shot", "q_query",
+                "learning_rate", "weight_decay",
+                "maml_inner_steps", "maml_alpha_init", "maml_alpha_init_eval",
+                "num_experts", "utilization_ratio", "MOE_top_k",
+                "MOE_gate_temperature", "MOE_use_shared_expert", "MOE_routing_signal",
+                "MOE_aux_coeff", "MOE_importance_coeff",
+                "MOE_ctx_hidden_dim", "MOE_ctx_out_dim",
+                "num_epochs", "episodes_per_epoch_train",
+            ]:
                 print(f"  {k}: {config[k]}")
         except optuna.exceptions.TrialPruned as e:
             print(f"[DRY RUN] Trial pruned during sampling: {e}")
@@ -494,14 +590,12 @@ def main() -> None:
             study.tell(dummy_trial, state=optuna.trial.TrialState.FAIL)
         return
 
-    # ── Run exactly one trial ─────────────────────────────────────────────────
     study.optimize(
         lambda trial: objective(trial, base_config, tensor_dict_path),
         n_trials = 1,
         catch    = (RuntimeError, ValueError, torch.cuda.OutOfMemoryError),
     )
 
-    # ── Write summary after trial completes ───────────────────────────────────
     save_best_summary(study, run_dir)
     print(f"\n[MOE HPO] Trial complete. Exiting.")
 

@@ -106,14 +106,14 @@ TIME_A11="00:35:00"; MEM_A11=24G   # Meta pretrained, ft_lr only: fast (~15 min 
 # TIME_A12="06:00:00"; MEM_A12=32G   # Our model on 2kHz data
 
 # MOE_hpo: commons partition by default (scavenge max walltime is only 1h — too short).
-# Each trial is a full MAML+MoE training run (~3-4h observed for M0).
+# Each trial is a full MAML+MoE training run (~8+h observed for M0).
 # The JournalFileBackend survives preemption so completed trials are never lost.
 # Failed/preempted trials count against the 500-task array budget — hence
 # submitting 500 rather than 200 to absorb expected failures.
 # Adjust TIME_M0_MOE_hpo based on your observed per-trial wall time.
-TIME_M0_MOE_hpo="08:00:00"; MEM_M0_MOE_hpo=32G
+TIME_M0_MOE_hpo="20:00:00"; MEM_M0_MOE_hpo=32G
 PARTITION_M0_MOE_hpo=commons
-CONCURRENCY_M0_MOE_hpo=10
+CONCURRENCY_M0_MOE_hpo=20
 
 # Debug overrides:
 #   - Single non-array job (N_TRIALS forced to 1, --array flag suppressed below)
@@ -121,9 +121,9 @@ CONCURRENCY_M0_MOE_hpo=10
 #   - Warm-start params are still enqueued (InMemoryStorage supports enqueue_trial)
 #   - Log file pattern uses %x_%j.out (no %a task suffix — no array)
 if [[ "$DEBUG" == true ]]; then
-    echo "DEBUG MODE: partition=debug, time=00:15:00, single trial, no journal write"
+    echo "DEBUG MODE: partition=debug, time=00:10:00, single trial, no journal write"
     PARTITION=debug
-    TIME_DEFAULT="00:15:00"
+    TIME_DEFAULT="00:10:00"
     N_TRIALS=1
 fi
 # ^ I hardcoded this in later so I think this does nothing now? Might as well leave it

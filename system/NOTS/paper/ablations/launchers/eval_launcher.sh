@@ -351,6 +351,15 @@ for ABLATION in "${ABLATIONS[@]}"; do
     TIME=$(get_resource TIME "$ABLATION" "$TIME_DEFAULT")
     MEM=$(get_resource  MEM  "$ABLATION" "$MEM_DEFAULT")
 
+    # Resolve test procedure: CLI --test-procedure overrides the default L2SO
+    RESOLVED_TEST_PROCEDURE="${TEST_PROCEDURE_ARG:-L2SO}"
+
+    # If doing L2SO, bump the time up to 23 hours for all runs EXCEPT M0
+    # (since M0 is currently the only one set up to submit parallel fold jobs)
+    if [[ "$RESOLVED_TEST_PROCEDURE" == "L2SO" && "$ABLATION" != "M0" ]]; then
+        TIME="23:00:00"
+    fi
+
     EFFECTIVE_PARTITION="$PARTITION"
     if [[ "$DEBUG" == true ]]; then
         EFFECTIVE_PARTITION=debug
@@ -375,8 +384,6 @@ for ABLATION in "${ABLATIONS[@]}"; do
         # The resolved procedure:
         #   - If --test-procedure was passed on the CLI, use that.
         #   - Otherwise default to L2SO (matches the Python config default).
-
-        RESOLVED_TEST_PROCEDURE="${TEST_PROCEDURE_ARG:-L2SO}"
 
         if [[ "$RESOLVED_TEST_PROCEDURE" == "hpo_test_split" ]]; then
             echo ""
