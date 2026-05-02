@@ -88,15 +88,18 @@ M0_L2SO_ALL_PIDS=($(python -c "
 import sys, os
 sys.path.insert(0, '$CODE_DIR')
 sys.path.insert(0, '$CODE_DIR/system')
+sys.path.insert(0, '$ABLATIONS_DIR')
 from ablation_config import make_base_config
 c = make_base_config('M0')
 print(' '.join(str(p) for p in c['all_PIDs']))
-" 2>/dev/null))
+"))
 
 if [[ ${#M0_L2SO_ALL_PIDS[@]} -eq 0 ]]; then
     echo "ERROR: Could not resolve M0 all_PIDs from ablation_config.py."
-    echo "       Make sure CODE_DIR is correct and ablation_config.py is importable."
+    echo "       Make sure your mamba env is active before running this script."
+    echo "       Run: mamba activate \$ENV_PATH"
     echo "       CODE_DIR=$CODE_DIR"
+    echo "       ABLATIONS_DIR=$ABLATIONS_DIR"
     exit 1
 fi
 

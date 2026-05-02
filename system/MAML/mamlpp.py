@@ -104,14 +104,16 @@ def _compute_aux_loss(routing_info, config, aux_coeff):
     gate_w = routing_info.get('gate_weights')
     if gate_w is None:
         return 0.0
-    top_k = config['top_k']
+    top_k = config['MOE_top_k']
     num_experts = config['num_experts']
     if top_k is None or top_k == num_experts:   # dense / soft routing
         return _dense_MOE_aux_loss(gate_w, coeff=aux_coeff)
     else:                                        # sparse top-k routing
         gate_w_soft = routing_info.get('gate_weights_soft', gate_w)
-        # NOTE: Turned off importance coeff!!
-        return _topk_MOE_aux_loss(gate_w_soft, gate_w, coeff=aux_coeff) + _importance_loss(gate_w_soft, coeff=config["MOE_importance_coeff"])
+        imp_coeff = float(config.get("MOE_importance_coeff", 0.0))
+        switch_loss = _topk_MOE_aux_loss(gate_w_soft, gate_w, coeff=aux_coeff)
+        imp_loss = _importance_loss(gate_w_soft, coeff=imp_coeff)
+        return switch_loss + imp_loss
 
 
 # -----------------------------
@@ -385,9 +387,6 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
                     task_grads_for_batch = [] # Reset
 
                 # Final Step (Shared logic)
-                #if n_episodes == meta_batchsize:
-                #    print(f"Meta batchsize hit on ep {n_episodes}! Parameters updating!")
-                
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
                 meta_opt.step()
                 meta_opt.zero_grad(set_to_none=True)  # Prepare for the next meta-batch
@@ -442,6 +441,28 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
                     checkpoint_every: int = 10):
     """
     Args:
+        collapse_abort_threshold: A single expert is considered collapsed if its
+            selection FRACTION exceeds this multiple of the uniform expectation.
+            Specifically, an expert is flagged if:
+                selection_freq > collapse_abort_threshold * (top_k / num_experts)
+            So 0.80 means: flag if the expert captures more than 80% of expected
+            capacity (i.e. is selected at 1.8x the uniform rate for top-k routing).
+            For dense routing, this is the raw fraction of argmax wins (legacy
+            behaviour preserved).
+
+            For HPO, pass a tighter value (e.g. 0.60) and tighter grace/log params
+            via config keys:
+                config["hpo_collapse_abort_threshold"]   (float, optional)
+                config["hpo_collapse_grace_epochs"]      (int, optional)
+                config["hpo_collapse_log_every"]         (int, optional)
+
+        collapse_grace_epochs: Don't abort before this epoch (routing is chaotic
+            early in training and often self-corrects once aux loss kicks in).
+            Override via config["hpo_collapse_grace_epochs"] for HPO.
+
+        collapse_consecutive_checks: Number of back-to-back check epochs above
+            threshold before we declare sustained collapse and abort.
+
         periodic_checkpoint_fn: Optional callable(model, config, epoch, best_val_acc) -> None.
                                  Called every `checkpoint_every` epochs to save a mid-training
                                  checkpoint to disk. Also called whenever a new best val acc is
@@ -457,10 +478,37 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
     model.to(device)
 
     use_MOE       = config['use_MOE']
-    MOE_log_every = int(config['MOE_log_every'])
-    MOE_plot_dir  = config['MOE_plot_dir']
     num_experts   = int(config['num_experts'])
     model_name    = config['model_type']
+    top_k         = config.get('MOE_top_k', None)
+
+    # ── HPO-mode collapse overrides ──────────────────────────────────────────
+    # HPO runs can pass tighter values via config to detect and abort collapse
+    # faster, saving wall time. Final runs use the function-argument defaults.
+    if "hpo_collapse_abort_threshold" in config:
+        collapse_abort_threshold = float(config["hpo_collapse_abort_threshold"])
+    if "hpo_collapse_grace_epochs" in config:
+        collapse_grace_epochs = int(config["hpo_collapse_grace_epochs"])
+    if "hpo_collapse_log_every" in config:
+        MOE_log_every = int(config["hpo_collapse_log_every"])
+    else:
+        MOE_log_every = int(config['MOE_log_every'])
+
+    # ── Collapse threshold in selection-frequency units ───────────────────────
+    # For top-k routing, uniform selection frequency per expert = top_k / num_experts.
+    # We flag an expert as collapsed if its selection freq exceeds:
+    #   collapse_abort_threshold * (top_k / num_experts)
+    # This makes the threshold scale-invariant across different (E, k) configs.
+    # For dense routing we fall back to the raw argmax fraction (legacy behaviour).
+    if top_k is not None and top_k < num_experts:
+        uniform_selection_freq = top_k / num_experts
+        # An expert is collapsed if it's selected at more than
+        # (1 + collapse_abort_threshold) × the uniform rate.
+        # e.g. threshold=0.80, E=22, k=9 → uniform=0.409 → collapsed above 0.736
+        collapse_freq_threshold = (1.0 + collapse_abort_threshold) * uniform_selection_freq
+    else:
+        # Dense routing: fall back to raw argmax fraction threshold
+        collapse_freq_threshold = collapse_abort_threshold
 
     meta_opt = set_MOE_optimizer(
         model,
@@ -563,39 +611,41 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         else:
             print("No val loader found! Skipping during-training val evals")
 
-        # ── MOE routing analysis ─────────────────────────────────────────────
-        # THIS IS THE FULL ONE PLUS THE FIGURE!
-        #if use_MOE and MOE_log_every > 0 and ep % MOE_log_every == 0 and episodic_val_loader is not None:
-        #    print(f"\n[MOE] Routing analysis at epoch {ep}...")
-        #    report = _maml_routing_analysis_epoch(
-        #        model, episodic_val_loader, config,
-        #        num_experts=num_experts, model_name=model_name,
-        #        epoch=ep, plot_dir=MOE_plot_dir,
-        #    )
-        #    if report:
-        #        routing_reports.append(report)
+        # ── MOE routing analysis / collapse detection ─────────────────────────
+        # The full routing analysis (with plots) is available but commented out;
+        # the lightweight collapse-only check is what runs by default.
+        #
+        # To enable full analysis:
+        #   if use_MOE and MOE_log_every > 0 and ep % MOE_log_every == 0 and episodic_val_loader is not None:
+        #       report = _maml_routing_analysis_epoch(
+        #           model, episodic_val_loader, config,
+        #           num_experts=num_experts, model_name=model_name,
+        #           epoch=ep, plot_dir=config['MOE_plot_dir'],
+        #       )
         if use_MOE and MOE_log_every > 0 and ep % MOE_log_every == 0 and episodic_val_loader is not None:
             report = _maml_collapse_check_only(
                 model, episodic_val_loader, config,
                 num_experts=num_experts, model_name=model_name, epoch=ep,
+                collapse_freq_threshold=collapse_freq_threshold,
             )
             if report:
                 routing_reports.append(report)
-                max_load = report.get('max_expert_load', 0.0)
+                max_selection_freq = report.get('max_selection_freq', 0.0)
 
                 # Grace period: don't abort during early chaotic training.
                 # Before collapse_grace_epochs, routing is often transiently
                 # imbalanced and can self-correct once aux loss kicks in.
                 if ep < collapse_grace_epochs:
-                    if max_load > collapse_abort_threshold:
-                        print(f"[MOE] Epoch {ep}: max_load={max_load:.3f} exceeds threshold "
-                              f"but within grace period (< epoch {collapse_grace_epochs}). "
-                              f"Watching but not aborting.")
+                    if max_selection_freq > collapse_freq_threshold:
+                        print(f"[MOE] Epoch {ep}: max_selection_freq={max_selection_freq:.3f} exceeds "
+                              f"threshold={collapse_freq_threshold:.3f} but within grace period "
+                              f"(< epoch {collapse_grace_epochs}). Watching but not aborting.")
                     consecutive_collapse_count = 0  # reset — grace period doesn't count
-                elif max_load > collapse_abort_threshold:
+                elif max_selection_freq > collapse_freq_threshold:
                     consecutive_collapse_count += 1
                     print(f"[MOE] Epoch {ep}: collapse check {consecutive_collapse_count}/"
-                          f"{collapse_consecutive_checks} (max_load={max_load:.3f}).")
+                          f"{collapse_consecutive_checks} (max_selection_freq={max_selection_freq:.3f}, "
+                          f"threshold={collapse_freq_threshold:.3f}).")
                     if consecutive_collapse_count >= collapse_consecutive_checks:
                         print(f"[MOE] Epoch {ep}: sustained collapse confirmed over "
                               f"{collapse_consecutive_checks} consecutive checks. "
@@ -605,8 +655,8 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
                 else:
                     # Recovered — reset the streak
                     if consecutive_collapse_count > 0:
-                        print(f"[MOE] Epoch {ep}: max_load={max_load:.3f} recovered below "
-                              f"threshold. Resetting collapse counter.")
+                        print(f"[MOE] Epoch {ep}: max_selection_freq={max_selection_freq:.3f} recovered "
+                              f"below threshold={collapse_freq_threshold:.3f}. Resetting collapse counter.")
                     consecutive_collapse_count = 0
 
         if scheduler: scheduler.step()
@@ -632,21 +682,53 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
 
 
 def _maml_collapse_check_only(model, episodic_val_loader, config,
-                               num_experts, model_name, epoch):
+                               num_experts, model_name, epoch,
+                               collapse_freq_threshold: float = 0.80):
     """
     Lightweight routing pass: collects gate_weights over the val loader
-    and returns only the collapse-relevant stats (max_expert_load,
-    expert_hard_fraction). No full RoutingAnalyzer, no prints, no plots.
-    
-    Cost: one forward pass per episode (no inner-loop adapt, no grad).
-    Returns a minimal report dict compatible with _check_moe_collapse().
+    and returns collapse-relevant stats based on expert SELECTION FREQUENCY.
+
+    For top-k routing the critical failure mode is dispatch collapse: one or
+    two experts are selected in the top-k set far more often than the others,
+    even when soft weights look roughly uniform (because argmax of soft weights
+    and selection-in-top-k are different things).
+
+    Selection frequency per expert is:
+        selection_freq[e] = (# times expert e appears in the top-k set) / total_samples
+
+    Under perfectly uniform routing: selection_freq[e] == top_k / num_experts for all e.
+    An expert is collapsed if its selection_freq >> that uniform expectation.
+
+    We use gate_weights_hard (post-top-k, pre-renorm mask) to determine selection:
+        expert e was selected iff gate_weights_hard[b, e] > 0
+
+    This is correct because MOEGate zeroes out non-top-k entries in weights_hard
+    before renormalising (see MOEGate.forward in MOE_encoder.py).
+
+    NOTE: The old implementation used gate_weights_hard.argmax(dim=-1), which
+    only identifies the single highest-weighted expert among those already
+    selected — it does NOT measure how often each expert is in the top-k set.
+
+    Args:
+        collapse_freq_threshold: Flag collapse if any expert's selection_freq
+            exceeds this value. Should be set in selection-frequency units:
+            e.g. (1 + abort_threshold) * (top_k / num_experts).
+            Passed in from mamlpp_pretrain so the threshold is consistent
+            with however mamlpp_pretrain computed it.
+
+    Returns:
+        dict with keys:
+            epoch, max_selection_freq, expert_selection_freq,
+            uniform_selection_freq, collapse_freq_threshold,
+            is_collapsed (bool)
+        or None if the model doesn't expose routing info or val loader is empty.
     """
     device     = config['device']
     multimodal = bool(config.get('multimodal', True))
+    top_k      = config.get('MOE_top_k', None)
 
-    # Accumulate dominant-expert counts directly on GPU to avoid repeated
-    # .cpu() transfers per episode.
-    expert_counts = torch.zeros(num_experts, device=device)
+    # Accumulate selection counts directly on GPU to avoid repeated .cpu() transfers.
+    expert_selection_counts = torch.zeros(num_experts, device=device)
     total_samples = 0
 
     try:
@@ -671,32 +753,60 @@ def _maml_collapse_check_only(model, episodic_val_loader, config,
                         # Model didn't return routing info — bail out silently.
                         return None
                     _, routing_info = out
-                    gate_w = routing_info.get('gate_weights')
-                    if gate_w is None:
+                    gate_w_hard = routing_info.get('gate_weights')
+                    if gate_w_hard is None:
                         return None
 
-                    dominant = gate_w.argmax(dim=-1)   # (B,)
-                    for e in range(num_experts):
-                        expert_counts[e] += (dominant == e).sum()
-                    total_samples += dominant.size(0)
+                    # ── Selection frequency (correct metric for top-k collapse) ──
+                    # gate_w_hard[b, e] > 0  iff expert e was included in the top-k
+                    # set for sample b (MOEGate zeros non-top-k entries before renorm).
+                    # For dense routing (top_k is None), all weights are > 0 by
+                    # construction (softmax), so selection_freq == 1.0 for all experts —
+                    # in that case we fall back to the argmax metric below.
+                    if top_k is not None and top_k < num_experts:
+                        selected = (gate_w_hard > 0).float()          # (B, E) binary
+                        expert_selection_counts += selected.sum(dim=0) # per-expert count
+                    else:
+                        # Dense routing: use argmax as a proxy for "dominant expert"
+                        dominant = gate_w_hard.argmax(dim=-1)          # (B,)
+                        for e in range(num_experts):
+                            expert_selection_counts[e] += (dominant == e).sum()
+
+                    total_samples += gate_w_hard.size(0)
     finally:
         model.train()
 
     if total_samples == 0:
         return None
 
-    hard_frac = (expert_counts / total_samples).cpu().tolist()
-    max_load  = max(hard_frac)
+    selection_freq = (expert_selection_counts / total_samples).cpu().tolist()
+    max_selection_freq = max(selection_freq)
+
+    # Uniform expectation: for top-k each expert should be selected top_k/E fraction
+    # of the time; for dense the argmax proxy gives ~1/E uniform expectation.
+    if top_k is not None and top_k < num_experts:
+        uniform_freq = top_k / num_experts
+    else:
+        uniform_freq = 1.0 / num_experts
+
+    is_collapsed = max_selection_freq > collapse_freq_threshold
+
+    print(f"[MOE] Epoch {epoch} collapse check:")
+    print(f"  max_selection_freq = {max_selection_freq:.3f}  "
+          f"(uniform = {uniform_freq:.3f}, threshold = {collapse_freq_threshold:.3f}) "
+          f"— {'COLLAPSED' if is_collapsed else 'OK'}")
+    print(f"  selection_freq per expert: {[f'{v:.3f}' for v in selection_freq]}")
 
     report = {
-        'epoch':              epoch,
-        'max_expert_load':    max_load,
-        'expert_hard_fraction': hard_frac,
-        # Stub keys so _check_moe_collapse doesn't KeyError on other paths
-        'routing_reports':    [{'max_expert_load': max_load}],
+        'epoch':                  epoch,
+        'max_selection_freq':     max_selection_freq,
+        'expert_selection_freq':  selection_freq,
+        'uniform_selection_freq': uniform_freq,
+        'collapse_freq_threshold': collapse_freq_threshold,
+        'is_collapsed':           is_collapsed,
+        # Legacy alias so any code that reads 'max_expert_load' still works
+        'max_expert_load':        max_selection_freq,
     }
-    print(f"[MOE] Epoch {epoch} collapse check: max_load={max_load:.3f} "
-          f"(threshold={0.80:.2f}) — {'COLLAPSED' if max_load > 0.80 else 'OK'}")
     return report
 
 

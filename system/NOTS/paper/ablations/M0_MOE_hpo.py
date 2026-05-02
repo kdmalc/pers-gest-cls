@@ -41,13 +41,15 @@ Scavenge / preemption safety
 
 Search space
 ────────────
-  num_experts            : {4, 8, 12, 16, 20, 24, 28, 32, 36, 40}
+  num_experts            : {4, 8, 12, 16, 20, 24, 28}
+                           Capped at 28: encoder-placement MoE scales linearly
+                           with num_experts; Trial 89 found 22 optimal so
+                           exploring 32-40 adds wall time without expected gain.
   utilization_ratio      : {0.1, 0.2, 0.3, 0.4, 0.5}
                            top_k = max(1, round(num_experts * ratio))
                            Both utilization_ratio and effective top_k are
                            stored in the trial config so downstream code that
-                           reads config["top_k"] or config["MOE_top_k"] works
-                           without modification.
+                           reads config["MOE_top_k"] works without modification.
   MOE_routing_signal     : {linear_proj_input, context_proj,
                             context_proj_with_demo}  (last only if use_demographics)
   MOE_gate_temperature   : {0.5, 1.0, 2.0}
@@ -62,6 +64,20 @@ Violated trials are pruned (not failed) so TPE avoids that region going forward.
 The constraint uses meta_batchsize (number of MAML episodes per outer step),
 which is the operationally correct batch size for expert load — not the flat
 supervised batch_size.
+
+HPO-mode training schedule
+──────────────────────────
+To reduce wall time per trial, HPO uses a shorter training schedule than the
+final ablation runs. These overrides are set in the config dict passed to
+mamlpp_pretrain and do NOT affect ablation_config defaults:
+    num_epochs              : HPO_NUM_EPOCHS (< final num_epochs)
+    episodes_per_epoch_train: HPO_EPISODES_PER_EPOCH (< final 500)
+
+Collapse detection is also tightened for HPO to abort bad trials faster:
+    hpo_collapse_grace_epochs     : 5  (vs 10 for final runs)
+    hpo_collapse_log_every        : 3  (vs MOE_log_every=5 for final runs)
+    hpo_collapse_abort_threshold  : 0.80 (same value, but earlier detection
+                                    fires faster due to tighter log_every/grace)
 """
 
 from __future__ import annotations
@@ -107,6 +123,18 @@ JOURNAL_NAME = "moe_hpo_1s3w_hpo_v1.log"
 # meta_batchsize is the number of MAML episodes per outer step — the
 # operationally correct batch size for expert load (not the flat batch_size).
 MIN_SAMPLES_PER_EXPERT = 2
+
+# ── HPO training schedule (shorter than final ablation runs) ─────────────────
+# These reduce wall time per trial so more of the 500-task budget completes
+# within the 8h time limit. Directional HPO signal does not need full training.
+HPO_NUM_EPOCHS         = 15    # final runs use 23 epochs
+HPO_EPISODES_PER_EPOCH = 300   # final runs use 500 episodes/epoch
+
+# ── HPO collapse detection (tighter than final runs) ─────────────────────────
+# Detect and abort collapsed trials faster to reclaim wall time.
+HPO_COLLAPSE_GRACE_EPOCHS    = 5    # final runs use 10
+HPO_COLLAPSE_LOG_EVERY       = 3    # final runs use MOE_log_every=5
+HPO_COLLAPSE_ABORT_THRESHOLD = 0.80 # same value; fires faster due to tighter schedule
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -164,13 +192,13 @@ def sample_moe_hparams(trial: optuna.Trial, base_config: dict) -> dict:
     directly, so the search space is fixed and consistent across all trials
     (required for TPE to build a valid probabilistic model).
 
-    Both "utilization_ratio" and the effective "top_k" / "MOE_top_k" are
-    written into the returned config so all downstream code that reads
-    config["top_k"] or config["MOE_top_k"] works without any changes.
+    The effective top_k is written into config["MOE_top_k"] (the canonical key).
     """
     # ── Core structure ───────────────────────────────────────────────────────
+    # Cap at 28: encoder-placement MoE scales linearly in forward-pass cost with
+    # num_experts. Trial 89 found 22 optimal; 32-40 just burns wall time.
     num_experts = trial.suggest_categorical(
-        "num_experts", [4, 8, 12, 16, 20, 24, 28, 32, 36, 40]
+        "num_experts", [4, 8, 12, 16, 20, 24, 28]
     )
 
     # Sample utilization ratio; top_k is derived, not sampled directly.
@@ -225,9 +253,8 @@ def sample_moe_hparams(trial: optuna.Trial, base_config: dict) -> dict:
     config = copy.deepcopy(base_config)
     config.update({
         "num_experts":           num_experts,
-        "utilization_ratio":     ratio,   # logged for analysis; not read by model
-        "MOE_top_k":             top_k,   # effective integer top_k
-        "top_k":                 top_k,   # alias kept in sync (ablation_config sets both)
+        "utilization_ratio":     ratio,     # logged for analysis; not read by model
+        "MOE_top_k":             top_k,     # canonical key — the only one to use
         "MOE_routing_signal":    routing_signal,
         "MOE_gate_temperature":  gate_temp,
         "MOE_use_shared_expert": use_shared,
@@ -235,6 +262,17 @@ def sample_moe_hparams(trial: optuna.Trial, base_config: dict) -> dict:
         "MOE_importance_coeff":  imp_coeff,
         "MOE_ctx_hidden_dim":    ctx_hidden,
         "MOE_ctx_out_dim":       ctx_out,
+        # ── HPO training schedule overrides ──────────────────────────────────
+        # Shorter than final ablation runs to fit within the SLURM time limit.
+        # These keys are read by mamlpp_pretrain and train_MAMLpp_one_epoch.
+        "num_epochs":                HPO_NUM_EPOCHS,
+        "episodes_per_epoch_train":  HPO_EPISODES_PER_EPOCH,
+        # ── HPO collapse detection overrides ─────────────────────────────────
+        # mamlpp_pretrain reads these keys and uses them instead of its defaults
+        # when they are present, so final runs are unaffected.
+        "hpo_collapse_grace_epochs":    HPO_COLLAPSE_GRACE_EPOCHS,
+        "hpo_collapse_log_every":       HPO_COLLAPSE_LOG_EVERY,
+        "hpo_collapse_abort_threshold": HPO_COLLAPSE_ABORT_THRESHOLD,
     })
     return config
 
@@ -248,6 +286,18 @@ def objective(trial: optuna.Trial, base_config: dict,
     """
     Sample hyperparams, train one MAML++ run, return best val acc.
     Val accuracy (not test accuracy) is the HPO signal; test set is held out.
+
+    Collapse handling:
+        If mamlpp_pretrain aborts due to sustained MoE collapse AND best_val_acc
+        was never meaningfully updated (i.e. still at the -1.0 init), the trial
+        is pruned rather than returning -1.0. This prevents TPE from treating a
+        degenerate collapsed run as a valid (very bad) data point — it is instead
+        excluded from the surrogate model entirely.
+
+        If collapse happens after at least one val checkpoint has been recorded
+        (best_val_acc > -1.0), we return that val acc normally. The partially
+        trained model did produce signal before collapsing, and TPE should learn
+        from it (those HPs produced some useful routing before dying).
     """
     try:
         config = sample_moe_hparams(trial, base_config)
@@ -262,7 +312,8 @@ def objective(trial: optuna.Trial, base_config: dict,
     for k in ["num_experts", "utilization_ratio", "MOE_top_k", "MOE_routing_signal",
               "MOE_gate_temperature", "MOE_use_shared_expert",
               "MOE_aux_coeff", "MOE_importance_coeff",
-              "MOE_ctx_hidden_dim", "MOE_ctx_out_dim"]:
+              "MOE_ctx_hidden_dim", "MOE_ctx_out_dim",
+              "num_epochs", "episodes_per_epoch_train"]:
         print(f"  {k}: {config[k]}")
 
     try:
@@ -284,12 +335,31 @@ def objective(trial: optuna.Trial, base_config: dict,
         _trained_model, train_history = mamlpp_pretrain(
             model, config, train_dl, episodic_val_loader=val_dl,
         )
-        val_acc = float(train_history["best_val_acc"])
     except Exception as e:
         print(f"[MOE HPO | trial {trial.number}] Training failed: {e}")
         raise optuna.exceptions.TrialPruned(f"Training failed: {e}")
 
-    print(f"[MOE HPO | trial {trial.number}] val_acc = {val_acc:.4f}")
+    moe_collapsed = train_history.get("moe_collapsed", False)
+    val_acc       = float(train_history["best_val_acc"])
+
+    if moe_collapsed and val_acc <= -1.0:
+        # Collapsed before any val checkpoint was ever set.
+        # Pruning (not failing) excludes this from TPE's surrogate model —
+        # returning -1.0 would be treated as valid signal for a legitimately
+        # bad config, which is wrong.
+        print(f"[MOE HPO | trial {trial.number}] MoE collapsed before first val "
+              f"checkpoint. Pruning trial (not returning -1.0 to TPE).")
+        raise optuna.exceptions.TrialPruned(
+            f"MoE collapsed at epoch {train_history.get('best_val_epoch', '?')} "
+            f"before any val checkpoint (best_val_acc={val_acc:.4f})."
+        )
+
+    if moe_collapsed:
+        print(f"[MOE HPO | trial {trial.number}] MoE collapsed but returning "
+              f"partial val_acc={val_acc:.4f} (meaningful signal before collapse).")
+    else:
+        print(f"[MOE HPO | trial {trial.number}] val_acc = {val_acc:.4f}")
+
     return val_acc
 
 
@@ -365,6 +435,8 @@ def main() -> None:
     print(f"[MOE HPO] CUDA       : {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         print(f"[MOE HPO] GPU        : {torch.cuda.get_device_name(0)}")
+    print(f"[MOE HPO] HPO schedule: {HPO_NUM_EPOCHS} epochs, "
+          f"{HPO_EPISODES_PER_EPOCH} episodes/epoch")
     print(f"{'='*60}\n")
 
     # ── Base config ──────────────────────────────────────────────────────────
@@ -410,10 +482,11 @@ def main() -> None:
         try:
             config = sample_moe_hparams(dummy_trial, base_config)
             print("[DRY RUN] Sampled config:")
-            for k in ["num_experts", "utilization_ratio", "MOE_top_k", "top_k",
+            for k in ["num_experts", "utilization_ratio", "MOE_top_k",
                       "MOE_routing_signal", "MOE_gate_temperature",
                       "MOE_use_shared_expert", "MOE_aux_coeff",
-                      "MOE_importance_coeff", "MOE_ctx_hidden_dim", "MOE_ctx_out_dim"]:
+                      "MOE_importance_coeff", "MOE_ctx_hidden_dim", "MOE_ctx_out_dim",
+                      "num_epochs", "episodes_per_epoch_train"]:
                 print(f"  {k}: {config[k]}")
         except optuna.exceptions.TrialPruned as e:
             print(f"[DRY RUN] Trial pruned during sampling: {e}")

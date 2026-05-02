@@ -259,7 +259,7 @@ def make_base_config(ablation_id: str) -> dict:
     config["MOE_placement"]                   = "encoder"   # FIXED per spec
     config["num_experts"]                     = 22          # was 32
     config["MOE_top_k"]                       = 9           # unchanged
-    config["top_k"]                           = config["MOE_top_k"]
+    # NOTE: config["top_k"] has been removed — use config["MOE_top_k"] everywhere.
     config["MOE_gate_temperature"]            = 1.5290172211651742   # was 0.65
     config["MOE_aux_coeff"]                   = 0.03282324399711515  # was 0.023
     config["MOE_ctx_out_dim"]                 = 64    # was 32
@@ -274,11 +274,10 @@ def make_base_config(ablation_id: str) -> dict:
     config["gate_type"]              = "context_feature_demo"
     config["expert_architecture"]    = "MLP"
 
-    # Added but not used (these need to be fully HPOd/debugged...)
     config["MOE_use_shared_expert"] = False
-    config["MOE_importance_coeff"] = 0.0
+    config["MOE_importance_coeff"] = 0.0   # Set to 0.0 until HPO tunes it (see M0_MOE_hpo.py)
     config["MOE_routing_signal"] = 'context_proj'
-    config["utilization_ratio"] = 0.3  # I think this is not used at all? This is what sets top-k in the other runs
+    config["utilization_ratio"] = config["MOE_top_k"] / config["num_experts"]  # kept for logging only
 
     # ── Gesture / trial selection ─────────────────────────────────────────────
     config["feature_engr"]           = "None"
