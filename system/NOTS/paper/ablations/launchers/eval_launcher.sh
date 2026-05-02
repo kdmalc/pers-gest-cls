@@ -75,44 +75,19 @@ ENV_PATH=/projects/my13/kai/meta-pers-gest/envs/fl-torch
 mkdir -p "$EVAL_OUT_BASE" "$LOG_DIR"
 
 # =============================================================================
-# M0 L2SO: subject IDs.
+# M0 L2SO: subject IDs — hardcoded to avoid login-node env dependency.
 # MUST match the order of all_PIDs in ablation_config.py (TRAIN + VAL + TEST
 # from fold 0 of hpo_strat_kapanji_split.json, concatenated in that order).
 # The fold index i passed to --fold-idx corresponds to all_PIDs[i], so the
 # ordering here must be IDENTICAL to config["all_PIDs"] in Python.
 #
-# To verify: run `python -c "from ablation_config import make_base_config; c=make_base_config('M0'); print(c['all_PIDs'])"` 
-# and paste the output here.
+# To verify: activate your env, then run:
+#   python -c "import sys; sys.path.insert(0, '$ABLATIONS_DIR'); from ablation_config import make_base_config; c=make_base_config('M0'); print(c['all_PIDs'])"
 # =============================================================================
-# Activate env on the login node so we can import ablation_config to get all_PIDs.
-# This mirrors the same activation block used inside the --wrap body.
-source /etc/profile.d/modules.sh
-module purge
-module load Mamba/23.11.0-0
-source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/conda.sh
-source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/mamba.sh
-mamba activate "$ENV_PATH"
-
-M0_L2SO_ALL_PIDS=($(python -c "
-import sys, os
-sys.path.insert(0, '$CODE_DIR')
-sys.path.insert(0, '$CODE_DIR/system')
-sys.path.insert(0, '$ABLATIONS_DIR')
-from ablation_config import make_base_config
-c = make_base_config('M0')
-print(' '.join(str(p) for p in c['all_PIDs']))
-"))
-
-if [[ ${#M0_L2SO_ALL_PIDS[@]} -eq 0 ]]; then
-    echo "ERROR: Could not resolve M0 all_PIDs from ablation_config.py."
-    echo "       Make sure your mamba env is active before running this script."
-    echo "       Run: mamba activate \$ENV_PATH"
-    echo "       CODE_DIR=$CODE_DIR"
-    echo "       ABLATIONS_DIR=$ABLATIONS_DIR"
-    exit 1
-fi
+M0_L2SO_ALL_PIDS=(P011 P010 P008 P006 P111 P119 P124 P110 P112 P123 P132 P126 P102 P114 P107 P103 P125 P127 P128 P118 P108 P122 P106 P115 P005 P131 P116 P109 P004 P104 P105 P121)
 
 M0_NUM_FOLDS=${#M0_L2SO_ALL_PIDS[@]}
+
 
 # =============================================================================
 # Adaptation steps sweep — checkpoint paths and eval HPs.
