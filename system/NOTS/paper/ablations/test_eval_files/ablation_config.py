@@ -259,7 +259,7 @@ def make_base_config(ablation_id: str) -> dict:
     config["MOE_placement"]                   = "encoder"   # FIXED per spec
     config["num_experts"]                     = 22          # was 32
     config["MOE_top_k"]                       = 9           # unchanged
-    # NOTE: config["top_k"] has been removed — use config["MOE_top_k"] everywhere.
+    config["top_k"] = config["MOE_top_k"]  # NOTE: we ought to remove this... leaving this as is for compatability for now...
     config["MOE_gate_temperature"]            = 1.5290172211651742   # was 0.65
     config["MOE_aux_coeff"]                   = 0.03282324399711515  # was 0.023
     config["MOE_ctx_out_dim"]                 = 64    # was 32
