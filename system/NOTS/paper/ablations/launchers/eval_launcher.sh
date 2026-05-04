@@ -24,10 +24,17 @@
 #   A11      → A10_A11_A12_meta_pretrained.py
 #   grid     → fewshot_grid.py               [one job per (k_shot, n_way) cell]
 #   grid_A2  → fewshot_grid_A2.py            [one job per (k_shot, n_way) cell]
-#   steps_M0  → num_eval_steps_sweep.py    --model-type maml        [steps sweep, no training]
-#   steps_A2  → num_eval_steps_sweep.py    --model-type a2          [steps sweep, trains A2 inline]
-#   steps_A7  → num_eval_steps_sweep.py    --model-type supervised  [steps sweep, no training]
-#   steps_A11 → num_eval_steps_sweep.py    --model-type a11         [steps sweep, no training]
+#   steps_M0  → num_eval_steps_sweep.py  --model-type M0   [steps sweep, no training]
+#   steps_A2  → num_eval_steps_sweep.py  --model-type A2   [steps sweep, trains A2 inline]
+#   steps_A7  → num_eval_steps_sweep.py  --model-type A7   [steps sweep, no training]
+#   steps_A11 → num_eval_steps_sweep.py  --model-type A11  [steps sweep, no training]
+#
+# Eval subjects for steps sweeps (steps_M0, steps_A2, steps_A7, steps_A11):
+#   By default evaluates on VAL_PIDS + TEST_PIDS (8 subjects from fold 0).
+#   This is a diagnostic figure — combining val+test gives a more reliable
+#   plateau estimate. The --eval-pids arg overrides this.
+#   Note: num_eval_steps_sweep.py defaults to this 8-subject set automatically
+#   when --eval-pids is not passed, so no explicit --eval-pids arg is needed here.
 #
 # Usage:
 #   bash eval_launcher.sh M0                              # L2SO (default): 32 parallel fold jobs
@@ -47,8 +54,10 @@
 #   bash eval_launcher.sh A2 → no flag passed → Python argparse default (set to L2SO) runs L2SO
 #   bash eval_launcher.sh A2 --test-procedure hpo_test_split → overrides to hpo_test_split
 #
-#   bash eval_launcher.sh steps_M0 steps_A2 steps_A7 steps_A11   # adaptation steps sweeps
-#   bash eval_launcher.sh steps_A2 --ft-mode full                 # A2 steps sweep, full finetuning
+#   Steps sweeps (all evaluate on VAL_PIDS + TEST_PIDS = 8 subjects by default):
+#   bash eval_launcher.sh steps_M0 steps_A2 steps_A7 steps_A11   # all four at once
+#   bash eval_launcher.sh steps_A2 --ft-mode head_only            # A2 steps sweep, head-only
+#   bash eval_launcher.sh steps_M0                                # M0 only
 #
 # Output layout:
 #   $EVAL_OUT_BASE/<ID>/                          (M0 hpo_test_split, A1, A2, A3, A4, A7, A8, A11)
@@ -99,18 +108,18 @@ M0_NUM_FOLDS=${#M0_L2SO_ALL_PIDS[@]}
 STEPS_M0_CHECKPOINT="/projects/my13/kai/meta-pers-gest/pers-gest-cls/models/final_eval_models/best_M0_model.pt"
 STEPS_M0_ALPHA="0.005066"   # maml_alpha_init_eval from Trial 89 — fixed, no alpha sweep needed
 
-# Best A7 checkpoint. ft_lr defaults to 0.001 in the sweep script.
-# TODO: Make A7 just train its own model... or just dont test A7....
-#STEPS_A7_CHECKPOINT="/projects/my13/kai/meta-pers-gest/pers-gest-cls/hpo_best_models/A7_best.pt"
+# Best A7 checkpoint. Must be set before running steps_A7.
+# This should be the checkpoint saved by the canonical A7 ablation run.
+STEPS_A7_CHECKPOINT="/projects/my13/kai/meta-pers-gest/pers-gest-cls/models/final_eval_models/best_A7_model.pt"
 
 # A2: no checkpoint path needed — model is trained inline (~2 min).
-# ft_lr defaults to 0.001 in the sweep script.
+# ft_lr defaults to maml_alpha_init_eval in the sweep script (mirrors canonical A2).
 
 # A11: no checkpoint path needed — MetaEMGWrapper loads from the hardcoded Meta path.
-# ft_lr defaults to 0.01 in the sweep script.
+# ft_lr defaults to maml_alpha_init_eval in the sweep script (mirrors canonical A11).
 
-# ft_mode for supervised models. head_only is standard for 1-shot.
-# Override per-run with --ft-mode full if you want the full-finetuning curve.
+# ft_mode for supervised models. 'full' matches the canonical A2/A7/A11 ablation default.
+# Override per-run with --ft-mode head_only if you want the head-only curve.
 STEPS_FT_MODE="full"
 
 # =============================================================================
@@ -531,8 +540,9 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "--ablation ${ABLATION}"
 
     elif [[ "$ABLATION" == "steps_M0" ]]; then
-        # ── steps_M0: MAML adaptation steps sweep (paper curve, no training) ──
+        # ── steps_M0: M0 (MAML) adaptation steps sweep (paper curve, no training) ──
         # Alpha fixed to Trial 89 HPO best. No --sweep-alpha needed.
+        # Eval subjects: VAL_PIDS + TEST_PIDS (8 subjects) — default in Python script.
         submit_single_job \
             "steps_M0" \
             "$SCRIPT_PATH" \
@@ -540,13 +550,14 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "$TIME" \
             "$MEM" \
             "$EFFECTIVE_PARTITION" \
-            "--model-type maml --ablation-id M0 --checkpoint $STEPS_M0_CHECKPOINT --alpha $STEPS_M0_ALPHA"
+            "--model-type M0 --ablation-id M0 --checkpoint $STEPS_M0_CHECKPOINT --alpha $STEPS_M0_ALPHA --ft-mode $RESOLVED_FT_MODE"
 
     elif [[ "$ABLATION" == "steps_A2" ]]; then
         # ── steps_A2: A2 trained inline (~2 min), then adaptation steps sweep ──
-        # No --checkpoint — the Python script trains A2 from scratch and saves
-        # the checkpoint to the output dir as a side effect.
-        # ft_lr defaults to 0.001 in the sweep script (SUPERVISED_FT_LR).
+        # No --checkpoint — the Python script trains A2 from scratch (param-matched
+        # to M0) and saves the checkpoint to the output dir as a side effect.
+        # ft_lr defaults to maml_alpha_init_eval in the sweep script.
+        # Eval subjects: VAL_PIDS + TEST_PIDS (8 subjects) — default in Python script.
         submit_single_job \
             "steps_A2" \
             "$SCRIPT_PATH" \
@@ -554,11 +565,13 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "$TIME" \
             "$MEM" \
             "$EFFECTIVE_PARTITION" \
-            "--model-type a2 --ablation-id A2 --ft-mode $RESOLVED_FT_MODE"
+            "--model-type A2 --ablation-id A2 --ft-mode $RESOLVED_FT_MODE"
 
     elif [[ "$ABLATION" == "steps_A7" ]]; then
-        # ── steps_A7: supervised adaptation steps sweep (paper curve, no training) ──
-        # ft_lr defaults to 0.001 in the sweep script (SUPERVISED_FT_LR).
+        # ── steps_A7: supervised CNN-LSTM adaptation steps sweep (no training) ──
+        # Requires STEPS_A7_CHECKPOINT to be set and exist.
+        # ft_lr defaults to maml_alpha_init_eval in the sweep script.
+        # Eval subjects: VAL_PIDS + TEST_PIDS (8 subjects) — default in Python script.
         submit_single_job \
             "steps_A7" \
             "$SCRIPT_PATH" \
@@ -566,12 +579,13 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "$TIME" \
             "$MEM" \
             "$EFFECTIVE_PARTITION" \
-            "--model-type supervised --ablation-id A7 --checkpoint $STEPS_A7_CHECKPOINT --ft-mode $RESOLVED_FT_MODE"
+            "--model-type A7 --ablation-id A7 --checkpoint $STEPS_A7_CHECKPOINT --ft-mode $RESOLVED_FT_MODE"
 
     elif [[ "$ABLATION" == "steps_A11" ]]; then
         # ── steps_A11: Meta pretrained steps sweep (paper curve, no training) ──
         # No --checkpoint arg — MetaEMGWrapper loads from its hardcoded path.
-        # ft_lr defaults to 0.01 in the sweep script (A11_FT_LR).
+        # ft_lr defaults to maml_alpha_init_eval in the sweep script.
+        # Eval subjects: VAL_PIDS + TEST_PIDS (8 subjects) — default in Python script.
         submit_single_job \
             "steps_A11" \
             "$SCRIPT_PATH" \
@@ -579,7 +593,7 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "$TIME" \
             "$MEM" \
             "$EFFECTIVE_PARTITION" \
-            "--model-type a11 --ablation-id A11 --ft-mode $RESOLVED_FT_MODE"
+            "--model-type A11 --ablation-id A11 --ft-mode $RESOLVED_FT_MODE"
 
     else
         # ── All other ablations: single job, no extra CLI args ─────────────────
