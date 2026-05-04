@@ -180,46 +180,103 @@ class RoutingAnalyzer:
 
     def routing_entropy(self) -> Dict[str, float]:
         """
-        Per-sample routing entropy, then averaged.
+        Per-sample routing entropy summary statistics.
 
         A perfectly flat distribution (all experts equal) has entropy log(E).
         A hard (one-hot) distribution has entropy 0.
         Values closer to 0 → sharper routing → experts more specialised.
+
+        Note: the full per-sample entropy array is also returned by load_balance()
+        under the key 'per_sample_entropy' for histogram plotting.
         """
-        w = self.rec.gate_weights.clamp(min=1e-9)
-        h = -(w * w.log()).sum(dim=-1)        # (N,) — nats
+        w     = self.rec.gate_weights.clamp(min=1e-9)
+        h     = -(w * w.log()).sum(dim=-1)   # (N,) — nats
         max_h = math.log(self.E)
         return {
-            "mean_entropy_nats":      h.mean().item(),
+            "mean_entropy_nats":       h.mean().item(),
             "mean_entropy_normalised": (h.mean() / max_h).item(),  # 0=sharp, 1=flat
-            "std_entropy_nats":       h.std().item(),
+            "std_entropy_nats":        h.std().item(),
+            "max_entropy_nats":        max_h,
         }
 
     # ── Load balance ─────────────────────────────────────────────────────────
 
-    def load_balance(self) -> Dict[str, Any]:
+    def load_balance(self, top_k: Optional[int] = None) -> Dict[str, Any]:
         """
         Expert utilisation statistics.
 
-        ideal_fraction = 1/E.  Values far from ideal → over/under-used experts.
+        Four complementary metrics are returned:
+
+        expert_soft_fraction   : mean gate weight per expert across all N samples.
+                                 Ideal = top_k / E  (each selected expert shares
+                                 weight equally).  Sensitive to weight magnitude,
+                                 not just binary selection.
+
+        expert_selection_freq  : fraction of samples in which each expert appears
+                                 in the top-k set (gate_weight > 0).  This is the
+                                 standard load-balance metric reported in the MoE
+                                 literature (Shazeer 2017, Fedus 2022).
+                                 Ideal = top_k / E.
+
+        expert_dominant_freq   : fraction of samples where each expert has the
+                                 single highest gate weight (argmax).  Useful for
+                                 spotting a single "superstar" expert but can be
+                                 misleading when weights are close — use as a
+                                 diagnostic, not a primary metric.
+                                 Ideal = 1 / E.
+
+        per_sample_entropy     : per-sample routing entropy (nats), returned as a
+                                 list so the caller can plot a histogram.
+                                 max possible = log(E); 0 = perfectly hard routing.
         """
-        # Fraction of samples where each expert is dominant
-        #hard_frac = torch.zeros(self.E)
-        #for e in range(self.E):
-        #    hard_frac[e] = (self.dominant_expert == e).float().mean()
-        hard_frac = torch.bincount(self.dominant_expert, minlength=self.E).float() / self.N
+        gw = self.rec.gate_weights  # (N, E)
 
+        # ── 1. Mean soft weight ──────────────────────────────────────────────
+        soft_frac = gw.mean(dim=0)  # (E,)
 
-        # Mean soft weight per expert
-        soft_frac = self.rec.gate_weights.mean(dim=0)
+        # ── 2. Selection frequency (top-k binary mask) ───────────────────────
+        # gate_weights are already zeroed for non-selected experts by the router,
+        # so any positive entry means "this expert was in the top-k set".
+        selection_mask = (gw > 0).float()           # (N, E) — 1 if selected
+        selection_freq = selection_mask.mean(dim=0)  # (E,)
 
-        ideal = 1.0 / self.E
+        # Infer top_k from data if not supplied (median number of nonzero experts
+        # per sample — robust to occasional all-zero rows from skipped episodes).
+        if top_k is None:
+            top_k = int(selection_mask.sum(dim=1).median().item())
+
+        # ── 3. Dominant-expert frequency (argmax) ────────────────────────────
+        dominant_freq = (
+            torch.bincount(self.dominant_expert, minlength=self.E).float() / self.N
+        )  # (E,)
+
+        # ── 4. Per-sample entropy (nats) ─────────────────────────────────────
+        w_clamped = gw.clamp(min=1e-9)
+        per_sample_entropy = -(w_clamped * w_clamped.log()).sum(dim=-1)  # (N,)
+
+        ideal_selection = top_k / self.E   # ideal for soft_frac & selection_freq
+        ideal_dominant  = 1.0  / self.E   # ideal for dominant_freq
+
         return {
-            "expert_hard_fraction":  hard_frac.tolist(),
-            "expert_soft_fraction":  soft_frac.tolist(),
-            "ideal_fraction":        ideal,
-            "hard_imbalance_ratio":  (hard_frac.max() / hard_frac.min().clamp(min=1e-9)).item(),
-            "soft_imbalance_ratio":  (soft_frac.max() / soft_frac.min().clamp(min=1e-9)).item(),
+            # per-expert vectors
+            "expert_soft_fraction":   soft_frac.tolist(),
+            "expert_selection_freq":  selection_freq.tolist(),
+            "expert_dominant_freq":   dominant_freq.tolist(),
+            # per-sample entropy distribution
+            "per_sample_entropy":     per_sample_entropy.tolist(),
+            # ideals & summary scalars
+            "ideal_selection_fraction": ideal_selection,
+            "ideal_dominant_fraction":  ideal_dominant,
+            "top_k":                    top_k,
+            "selection_imbalance_ratio": (
+                selection_freq.max() / selection_freq.clamp(min=1e-9).min()
+            ).item(),
+            "soft_imbalance_ratio": (
+                soft_frac.max() / soft_frac.clamp(min=1e-9).min()
+            ).item(),
+            "dominant_imbalance_ratio": (
+                dominant_freq.max() / dominant_freq.clamp(min=1e-9).min()
+            ).item(),
         }
 
     # ── Gesture routing ──────────────────────────────────────────────────────
@@ -384,21 +441,112 @@ class RoutingAnalyzer:
         if save_path:
             save_path.mkdir(parents=True, exist_ok=True)
 
-        # ── 1. Load balance bar chart ────────────────────────────────────────
+        # ── 1a. Mean soft weight per expert ─────────────────────────────────
         lb  = self.load_balance()
-        fig, ax = plt.subplots(figsize=(max(4, self.E), 4))
         x   = np.arange(self.E)
-        ax.bar(x - 0.2, lb["expert_soft_fraction"], 0.35, label="Mean soft weight", color="#4C72B0")
-        ax.bar(x + 0.2, lb["expert_hard_fraction"], 0.35, label="Dominant expert freq", color="#DD8452")
-        ax.axhline(lb["ideal_fraction"], color="gray", linestyle="--", label=f"Ideal (1/E={lb['ideal_fraction']:.2f})")
+        xlabels = [f"E{i}" for i in range(self.E)]
+        fig_w = max(8, self.E * 0.55 + 2)
+
+        fig, ax = plt.subplots(figsize=(fig_w, 4))
+        bars = ax.bar(x, lb["expert_soft_fraction"], color="#4C72B0", edgecolor="white", linewidth=0.5)
+        ax.axhline(
+            lb["ideal_selection_fraction"], color="gray", linestyle="--",
+            label=f"Ideal = top_k/E = {lb['top_k']}/{self.E} = {lb['ideal_selection_fraction']:.3f}",
+        )
         ax.set_xlabel("Expert index")
-        ax.set_ylabel("Fraction")
-        ax.set_title(f"Expert load balance — {self.rec.model_name}")
-        ax.set_xticks(x); ax.set_xticklabels([f"E{i}" for i in range(self.E)])
-        ax.legend(); fig.tight_layout()
-        figs["load_balance"] = fig
+        ax.set_ylabel("Mean gate weight")
+        ax.set_title(
+            f"Mean Soft Gate Weight per Expert\n"
+            f"N={self.N} samples | E={self.E} | top_k={lb['top_k']} | "
+            f"imbalance ratio={lb['soft_imbalance_ratio']:.1f}x"
+        )
+        ax.set_xticks(x)
+        ax.set_xticklabels(xlabels, rotation=90, fontsize=7)
+        ax.legend()
+        fig.tight_layout()
+        figs["lb_soft_weight"] = fig
         if save_path:
-            fig.savefig(save_path / "load_balance.png", dpi=150)
+            fig.savefig(save_path / "lb_soft_weight.png", dpi=150)
+        plt.close(fig)
+
+        # ── 1b. Expert selection frequency (top-k binary) ────────────────────
+        fig, ax = plt.subplots(figsize=(fig_w, 4))
+        ax.bar(x, lb["expert_selection_freq"], color="#55A868", edgecolor="white", linewidth=0.5)
+        ax.axhline(
+            lb["ideal_selection_fraction"], color="gray", linestyle="--",
+            label=f"Ideal = top_k/E = {lb['top_k']}/{self.E} = {lb['ideal_selection_fraction']:.3f}",
+        )
+        ax.set_xlabel("Expert index")
+        ax.set_ylabel("Selection frequency")
+        ax.set_title(
+            f"Expert Selection Frequency (top-k binary)\n"
+            f"N={self.N} samples | E={self.E} | top_k={lb['top_k']} | "
+            f"imbalance ratio={lb['selection_imbalance_ratio']:.1f}x\n"
+            f"Fraction of samples in which each expert appears in the top-{lb['top_k']} set"
+        )
+        ax.set_xticks(x)
+        ax.set_xticklabels(xlabels, rotation=90, fontsize=7)
+        ax.legend()
+        fig.tight_layout()
+        figs["lb_selection_freq"] = fig
+        if save_path:
+            fig.savefig(save_path / "lb_selection_freq.png", dpi=150)
+        plt.close(fig)
+
+        # ── 1c. Dominant expert frequency (argmax) ───────────────────────────
+        fig, ax = plt.subplots(figsize=(fig_w, 4))
+        ax.bar(x, lb["expert_dominant_freq"], color="#DD8452", edgecolor="white", linewidth=0.5)
+        ax.axhline(
+            lb["ideal_dominant_fraction"], color="gray", linestyle="--",
+            label=f"Ideal = 1/E = 1/{self.E} = {lb['ideal_dominant_fraction']:.3f}",
+        )
+        ax.set_xlabel("Expert index")
+        ax.set_ylabel("Dominant frequency")
+        ax.set_title(
+            f"Dominant Expert Frequency (argmax winner per sample)\n"
+            f"N={self.N} samples | E={self.E} | top_k={lb['top_k']} | "
+            f"imbalance ratio={lb['dominant_imbalance_ratio']:.1f}x\n"
+            f"Fraction of samples where each expert has the single highest gate weight"
+        )
+        ax.set_xticks(x)
+        ax.set_xticklabels(xlabels, rotation=90, fontsize=7)
+        ax.legend()
+        fig.tight_layout()
+        figs["lb_dominant_freq"] = fig
+        if save_path:
+            fig.savefig(save_path / "lb_dominant_freq.png", dpi=150)
+        plt.close(fig)
+
+        # ── 1d. Per-sample routing entropy histogram ─────────────────────────
+        ent      = self.routing_entropy()
+        h_vals   = np.array(lb["per_sample_entropy"])
+        max_h    = ent["max_entropy_nats"]
+        mean_h   = ent["mean_entropy_nats"]
+        norm_h   = ent["mean_entropy_normalised"]
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.hist(h_vals, bins=40, color="#4C72B0", edgecolor="white", linewidth=0.5)
+        ax.axvline(
+            max_h, color="red", linestyle="--",
+            label=f"Max entropy = log({self.E}) = {max_h:.2f} nats (uniform routing)",
+        )
+        ax.axvline(
+            mean_h, color="orange", linestyle="-",
+            label=f"Mean = {mean_h:.2f} nats (normalised = {norm_h:.3f})",
+        )
+        ax.set_xlabel("Routing entropy (nats)")
+        ax.set_ylabel("Sample count")
+        ax.set_title(
+            f"Per-Sample Routing Entropy Distribution\n"
+            f"N={self.N} | 0 = perfectly sharp (one expert), "
+            f"{max_h:.2f} nats = perfectly uniform\n"
+            f"Mean normalised entropy: {norm_h:.3f}  (0=sharp → 1=flat)"
+        )
+        ax.legend(fontsize=8)
+        fig.tight_layout()
+        figs["lb_entropy_histogram"] = fig
+        if save_path:
+            fig.savefig(save_path / "lb_entropy_histogram.png", dpi=150)
         plt.close(fig)
 
         # ── 2. Gesture × Expert heatmap ──────────────────────────────────────
@@ -451,23 +599,7 @@ class RoutingAnalyzer:
                 fig.savefig(save_path / "demo_expert_correlation.png", dpi=150)
             plt.close(fig)
 
-        # ── 5. Per-sample entropy histogram ──────────────────────────────────
-        w   = self.rec.gate_weights.clamp(min=1e-9)
-        h   = -(w * w.log()).sum(dim=-1).numpy()
-        fig, ax = plt.subplots(figsize=(5, 3))
-        ax.hist(h, bins=30, color="#4C72B0", edgecolor="white")
-        ax.axvline(math.log(self.E), color="red", linestyle="--",
-                   label=f"Max entropy (log {self.E} = {math.log(self.E):.2f})")
-        ax.set_xlabel("Routing entropy (nats)")
-        ax.set_ylabel("Count")
-        ax.set_title(f"Distribution of per-sample routing entropy\n{self.rec.model_name}")
-        ax.legend(); fig.tight_layout()
-        figs["entropy_histogram"] = fig
-        if save_path:
-            fig.savefig(save_path / "entropy_histogram.png", dpi=150)
-        plt.close(fig)
-
-        # ── 6. Expert co-activation matrix ───────────────────────────────────
+        # ── 5. Expert co-activation matrix ───────────────────────────────────
         ca  = self.expert_coactivation()
         mat = np.array(ca["coactivation_matrix"])
         fig, ax = plt.subplots(figsize=(max(4, self.E + 1), max(4, self.E + 1)))
@@ -624,10 +756,13 @@ def log_routing_to_wandb(report: Dict, step: Optional[int] = None) -> None:
     flat["routing/entropy_std"]  = ent.get("std_entropy_nats", 0.0)
 
     lb = report.get("load_balance", {})
-    flat["routing/imbalance_ratio_hard"] = lb.get("hard_imbalance_ratio", 1.0)
-    flat["routing/imbalance_ratio_soft"] = lb.get("soft_imbalance_ratio", 1.0)
-    for e_idx, frac in enumerate(lb.get("expert_hard_fraction", [])):
-        flat[f"routing/expert_{e_idx}_dom_freq"] = frac
+    flat["routing/imbalance_ratio_dominant"]  = lb.get("dominant_imbalance_ratio", 1.0)
+    flat["routing/imbalance_ratio_soft"]      = lb.get("soft_imbalance_ratio", 1.0)
+    flat["routing/imbalance_ratio_selection"] = lb.get("selection_imbalance_ratio", 1.0)
+    for e_idx, frac in enumerate(lb.get("expert_dominant_freq", [])):
+        flat[f"routing/expert_{e_idx}_dominant_freq"] = frac
+    for e_idx, frac in enumerate(lb.get("expert_selection_freq", [])):
+        flat[f"routing/expert_{e_idx}_selection_freq"] = frac
 
     wandb.log(flat, step=step)
 
@@ -648,15 +783,23 @@ def _print_report(report: Dict, E: int) -> None:
     print(f"  Mean (normalised 0→sharp, 1→flat): {ent['mean_entropy_normalised']:.4f}")
     print(f"  Mean (nats):                        {ent['mean_entropy_nats']:.4f}")
     print(f"  Std  (nats):                        {ent['std_entropy_nats']:.4f}")
+    print(f"  Max possible (uniform):             {ent['max_entropy_nats']:.4f}")
 
     lb = report["load_balance"]
-    print(f"\n[Load Balance]  (ideal = {lb['ideal_fraction']:.3f})")
-    print(f"  Hard imbalance ratio (max/min dom freq): {lb['hard_imbalance_ratio']:.2f}x")
-    print(f"  Soft imbalance ratio (max/min mean wgt): {lb['soft_imbalance_ratio']:.2f}x")
+    top_k        = lb['top_k']
+    ideal_sel    = lb['ideal_selection_fraction']
+    ideal_dom    = lb['ideal_dominant_fraction']
+    print(f"\n[Load Balance]  top_k={top_k} | ideal_selection=top_k/E={ideal_sel:.3f} | ideal_dominant=1/E={ideal_dom:.3f}")
+    print(f"  Selection imbalance ratio (max/min selection_freq): {lb['selection_imbalance_ratio']:.2f}x")
+    print(f"  Soft      imbalance ratio (max/min mean_weight):    {lb['soft_imbalance_ratio']:.2f}x")
+    print(f"  Dominant  imbalance ratio (max/min dominant_freq):  {lb['dominant_imbalance_ratio']:.2f}x")
+    print(f"  {'Expert':<10} {'selection_freq':>16} {'mean_soft_wgt':>15} {'dominant_freq':>15}")
+    print(f"  {'-'*10} {'-'*16} {'-'*15} {'-'*15}")
     for e_idx in range(E):
-        hf = lb["expert_hard_fraction"][e_idx]
-        sf = lb["expert_soft_fraction"][e_idx]
-        print(f"    Expert {e_idx}: dom_freq={hf:.3f}  mean_wgt={sf:.3f}")
+        sf  = lb["expert_selection_freq"][e_idx]
+        sw  = lb["expert_soft_fraction"][e_idx]
+        df  = lb["expert_dominant_freq"][e_idx]
+        print(f"  Expert {e_idx:<4} {sf:>16.3f} {sw:>15.3f} {df:>15.3f}")
 
     rg = report["routing_by_gesture"]
     print(f"\n[Routing by Gesture]  (dominant expert per gesture)")
