@@ -11,6 +11,7 @@
 #   A5      : sweeps num_experts over 8 values -> 8 jobs (see A5_EXPERT_COUNTS)
 #   grid    : k-shot x n-way grid (M0/MAML+MoE) -> 9 jobs
 #   grid_A2 : k-shot x n-way grid (A2/supervised CNN-LSTM) -> 9 jobs
+#   grid_A4 : k-shot x n-way grid (A4/MAML+No-MoE, hpo_test_split only) -> 9 jobs
 #
 # Script mapping:
 #   M0       → M0_full_model.py
@@ -24,6 +25,7 @@
 #   A11      → A10_A11_A12_meta_pretrained.py
 #   grid     → fewshot_grid.py               [one job per (k_shot, n_way) cell]
 #   grid_A2  → fewshot_grid_A2.py            [one job per (k_shot, n_way) cell]
+#   grid_A4  → fewshot_grid_A4.py            [one job per (k_shot, n_way) cell; hpo_test_split only]
 #   steps_M0  → num_eval_steps_sweep.py  --model-type M0   [steps sweep, no training]
 #   steps_A2  → num_eval_steps_sweep.py  --model-type A2   [steps sweep, trains A2 inline]
 #   steps_A7  → num_eval_steps_sweep.py  --model-type A7   [steps sweep, no training]
@@ -45,7 +47,8 @@
 #   bash eval_launcher.sh all                             # all ablations (no grid)
 #   bash eval_launcher.sh grid                            # k-shot/n-way grid (M0/MAML+MoE)
 #   bash eval_launcher.sh grid_A2                         # k-shot/n-way grid (A2/supervised)
-#   bash eval_launcher.sh all grid grid_A2                # everything
+#   bash eval_launcher.sh grid_A4                         # k-shot/n-way grid (A4/MAML+No-MoE, hpo_test_split only)
+#   bash eval_launcher.sh all grid grid_A2 grid_A4        # everything
 #   bash eval_launcher.sh M0 --dry-run                   # print without submitting
 #   bash eval_launcher.sh A1 --debug                     # debug partition, 15 min limit
 #   bash eval_launcher.sh A5 --partition commons
@@ -65,6 +68,7 @@
 #   $EVAL_OUT_BASE/A5/E<N>/                       (A5, one subdir per expert count)
 #   $EVAL_OUT_BASE/grid/k<K>_n<N>/               (grid M0, one subdir per cell)
 #   $EVAL_OUT_BASE/grid_A2/k<K>_n<N>/            (grid A2, one subdir per cell)
+#   $EVAL_OUT_BASE/grid_A4/k<K>_n<N>/            (grid A4, one subdir per cell)
 #   $EVAL_OUT_BASE/steps_sweep/<ID>/              (steps_M0, steps_A2, steps_A7, steps_A11)
 #   $LOG_DIR/eval_<ID>_<jobid>.out
 
@@ -133,7 +137,8 @@ A5_EXPERT_COUNTS=(4 8 12 16 20 24 32 40)
 # MUST be kept in sync with:
 #   GRID_K_SHOTS / GRID_N_WAYS in fewshot_grid.py    (M0)
 #   GRID_K_SHOTS / GRID_N_WAYS in fewshot_grid_A2.py (A2)
-# Both grids use the same (k, n) combinations.
+#   GRID_K_SHOTS / GRID_N_WAYS in fewshot_grid_A4.py (A4)
+# All three grids use the same (k, n) combinations.
 # =============================================================================
 GRID_K_SHOTS=(1 3 5)
 GRID_N_WAYS=(3 5 10)
@@ -157,6 +162,7 @@ ABLATION_SCRIPT[A8]="A7_A8_subject_specific.py"
 ABLATION_SCRIPT[A11]="A10_A11_A12_meta_pretrained.py"
 ABLATION_SCRIPT[grid]="fewshot_grid.py"
 ABLATION_SCRIPT[grid_A2]="fewshot_grid_A2.py"
+ABLATION_SCRIPT[grid_A4]="fewshot_grid_A4.py"
 ABLATION_SCRIPT[steps_M0]="num_eval_steps_sweep.py"
 ABLATION_SCRIPT[steps_A2]="num_eval_steps_sweep.py"
 ABLATION_SCRIPT[steps_A7]="num_eval_steps_sweep.py"
@@ -164,7 +170,7 @@ ABLATION_SCRIPT[steps_A11]="num_eval_steps_sweep.py"
 
 # "all" expands to the standard ablation set only — grid and steps sweeps are opt-in.
 VALID_ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11)
-ALL_TOKENS=(M0 A1 A2 A4 A5 A7 A8 A11 grid grid_A2 steps_M0 steps_A2 steps_A7 steps_A11)  # for usage string
+ALL_TOKENS=(M0 A1 A2 A4 A5 A7 A8 A11 grid grid_A2 grid_A4 steps_M0 steps_A2 steps_A7 steps_A11)  # for usage string
 
 # =============================================================================
 # Parse args
@@ -255,6 +261,7 @@ TIME_steps_A2="02:00:00";  MEM_steps_A2=16G
 TIME_steps_A7="02:00:00";  MEM_steps_A7=16G
 TIME_steps_A11="03:00:00"; MEM_steps_A11=24G
 TIME_grid_A2="02:00:00";   MEM_grid_A2=16G   # supervised; same budget as A2
+TIME_grid_A4="20:00:00";   MEM_grid_A4=32G   # MAML; slower than supervised, faster than full L2SO
 # Uncomment and tune once you have wall-time data from HPO runs:
 # TIME_M0="08:00:00";   MEM_M0=32G
 # TIME_A3="05:00:00";   MEM_A3=24G
@@ -365,7 +372,9 @@ for ABLATION in "${ABLATIONS[@]}"; do
 
     # If doing L2SO, bump the time up to 23 hours for all runs EXCEPT M0
     # (since M0 is currently the only one set up to submit parallel fold jobs)
-    if [[ "$RESOLVED_TEST_PROCEDURE" == "L2SO" && "$ABLATION" != "M0" ]]; then
+    # and EXCEPT grid_A4 (which is hardcoded to hpo_test_split internally;
+    # its TIME_grid_A4 override already accounts for the per-cell MAML budget).
+    if [[ "$RESOLVED_TEST_PROCEDURE" == "L2SO" && "$ABLATION" != "M0" && "$ABLATION" != "grid_A4" ]]; then
         TIME="23:00:00"
     fi
 
@@ -490,6 +499,32 @@ for ABLATION in "${ABLATIONS[@]}"; do
                     "grid_A2_k${K}_n${N}" \
                     "$SCRIPT_PATH" \
                     "$EVAL_OUT_BASE/grid_A2/k${K}_n${N}" \
+                    "$TIME" \
+                    "$MEM" \
+                    "$EFFECTIVE_PARTITION" \
+                    "--k-shot ${K} --n-way ${N}"
+            done
+        done
+
+    elif [[ "$ABLATION" == "grid_A4" ]]; then
+        # ── grid_A4 (A4/MAML+No-MoE): one job per (k_shot, n_way) cell ────────
+        # Uses hpo_test_split only — L2SO across 9 MAML cells is not feasible.
+        local_n_cells=$(( ${#GRID_K_SHOTS[@]} * ${#GRID_N_WAYS[@]} ))
+        echo ""
+        echo "##################################################"
+        echo "  Few-Shot Grid (A4/MAML No-MoE): ${local_n_cells} jobs"
+        echo "  k_shot: ${GRID_K_SHOTS[*]}"
+        echo "  n_way : ${GRID_N_WAYS[*]}"
+        echo "  Note  : (k=1, n=3) cell is identical to A4 (hpo_test_split) by construction."
+        echo "  Note  : hpo_test_split ONLY (L2SO not feasible for MAML grid)."
+        echo "  Time  : ${TIME} per cell  (set by TIME_grid_A4)"
+        echo "##################################################"
+        for K in "${GRID_K_SHOTS[@]}"; do
+            for N in "${GRID_N_WAYS[@]}"; do
+                submit_single_job \
+                    "grid_A4_k${K}_n${N}" \
+                    "$SCRIPT_PATH" \
+                    "$EVAL_OUT_BASE/grid_A4/k${K}_n${N}" \
                     "$TIME" \
                     "$MEM" \
                     "$EFFECTIVE_PARTITION" \
