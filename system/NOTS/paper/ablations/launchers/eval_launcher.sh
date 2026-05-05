@@ -125,8 +125,7 @@ elif [[ "$CLUSTER" == "RANGE" ]]; then
     DATA_DIR=/home/km82/pers-gest-cls/dataset/meta-learning-sup-que-ds
     EVAL_OUT_BASE=$SHARED_SCRATCH/$USER/runs/paper/ablations/eval
     LOG_DIR=$SHARED_SCRATCH/$USER/runs/paper/ablations/eval/logs
-    # !! UPDATE THIS: run `conda env list` on RANGE to get the full path to your env.
-    ENV_PATH=/home/km82/envs/FILL_IN_YOUR_ENV_NAME
+    ENV_PATH=/home/km82/envs/fl_torch
 
     # Module loading for RANGE (inside each job's wrap_body).
     # RANGE uses the same Mamba/23.11.0-0 version as NOTS.
