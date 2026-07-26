@@ -918,6 +918,32 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         r = self._get_routing_vector(x, demographics)
         w_hard, w_soft = self.gate(r)                              # each (B, E)
 
+        # ── Routing-source override (MoEMeta Port A diagnostic) ──────────────
+        # When `_forced_gate_weights` is set to a (E,) or (1, E) tensor, that
+        # single gate vector is applied to every sample in the batch instead of
+        # the per-sample routing computed above.
+        #
+        # This exists to test MoEMeta's central routing design in our regime:
+        # MoEMeta computes routing per SUPPORT item and consumes the result as
+        # one task-level object, so query samples are never routed. Setting this
+        # attribute to a support-derived gate vector reproduces that behaviour.
+        #
+        # Default is None, so this is inert unless explicitly set. It is a plain
+        # attribute rather than a parameter, which means it survives
+        # torch.func.functional_call in the MAML++ inner loop (functional_call
+        # substitutes parameters and buffers, not arbitrary attributes).
+        forced = getattr(self, "_forced_gate_weights", None)
+        if forced is not None:
+            fw = forced.to(device=w_hard.device, dtype=w_hard.dtype)
+            if fw.dim() == 1:
+                fw = fw.unsqueeze(0)
+            assert fw.shape[-1] == w_hard.shape[-1], (
+                f"_forced_gate_weights has {fw.shape[-1]} experts but the gate "
+                f"has {w_hard.shape[-1]}"
+            )
+            w_hard = fw.expand(w_hard.shape[0], -1)
+            w_soft = w_hard
+
         # 2. Expert CNNs
         expert_feats = [exp(x) for exp in self.expert_cnns]       # each (B, C, T')
         stacked = torch.stack(expert_feats, dim=1)                 # (B, E, C, T')

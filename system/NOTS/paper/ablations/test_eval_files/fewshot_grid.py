@@ -59,8 +59,16 @@ if torch.cuda.is_available():
 GRID_K_SHOTS = [1, 3, 5]
 GRID_N_WAYS  = [3, 5, 10]
 
-# q_query is held fixed across all grid cells (standard practice).
-# Changing k_shot does NOT change the number of query samples.
+# q_query as CONFIGURED. Note this is not the query count actually realised at
+# eval time: MetaGestureDataset._build_episode ignores q_query when
+# is_train=False and assigns every non-support trial to the query set. With 10
+# reps per class the realised per-class Q is therefore 10 - k_shot:
+#     k_shot=1 -> Q=9    k_shot=3 -> Q=7    k_shot=5 -> Q=5
+# This is why the reported std grows with k_shot at 10-way (a K=5 10-way episode
+# carries 50 query samples, not 90). It is disclosed rather than "fixed" because
+# changing it would move already-published numbers; set
+# config["q_query_eval_mode"]="fixed" if you deliberately want a capped Q.
+# Report the realised counts from MetaGestureDataset.episode_shape_log.
 Q_QUERY_FIXED = 9
 
 

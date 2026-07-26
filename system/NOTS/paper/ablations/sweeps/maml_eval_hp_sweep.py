@@ -199,7 +199,11 @@ def eval_one_config(
         tensor_dict,
         target_pids             = val_pids,
         target_gesture_classes  = eval_config["maml_gesture_classes"],
-        target_trial_indices    = eval_config["target_trial_indices"],
+        # NOTE: kwarg renamed target_trial_indices -> target_trial_reps in
+        # maml_data_pipeline.MetaGestureDataset; this call site was missed by that
+        # rename and raised TypeError. Lookup tolerates either config key name.
+        target_trial_reps    = eval_config.get("target_trial_reps",
+                                    eval_config.get("target_trial_indices")),
         n_way                   = eval_config["n_way"],
         k_shot                  = eval_config["k_shot"],
         q_query                 = eval_config.get("q_query", None),

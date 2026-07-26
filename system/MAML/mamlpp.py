@@ -22,16 +22,59 @@ from MOE.MOE_analysis import RoutingCollector, RoutingAnalyzer
 # -----------------------------
 # Functional execution helpers
 # -----------------------------
-def named_param_dict(module: nn.Module, *, require_grad_only: bool = True) -> OrderedDict:
-    """Extracts parameters for the inner loop, explicitly ignoring LSLR variables."""
+def named_param_dict(module: nn.Module, *, require_grad_only: bool = True,
+                     include_substrings=None) -> OrderedDict:
+    """Extracts parameters for the inner loop, explicitly ignoring LSLR variables.
+
+    include_substrings : optional list of substrings. When provided, ONLY
+        parameters whose name contains one of them are returned, i.e. only they
+        are adapted in the inner loop. Default None reproduces the previous
+        behaviour exactly.
+
+        This exists for the MoEMeta-style local-adaptation regime (Port B),
+        where the global expert bank is adapted by the OUTER loop but frozen
+        during per-task adaptation. Note this is deliberately NOT implemented
+        by setting requires_grad=False on the bank: the outer loop selects its
+        parameters via requires_grad (see the meta-optimizer construction
+        below), so freezing that way would stop the bank being meta-learned at
+        all -- a different and much weaker model than MoEMeta's.
+
+        Restricting here is the correct mechanism because
+        torch.func.functional_call falls back to the module's live parameters
+        for any name absent from the supplied dict. The frozen bank therefore
+        participates in the forward pass and stays in the autograd graph, so
+        outer-loop meta-gradients still reach it THROUGH the restricted inner
+        loop -- which is what "meta-trained through the restricted adaptation"
+        requires.
+    """
     params = OrderedDict()
     for name, p in module.named_parameters():
         if require_grad_only and not p.requires_grad:
             continue
         if name.startswith("_lslr.") or "._lslr." in name:
             continue
+        if include_substrings is not None and not any(s in name for s in include_substrings):
+            continue
         params[name] = p
     return params
+
+
+def inner_param_filter(config) -> "list | None":
+    """
+    Read the inner-loop parameter allowlist from config.
+
+    config["maml_inner_param_include"] : list[str] | None
+        None or absent -> adapt everything (default, unchanged behaviour).
+    """
+    inc = config.get("maml_inner_param_include", None) if config is not None else None
+    if inc is None:
+        return None
+    inc = list(inc)
+    assert len(inc) > 0, (
+        "maml_inner_param_include is an empty list, which would adapt nothing "
+        "in the inner loop. Use None to adapt everything."
+    )
+    return inc
 
 class FunctionalModel(nn.Module):
     """Wraps a base module so we can forward with arbitrary parameter sets via functional_call."""
@@ -298,7 +341,14 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
     track_alignment = bool(config.get("track_gradient_alignment", False))
 
     # LSLR Setup
-    temp_theta_for_lslr = named_param_dict(model, require_grad_only=True)
+    _inner_inc = inner_param_filter(config)
+    if _inner_inc is not None:
+        print(f"[mamlpp] RESTRICTED INNER LOOP: adapting only params matching {_inner_inc}")
+    # LSLR is built over the restricted set so there is one step-size per
+    # ACTUALLY-ADAPTED parameter; building it over all params would create
+    # learnable step sizes for parameters the inner loop never touches.
+    temp_theta_for_lslr = named_param_dict(model, require_grad_only=True,
+                                           include_substrings=_inner_inc)
     if use_lslr:
         if not hasattr(model, "_lslr") or getattr(model._lslr, "inner_steps", None) != N:
             model._lslr = PerParamPerStepLSLR(
@@ -322,7 +372,8 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
             if n_episodes % 100 == 0:
                 print(f"--- Episode {n_episodes}/{episodes_per_epoch} | Target Meta-Batch Size: {meta_batchsize} ---")
 
-            current_theta0 = named_param_dict(model, require_grad_only=True)
+            current_theta0 = named_param_dict(model, require_grad_only=True,
+                                              include_substrings=_inner_inc)
 
             # 1. Inner Loop
             thetaN, q_logits, q_labels, meta_loss_task = inner_loop_mamlpp(
@@ -931,7 +982,8 @@ def mamlpp_adapt(model, config, support_batch, *, use_lslr_at_eval=False):
     N_eval = int(config["maml_inner_steps_eval"])
 
     # Extract base weights and ensure they become decoupled leaf nodes
-    theta = named_param_dict(model, require_grad_only=True)
+    theta = named_param_dict(model, require_grad_only=True,
+                             include_substrings=inner_param_filter(config))
     theta = OrderedDict((n, p.detach().requires_grad_(True)) for n, p in theta.items())
 
     label_smooth = float(config["label_smooth"])

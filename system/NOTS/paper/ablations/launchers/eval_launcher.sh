@@ -174,6 +174,23 @@ elif [[ "$CLUSTER" == "RANGE" ]]; then
 fi
 STEPS_M0_ALPHA="0.005066"   # maml_alpha_init_eval from Trial 89 — fixed, no alpha sweep needed
 
+# portA reuses the same M0 checkpoint as the steps sweep.
+PORTA_CHECKPOINT="$STEPS_M0_CHECKPOINT"
+
+# A13 modality-ablation conditions. "both" is the control and must be run:
+# it is the only thing proving the masking harness did not change the pipeline.
+A13_CONDITIONS=(both emg_only imu_only)
+
+# A14 (ProtoNet) reuses the M0 checkpoint for its backbone-matched track.
+A14_CHECKPOINT="$STEPS_M0_CHECKPOINT"
+
+# A15 meta-training user sweep. N=24 is the control and should reproduce the
+# fixed-split M0 number. Endpoints N=1 and N=24 already exist in the paper.
+A15_N_USERS=(4 8 16 24)
+# Draws per N. Small N is high-variance in WHICH users are drawn, so >=3 seeds
+# below N=16 before any point is reported.
+A15_SUBSAMPLE_SEEDS="0 1 2"
+
 # A2: no checkpoint path needed — model is trained inline (~2 min).
 # ft_lr defaults to maml_alpha_init_eval in the sweep script (mirrors canonical A2).
 
@@ -222,10 +239,23 @@ ABLATION_SCRIPT[grid_A4]="fewshot_grid_A4.py"
 ABLATION_SCRIPT[steps_M0]="num_eval_steps_sweep.py"
 ABLATION_SCRIPT[steps_A2]="num_eval_steps_sweep.py"
 ABLATION_SCRIPT[steps_A11]="num_eval_steps_sweep.py"
+# ── Rebuttal additions ────────────────────────────────────────────────────────
+# A13   : modality ablation (masked EMG-only / IMU-only) -> 3 jobs, one per condition
+# A11b  : Kaifosh re-run with THEIR preprocessing + gain sweep (sweeps internally)
+# V7    : checkpoint parameter-count gate. Run this FIRST -- it can void A10/A11.
+# portA : MoEMeta support-derived routing, evaluated from an existing checkpoint
+ABLATION_SCRIPT[A13]="A13_modality_ablation.py"
+ABLATION_SCRIPT[A11b]="A11b_kaifosh_matched_preproc.py"
+ABLATION_SCRIPT[V7]="V7_checkpoint_param_count.py"
+ABLATION_SCRIPT[portA]="portA_support_routing.py"
+ABLATION_SCRIPT[portB]="portB_local_adaptation.py"
+ABLATION_SCRIPT[A14]="A14_protonet_baseline.py"
+ABLATION_SCRIPT[A15]="A15_metatrain_user_sweep.py"
+ABLATION_SCRIPT[desk]="desk_checks.py"
 
 # "all" expands to the standard ablation set only — grid and steps sweeps are opt-in.
 VALID_ABLATIONS=(M0 A1 A2 A3 A4 A5 A8 A11)
-ALL_TOKENS=(M0 A1 A2 A4 A5 A8 A11 grid_A2 grid_A4 steps_M0 steps_A2 steps_A11)  # for usage string
+ALL_TOKENS=(M0 A1 A2 A4 A5 A8 A11 grid_A2 grid_A4 steps_M0 steps_A2 steps_A11 A13 A11b V7 portA portB A14 A15 desk)  # for usage string
 
 # =============================================================================
 # Parse args
@@ -309,6 +339,22 @@ TIME_steps_A2="02:00:00";  MEM_steps_A2=16G
 TIME_steps_A11="03:00:00"; MEM_steps_A11=24G
 TIME_grid_A2="02:00:00";   MEM_grid_A2=16G   # supervised; same budget as A2
 TIME_grid_A4="20:00:00";   MEM_grid_A4=32G   # MAML; hpo_test_split only; H100/H200 will be faster than this
+# Rebuttal additions.
+# A13 trains a full MAML+MoE model per condition, so budget like M0 on the
+# fixed split. A11b does no training (frozen/finetuned pretrained backbone) but
+# sweeps 8 gains x 2 ft_modes = 16 evaluations in one job. V7 is a one-liner.
+# portA runs 2 regimes over the test episodes with no training.
+TIME_A13="20:00:00";       MEM_A13=32G
+TIME_A11b="08:00:00";      MEM_A11b=24G
+TIME_V7="00:15:00";        MEM_V7=16G
+TIME_portA="04:00:00";     MEM_portA=32G
+# portB trains one configuration (budget like A13/M0 fixed split). A14 is
+# evaluation-only over the test users. A15 trains one model per (N, seed), so it
+# is submitted as one job per sweep point. desk runs on CPU in seconds.
+TIME_portB="20:00:00";     MEM_portB=32G
+TIME_A14="03:00:00";       MEM_A14=32G
+TIME_A15="20:00:00";       MEM_A15=32G
+TIME_desk="00:10:00";      MEM_desk=8G
 # Uncomment and tune once you have wall-time data from HPO runs:
 # TIME_M0="08:00:00";   MEM_M0=32G
 # TIME_A3="05:00:00";   MEM_A3=24G
@@ -418,7 +464,17 @@ for ABLATION in "${ABLATIONS[@]}"; do
     # (since M0 is currently the only one set up to submit parallel fold jobs)
     # and EXCEPT grid_A4 (which is hardcoded to hpo_test_split internally;
     # its TIME_grid_A4 override already accounts for the per-cell MAML budget).
-    if [[ "$RESOLVED_TEST_PROCEDURE" == "L2SO" && "$ABLATION" != "M0" && "$ABLATION" != "grid_A4" ]]; then
+    #
+    # A13 / A11b / V7 / portA are also excluded: none of them is L2SO. A13 and
+    # portA are fixed-split by construction, A11b does no training, and V7 is a
+    # ~1 minute checkpoint inspection. Letting the bump apply would request 23h
+    # for a 15-minute job and queue it badly.
+    if [[ "$RESOLVED_TEST_PROCEDURE" == "L2SO" \
+          && "$ABLATION" != "M0"    && "$ABLATION" != "grid_A4" \
+          && "$ABLATION" != "A13"   && "$ABLATION" != "A11b" \
+          && "$ABLATION" != "V7"    && "$ABLATION" != "portA" \
+          && "$ABLATION" != "portB" && "$ABLATION" != "A14" \
+          && "$ABLATION" != "A15"   && "$ABLATION" != "desk" ]]; then
         TIME="23:00:00"
     fi
 
@@ -584,6 +640,154 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "$MEM" \
             "$EFFECTIVE_PARTITION" \
             "--ablation ${ABLATION}"
+
+    elif [[ "$ABLATION" == "A13" ]]; then
+        # ── A13: one job per modality condition (fixed split only) ────────────
+        echo ""
+        echo "##################################################"
+        echo "  A13 Modality Ablation: ${#A13_CONDITIONS[@]} jobs"
+        echo "  Conditions: ${A13_CONDITIONS[*]}"
+        echo "  Channels are MASKED, not removed -> parameter count identical"
+        echo "  across conditions. Fixed 24/4/4 split: compare against the"
+        echo "  fixed-split baseline (88.4%), NOT the L2SO headline (86.7%)."
+        echo "##################################################"
+        for COND in "${A13_CONDITIONS[@]}"; do
+            submit_single_job \
+                "A13_${COND}" \
+                "$SCRIPT_PATH" \
+                "$EVAL_OUT_BASE/A13/${COND}" \
+                "$TIME" \
+                "$MEM" \
+                "$EFFECTIVE_PARTITION" \
+                "--condition ${COND}"
+        done
+
+    elif [[ "$ABLATION" == "A11b" ]]; then
+        # ── A11b: Kaifosh re-run with their preprocessing; sweeps internally ──
+        echo ""
+        echo "##################################################"
+        echo "  A11b Kaifosh matched-preprocessing + gain sweep"
+        echo "  Run V7 FIRST -- if the checkpoint is ~60M this is void."
+        echo "##################################################"
+        submit_single_job \
+            "A11b" \
+            "$SCRIPT_PATH" \
+            "$EVAL_OUT_BASE/A11b" \
+            "$TIME" \
+            "$MEM" \
+            "$EFFECTIVE_PARTITION"
+
+    elif [[ "$ABLATION" == "V7" ]]; then
+        # ── V7: checkpoint parameter-count gate. Cheap; run before anything. ──
+        echo ""
+        echo "##################################################"
+        echo "  V7 checkpoint parameter count (gates A10/A11/A11b)"
+        echo "  PASS ~= 6.5M (gesture decoder, Fig. 2f)"
+        echo "  FAIL ~= 60M  (handwriting conformer, Fig. 2g)"
+        echo "##################################################"
+        submit_single_job \
+            "V7" \
+            "$SCRIPT_PATH" \
+            "$EVAL_OUT_BASE/V7" \
+            "$TIME" \
+            "$MEM" \
+            "$EFFECTIVE_PARTITION"
+
+    elif [[ "$ABLATION" == "portA" ]]; then
+        # ── portA: MoEMeta support-derived routing, no retraining ─────────────
+        if [[ ! -f "$PORTA_CHECKPOINT" ]]; then
+            echo "ERROR: portA checkpoint not found: $PORTA_CHECKPOINT"
+            echo "       Update STEPS_M0_CHECKPOINT / PORTA_CHECKPOINT for cluster '$CLUSTER'."
+            exit 1
+        fi
+        echo ""
+        echo "##################################################"
+        echo "  portA MoEMeta support-derived routing"
+        echo "  Checkpoint: $PORTA_CHECKPOINT"
+        echo "##################################################"
+        submit_single_job \
+            "portA" \
+            "$SCRIPT_PATH" \
+            "$EVAL_OUT_BASE/portA" \
+            "$TIME" \
+            "$MEM" \
+            "$EFFECTIVE_PARTITION" \
+            "--checkpoint $PORTA_CHECKPOINT"
+
+    elif [[ "$ABLATION" == "portB" ]]; then
+        # ── portB: MoEMeta-style local adaptation, meta-trained THROUGH the ──
+        # restricted inner loop. The eval-only-freeze variant is confounded and
+        # is deliberately not submitted here.
+        echo ""
+        echo "##################################################"
+        echo "  portB MoEMeta-style local adaptation (local_module=head)"
+        echo "  Meta-trained with the restricted inner loop, not frozen at eval."
+        echo "##################################################"
+        submit_single_job \
+            "portB" \
+            "$SCRIPT_PATH" \
+            "$EVAL_OUT_BASE/portB" \
+            "$TIME" \
+            "$MEM" \
+            "$EFFECTIVE_PARTITION" \
+            "--local-module head"
+
+    elif [[ "$ABLATION" == "A14" ]]; then
+        # ── A14: ProtoNet on the matched backbone ─────────────────────────────
+        if [[ ! -f "$A14_CHECKPOINT" ]]; then
+            echo "ERROR: A14 checkpoint not found: $A14_CHECKPOINT"
+            echo "       proto_encoded is the row that answers R1 W1 / R4 W2;"
+            echo "       without a checkpoint only the non-matched tracks run."
+            exit 1
+        fi
+        echo ""
+        echo "##################################################"
+        echo "  A14 Prototypical Networks (backbone-matched)"
+        echo "  Checkpoint: $A14_CHECKPOINT"
+        echo "##################################################"
+        submit_single_job \
+            "A14" \
+            "$SCRIPT_PATH" \
+            "$EVAL_OUT_BASE/A14" \
+            "$TIME" \
+            "$MEM" \
+            "$EFFECTIVE_PARTITION" \
+            "--checkpoint $A14_CHECKPOINT --n-way 3 --shots 1 3 5"
+
+    elif [[ "$ABLATION" == "A15" ]]; then
+        # ── A15: one job per meta-training-set size ───────────────────────────
+        echo ""
+        echo "##################################################"
+        echo "  A15 Meta-training user sweep: ${#A15_N_USERS[@]} jobs"
+        echo "  N values : ${A15_N_USERS[*]}"
+        echo "  Seeds/N  : $A15_SUBSAMPLE_SEEDS"
+        echo "  N=24 is the control and should reproduce fixed-split M0."
+        echo "##################################################"
+        for N in "${A15_N_USERS[@]}"; do
+            submit_single_job \
+                "A15_N${N}" \
+                "$SCRIPT_PATH" \
+                "$EVAL_OUT_BASE/A15/N${N}" \
+                "$TIME" \
+                "$MEM" \
+                "$EFFECTIVE_PARTITION" \
+                "--n-users ${N} --subsample-seeds $A15_SUBSAMPLE_SEEDS"
+        done
+
+    elif [[ "$ABLATION" == "desk" ]]; then
+        # ── desk: CPU-only checks producing the no-cluster FILL values ────────
+        echo ""
+        echo "##################################################"
+        echo "  desk_checks -- CPU only, seconds. Can also just be run on the"
+        echo "  login node: python desk_checks.py"
+        echo "##################################################"
+        submit_single_job \
+            "desk" \
+            "$SCRIPT_PATH" \
+            "$EVAL_OUT_BASE/desk" \
+            "$TIME" \
+            "$MEM" \
+            "$EFFECTIVE_PARTITION"
 
     elif [[ "$ABLATION" == "A10" || "$ABLATION" == "A11" || "$ABLATION" == "A12" ]]; then
         submit_single_job \

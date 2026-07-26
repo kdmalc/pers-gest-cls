@@ -810,7 +810,11 @@ def _objective_supervised(trial: optuna.Trial, config: dict) -> float:
         tensor_dict,
         target_pids            = config["val_PIDs"],
         target_gesture_classes = config["maml_gesture_classes"],
-        target_trial_indices   = config["target_trial_indices"],
+        # NOTE: kwarg renamed target_trial_indices -> target_trial_reps in
+        # maml_data_pipeline.MetaGestureDataset; this call site was missed by that
+        # rename and raised TypeError. Lookup tolerates either config key name.
+        target_trial_reps   = config.get("target_trial_reps",
+                                    config.get("target_trial_indices")),
         n_way                  = config["n_way"],
         k_shot                 = config["k_shot"],
         q_query                = config.get("q_query", None),
@@ -919,7 +923,11 @@ def _objective_a11(trial: optuna.Trial) -> float:
         tensor_dict,
         target_pids            = config["val_PIDs"],
         target_gesture_classes = config["maml_gesture_classes"],
-        target_trial_indices   = config["target_trial_indices"],
+        # NOTE: kwarg renamed target_trial_indices -> target_trial_reps in
+        # maml_data_pipeline.MetaGestureDataset; this call site was missed by that
+        # rename and raised TypeError. Lookup tolerates either config key name.
+        target_trial_reps   = config.get("target_trial_reps",
+                                    config.get("target_trial_indices")),
         n_way                  = config["n_way"],
         k_shot                 = config["k_shot"],
         q_query                = config.get("q_query", None),

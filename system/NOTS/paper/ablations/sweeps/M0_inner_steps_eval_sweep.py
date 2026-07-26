@@ -197,7 +197,11 @@ val_ds = MetaGestureDataset(
     tensor_dict,
     target_pids             = VAL_PIDS,
     target_gesture_classes  = config["maml_gesture_classes"],
-    target_trial_indices    = config["target_trial_indices"],
+    # NOTE: kwarg renamed target_trial_indices -> target_trial_reps in
+    # maml_data_pipeline.MetaGestureDataset; this call site was missed by that
+    # rename and raised TypeError. Lookup tolerates either config key name.
+    target_trial_reps    = config.get("target_trial_reps",
+                                config.get("target_trial_indices")),
     n_way                   = config["n_way"],
     k_shot                  = config["k_shot"],
     q_query                 = config["q_query"],

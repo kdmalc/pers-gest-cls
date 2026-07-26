@@ -63,6 +63,7 @@ Config keys consumed here:
 import os
 import torch
 import random
+import warnings
 import pickle
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
@@ -179,6 +180,9 @@ class MetaGestureDataset(Dataset):
         debug_five_episodes=False,
         debug_one_user_only=False,
         use_label_shuf_meta_aug=True,
+        modality_mask="both",
+        q_query_eval_mode="all_remaining",
+        strict_n_way=False,
     ):
         self.data = {pid: tensor_dict[pid] for pid in target_pids if pid in tensor_dict}
         self.pids = list(self.data.keys())
@@ -202,6 +206,45 @@ class MetaGestureDataset(Dataset):
         self.debug_five_episodes = debug_five_episodes
         self.debug_one_user_only = debug_one_user_only
         self.use_label_shuf_meta_aug = use_label_shuf_meta_aug
+
+        # ── Modality ablation ────────────────────────────────────────────────
+        # "both"      : unmodified (default; identical to pre-ablation behaviour)
+        # "emg_only"  : IMU channels zeroed
+        # "imu_only"  : EMG channels zeroed
+        #
+        # Channels are MASKED (zero-filled), not removed, so the model's input
+        # width and therefore its parameter count are unchanged. This keeps the
+        # parameter matching the paper relies on exact. The cost is that masked
+        # channels are dead capacity, so a masked unimodal run is NOT identical
+        # to a purpose-built unimodal model — disclose this when reporting.
+        assert modality_mask in ("both", "emg_only", "imu_only"), (
+            f"modality_mask must be 'both' | 'emg_only' | 'imu_only', got {modality_mask!r}"
+        )
+        self.modality_mask = modality_mask
+
+        # ── Query-count semantics at eval time ───────────────────────────────
+        # "all_remaining" : query = every trial not used as support  → Q = 10 - K
+        #                   (this is the historical behaviour: _build_episode
+        #                    ignores q_query entirely when is_train=False)
+        # "fixed"         : query = min(q_query, trials remaining)   → Q = 9 only
+        #                   when K=1; caps at the configured q_query otherwise
+        #
+        # These differ for every K > 1. The default preserves existing numbers;
+        # set "fixed" only if you intend to change what past results measured.
+        assert q_query_eval_mode in ("all_remaining", "fixed"), (
+            f"q_query_eval_mode must be 'all_remaining' | 'fixed', got {q_query_eval_mode!r}"
+        )
+        self.q_query_eval_mode = q_query_eval_mode
+
+        # If True, raise instead of silently dropping a class that has too few
+        # trials for k_shot + 1. Silent drops yield episodes with fewer than
+        # n_way classes and non-contiguous local labels, which is invisible in
+        # aggregate accuracy.
+        self.strict_n_way = strict_n_way
+
+        # Per-episode support/query counts, recorded so the realised Q can be
+        # reported rather than assumed. Populated by _build_episode.
+        self.episode_shape_log = []
 
         # ── Debug episode cache ──────────────────────────────────────────────
         self.debug_episodes = []
@@ -319,6 +362,30 @@ class MetaGestureDataset(Dataset):
                 )
                 self.val_episodes_cache.append(episode)
 
+    def _apply_modality_mask(self, emg, imu):
+        """
+        Zero-fill the ablated modality. Returns (emg, imu).
+
+        Returns a NEW zero tensor rather than writing into the slice, because
+        the slices are views onto the shared tensor_dict — zeroing in place
+        would permanently corrupt the dataset for every later episode.
+
+        The retained modality is returned unmodified (nothing ever writes to
+        it, so passing the view through is safe and avoids a copy).
+        """
+        if self.modality_mask == "both":
+            return emg, imu
+        if self.modality_mask == "emg_only":
+            return emg, (None if imu is None else torch.zeros_like(imu))
+        # imu_only
+        if imu is None:
+            raise ValueError(
+                "modality_mask='imu_only' requires IMU data, but this sample has "
+                "imu=None. Check that use_imu is True and the tensor_dict has an "
+                "'imu' entry for every user x class."
+            )
+        return torch.zeros_like(emg), imu
+
     def _build_episode(
         self,
         user_id: str,
@@ -352,32 +419,59 @@ class MetaGestureDataset(Dataset):
             trial_indices = self._available_trial_indices_for_class(user_id, class_label)
 
             if len(trial_indices) < self.k_shot + 1:
-                # Not enough trials for at least 1 support + 1 query; skip class.
-                # (Should not happen with a well-formed dataset and sane k_shot.)
+                # Not enough trials for at least 1 support + 1 query.
+                # Dropping the class silently produces an episode with fewer
+                # than n_way classes and a label_map whose local labels are no
+                # longer contiguous — invisible downstream, so make it loud.
+                msg = (
+                    f"[MetaGestureDataset] user={user_id} class={class_label} has "
+                    f"{len(trial_indices)} usable trials but k_shot={self.k_shot} "
+                    f"requires at least {self.k_shot + 1}. This class is being "
+                    f"dropped, so the episode will have fewer than n_way="
+                    f"{self.n_way} classes."
+                )
+                if self.strict_n_way:
+                    raise ValueError(msg)
+                warnings.warn(msg, RuntimeWarning)
                 continue
 
-            # Shuffle to randomise which trials become support vs query
+            # Shuffle to randomise which trials become support vs query.
+            # Support and query are then taken as DISJOINT slices of the same
+            # shuffled list, so no trial can appear in both.
             rng_instance.shuffle(trial_indices)
 
             sup_idx = trial_indices[: self.k_shot]
             if is_train and self.q_query is not None:
                 qry_idx = trial_indices[self.k_shot : self.k_shot + self.q_query]
+            elif self.q_query is not None and self.q_query_eval_mode == "fixed":
+                # Cap the query set at q_query even at eval time.
+                qry_idx = trial_indices[self.k_shot : self.k_shot + self.q_query]
             else:
-                # Eval or q_query=None: use all remaining trials for query
+                # Eval with "all_remaining" (default), or q_query=None:
+                # every trial not used as support becomes a query.
+                # NOTE: this makes the realised Q equal to (num_trials - k_shot),
+                # NOT the configured q_query. With 10 reps per class:
+                #   K=1 -> Q=9,  K=3 -> Q=7,  K=5 -> Q=5.
                 qry_idx = trial_indices[self.k_shot :]
 
             for idx in sup_idx:
+                emg_s, imu_s = self._apply_modality_mask(
+                    emg_all[idx], imu_all[idx] if imu_all is not None else None
+                )
                 support_samples.append({
-                    "emg":          emg_all[idx],                              # (T, C)
-                    "imu":          imu_all[idx] if imu_all is not None else None,
+                    "emg":          emg_s,                                     # (T, C)
+                    "imu":          imu_s,
                     "demo":         demo,
                     "label":        local_label,
                     "global_class": class_label,
                 })
             for idx in qry_idx:
+                emg_q, imu_q = self._apply_modality_mask(
+                    emg_all[idx], imu_all[idx] if imu_all is not None else None
+                )
                 query_samples.append({
-                    "emg":          emg_all[idx],                              # (T, C)
-                    "imu":          imu_all[idx] if imu_all is not None else None,
+                    "emg":          emg_q,                                     # (T, C)
+                    "imu":          imu_q,
                     "demo":         demo,
                     "label":        local_label,
                     "global_class": class_label,
@@ -386,6 +480,20 @@ class MetaGestureDataset(Dataset):
         # Shuffle so the model sees a random label order, not class-sequential
         rng_instance.shuffle(support_samples)
         rng_instance.shuffle(query_samples)
+
+        # Record the realised episode shape so the actual per-class query count
+        # can be reported instead of assumed. n_classes_realised < n_way means a
+        # class was dropped above.
+        n_classes_realised = len({s["global_class"] for s in support_samples})
+        self.episode_shape_log.append({
+            "user_id":            user_id,
+            "is_train":           is_train,
+            "n_classes_realised": n_classes_realised,
+            "n_support":          len(support_samples),
+            "n_query":            len(query_samples),
+            "q_per_class":        (len(query_samples) / n_classes_realised
+                                   if n_classes_realised else 0),
+        })
 
         return {
             "support":   support_samples,
@@ -493,6 +601,14 @@ def get_maml_dataloaders(config, tensor_dict_path):
     # 0-indexed tensor positions internally.
     target_trial_reps = config["target_trial_reps"]
 
+    # ── Modality ablation / query-count semantics (both default to no-ops) ────
+    modality_mask     = config.get("modality_mask", "both")
+    q_query_eval_mode = config.get("q_query_eval_mode", "all_remaining")
+    strict_n_way      = config.get("strict_n_way", False)
+    if modality_mask != "both":
+        print(f"[get_maml_dataloaders] MODALITY ABLATION: modality_mask={modality_mask} "
+              f"(channels are zero-masked, not removed; parameter count unchanged)")
+
     # ── Leakage check: train and val PIDs must be disjoint ────────────────────
     if config.get("subject_specific_model", False) is False:
         num_eval_episodes = config["num_eval_episodes"]
@@ -529,6 +645,9 @@ def get_maml_dataloaders(config, tensor_dict_path):
         debug_five_episodes     = config["debug_five_episodes"],
         debug_one_user_only     = config["debug_one_user_only"],
         use_label_shuf_meta_aug = use_label_shuf,
+        modality_mask           = modality_mask,
+        q_query_eval_mode       = q_query_eval_mode,
+        strict_n_way            = strict_n_way,
     )
 
     # Val uses train_PIDs in debug mode (to guarantee the same fixed episodes exist)
@@ -553,6 +672,9 @@ def get_maml_dataloaders(config, tensor_dict_path):
         debug_five_episodes     = config["debug_five_episodes"],
         debug_one_user_only     = config["debug_one_user_only"],
         use_label_shuf_meta_aug = use_label_shuf,
+        modality_mask           = modality_mask,
+        q_query_eval_mode       = q_query_eval_mode,
+        strict_n_way            = strict_n_way,
     )
 
     train_dl = DataLoader(
