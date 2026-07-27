@@ -100,6 +100,13 @@ if torch.cuda.is_available():
 
 def build_config(local_module: str, eval_only_freeze: bool) -> dict:
     config = make_base_config(ablation_id=f"portB_{local_module}")
+
+    # REQUIRED: get_maml_dataloaders reads config["seed"] directly and
+    # make_base_config does not set it (M0_full_model.py sets it explicitly at
+    # line 89). Omitting this raises KeyError: 'seed' at the dataloader build,
+    # i.e. AFTER model construction and any pre-flight checks have printed --
+    # which is why the mask verification passed and the job still died.
+    config["seed"] = FIXED_SEED
     config["test_procedure"] = "hpo_test_split"
 
     if not eval_only_freeze:

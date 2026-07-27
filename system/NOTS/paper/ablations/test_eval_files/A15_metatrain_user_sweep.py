@@ -80,6 +80,13 @@ def subsample_train_users(all_train_pids: list, n_users: int, subsample_seed: in
 
 def run_one(n_users: int, subsample_seed: int) -> dict:
     config = make_base_config(ablation_id=f"A15_N{n_users}_s{subsample_seed}")
+
+    # REQUIRED: get_maml_dataloaders reads config["seed"] directly and
+    # make_base_config does not set it (M0_full_model.py sets it explicitly at
+    # line 89). Omitting this raises KeyError: 'seed' at the dataloader build,
+    # i.e. AFTER model construction and any pre-flight checks have printed --
+    # which is why the mask verification passed and the job still died.
+    config["seed"] = FIXED_SEED
     config["test_procedure"] = "hpo_test_split"
     set_seeds(FIXED_SEED)
 

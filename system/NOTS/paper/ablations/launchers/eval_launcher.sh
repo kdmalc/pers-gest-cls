@@ -176,10 +176,9 @@ STEPS_M0_ALPHA="0.005066"   # maml_alpha_init_eval from Trial 89 — fixed, no a
 
 # portA reuses the same M0 checkpoint as the steps sweep.
 PORTA_CHECKPOINT="$STEPS_M0_CHECKPOINT"
-# portA n_way. 3-way sits at ~91% where a ceiling can mask a real difference;
-# 10-way sits near 68% and has headroom. Set to 10 to re-test the null with room
-# to move.
-PORTA_N_WAY=10
+# portA n_way. 3-way sits at ~91%, where a ceiling can mask a real difference.
+# 5-way is the compromise: more headroom than 3-way without the 10-way penalty.
+PORTA_N_WAY=5
 
 # A13 modality-ablation conditions. "both" is the control and must be run:
 # it is the only thing proving the masking harness did not change the pipeline.
@@ -187,6 +186,21 @@ A13_CONDITIONS=(both emg_only imu_only)
 
 # A14 (ProtoNet) reuses the M0 checkpoint for its backbone-matched track.
 A14_CHECKPOINT="$STEPS_M0_CHECKPOINT"
+# A14: one job per n_way, 1-SHOT ONLY.
+#
+# Multi-shot is not the deployment condition (re-enrolling several reps per
+# gesture is exactly the burden this work is trying to remove) and it is where
+# the task saturates: raw kNN hit 100.00% at 3- and 5-shot. Dropping to
+# --shots 1 removes those cells and cuts the job.
+#
+# Sweeping n_way rather than picking one is the defensible choice. At 1-shot
+# 3-way, raw kNN scored 87.04% +/- 14.34% against EncoderMoE's 88.4%: a tie on
+# 4 users, so 3-way alone cannot support a claim either way. Reporting the full
+# 3/5/10-way curve characterises WHERE nonparametric methods stop working, which
+# is what section 2 (L110-112) actually asserts -- and it cannot be read as
+# choosing the vocabulary size that flatters the model.
+A14_N_WAYS=(3 5 10)
+A14_SHOTS="1"
 
 # A15 meta-training user sweep. N=24 is the control and should reproduce the
 # fixed-split M0 number. Endpoints N=1 and N=24 already exist in the paper.
@@ -802,17 +816,20 @@ for ABLATION in "${ABLATIONS[@]}"; do
         fi
         echo ""
         echo "##################################################"
-        echo "  A14 Prototypical Networks (backbone-matched)"
+        echo "  A14 Prototypical Networks (backbone-matched): ${#A14_N_WAYS[@]} jobs"
+        echo "  n_way    : ${A14_N_WAYS[*]}   shots: $A14_SHOTS (1-shot only)"
         echo "  Checkpoint: $A14_CHECKPOINT"
         echo "##################################################"
-        submit_single_job \
-            "A14" \
-            "$SCRIPT_PATH" \
-            "$EVAL_OUT_BASE/A14" \
-            "$TIME" \
-            "$MEM" \
-            "$EFFECTIVE_PARTITION" \
-            "--checkpoint $A14_CHECKPOINT --n-way 3 --shots 1 3 5"
+        for NW in "${A14_N_WAYS[@]}"; do
+            submit_single_job \
+                "A14_n${NW}" \
+                "$SCRIPT_PATH" \
+                "$EVAL_OUT_BASE/A14/n${NW}" \
+                "$TIME" \
+                "$MEM" \
+                "$EFFECTIVE_PARTITION" \
+                "--checkpoint $A14_CHECKPOINT --n-way ${NW} --shots $A14_SHOTS"
+        done
 
     elif [[ "$ABLATION" == "A15" ]]; then
         # ── A15: one job per meta-training-set size ───────────────────────────

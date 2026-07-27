@@ -87,6 +87,13 @@ def build_config(condition: str) -> dict:
 
     config = make_base_config(ablation_id=f"A13_{condition}")
 
+    # REQUIRED: get_maml_dataloaders reads config["seed"] directly and
+    # make_base_config does not set it (M0_full_model.py sets it explicitly at
+    # line 89). Omitting this raises KeyError: 'seed' at the dataloader build,
+    # i.e. AFTER model construction and any pre-flight checks have printed --
+    # which is why the mask verification passed and the job still died.
+    config["seed"] = FIXED_SEED
+
     # The ablation-defining flag. Everything else inherits M0's HPO values.
     config["modality_mask"] = condition
 
