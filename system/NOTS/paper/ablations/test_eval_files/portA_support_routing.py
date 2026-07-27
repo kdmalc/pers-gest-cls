@@ -122,6 +122,43 @@ def support_gate_vector(model, config, support, renormalise: bool = True,
     return v.detach()
 
 
+def per_sample_diagnostics(model, config, batch_part) -> dict:
+    """
+    Entropy of the NORMAL per-sample gate weights.
+
+    This is the number that explains a null result. If per-sample routing is
+    itself close to uniform, then "route each sample" and "route once from the
+    support set" are both approximately "average the top-k experts equally", and
+    the two regimes are near-identical BY CONSTRUCTION rather than because the
+    routing source is unimportant.
+
+    Compared against ln(top_k), not ln(num_experts): with top-k gating only
+    top_k experts are ever active, so ln(num_experts) is unreachable and using it
+    makes routing look far more peaked than it is.
+    """
+    device = config["device"]
+    model.eval()
+    with torch.no_grad():
+        _, routing = model(
+            batch_part["emg"].to(device),
+            batch_part["imu"].to(device) if (config["use_imu"] and batch_part.get("imu") is not None) else None,
+            batch_part["demo"].to(device) if batch_part.get("demo") is not None else None,
+            return_routing=True,
+        )
+        W = routing["gate_weights"]                       # (B, E)
+        P = W / W.sum(dim=1, keepdim=True).clamp_min(1e-12)
+        ent = -(torch.where(P > 0, P * P.log(), torch.zeros_like(P))).sum(dim=1)
+        top_k = int(config.get("MOE_top_k", W.shape[1]))
+        ceil_topk = float(np.log(max(top_k, 2)))
+        return {
+            "entropy_mean":        float(ent.mean()),
+            "entropy_vs_topk_ceil": float(ent.mean()) / ceil_topk,
+            "max_weight_mean":     float(P.max(dim=1).values.mean()),
+            "n_active_mean":       float((W > 0).float().sum(dim=1).mean()),
+            "topk_entropy_ceiling": ceil_topk,
+        }
+
+
 def routing_diagnostics(v: torch.Tensor) -> dict:
     """Summarise a gate vector so the two regimes can be compared structurally."""
     p = v / v.sum().clamp_min(1e-12)
@@ -138,6 +175,16 @@ def routing_diagnostics(v: torch.Tensor) -> dict:
 def run(args) -> dict:
     config = make_base_config(ablation_id="portA")
     config["test_procedure"] = "hpo_test_split"
+
+    # With only 4 test users a paired test has almost no power, so allow the val
+    # users in as well. Legitimate here BECAUSE this is a paired within-episode
+    # diagnostic of a frozen checkpoint: both regimes see identical episodes and
+    # nothing is selected or tuned on these users. It would NOT be legitimate for
+    # a headline accuracy number, and the JSON records which users were used.
+    eval_pids = list(config["test_PIDs"])
+    if args.include_val_users:
+        eval_pids = list(config["val_PIDs"]) + eval_pids
+        print(f"[portA] including val users -> {len(eval_pids)} users total")
     if args.k_shot is not None:
         config["k_shot"] = args.k_shot
     if args.n_way is not None:
@@ -179,7 +226,7 @@ def run(args) -> dict:
 
     test_ds = MetaGestureDataset(
         tensor_dict,
-        target_pids             = config["test_PIDs"],
+        target_pids             = eval_pids,
         target_gesture_classes  = config["maml_gesture_classes"],
         target_trial_reps       = config["target_trial_reps"],
         n_way                   = config["n_way"],
@@ -194,11 +241,12 @@ def run(args) -> dict:
                          num_workers=4, collate_fn=maml_mm_collate)
 
     print(f"[portA] {config['n_way']}-way {config['k_shot']}-shot, "
-          f"{args.num_episodes} episodes/user over {len(config['test_PIDs'])} users")
+          f"{args.num_episodes} episodes/user over {len(eval_pids)} users: {eval_pids}")
 
     # ── Paired evaluation ────────────────────────────────────────────────────
     per_user = defaultdict(lambda: {"query_routed": [], "support_routed": []})
     diag_accum = []
+    persample_accum = []
 
     for ep_idx, batch in enumerate(test_dl):
         uid = batch["user_id"]
@@ -221,6 +269,8 @@ def run(args) -> dict:
         per_user[uid]["support_routed"].append(m2["acc"])
 
         diag_accum.append(routing_diagnostics(v))
+        if ep_idx < 50:      # bounded: enough for a stable mean, cheap
+            persample_accum.append(per_sample_diagnostics(model, config, query))
 
         if ep_idx < 3 or (ep_idx + 1) % 100 == 0:
             print(f"  [ep {ep_idx+1}] user={uid}  "
@@ -252,6 +302,26 @@ def run(args) -> dict:
     d_z = float(deltas.mean() / deltas.std(ddof=1)) if len(deltas) > 1 and deltas.std(ddof=1) > 0 else None
 
     diag_mean = {k: float(np.mean([d[k] for d in diag_accum])) for k in diag_accum[0]} if diag_accum else {}
+    persample_mean = ({k: float(np.mean([d[k] for d in persample_accum]))
+                      for k in persample_accum[0]} if persample_accum else {})
+
+    if persample_mean:
+        r = persample_mean["entropy_vs_topk_ceil"]
+        print(f"\n  Normal per-sample routing: entropy {persample_mean['entropy_mean']:.4f} "
+              f"= {r*100:.1f}% of the top-k ceiling "
+              f"({persample_mean['topk_entropy_ceiling']:.4f})")
+        print(f"  max gate weight (mean) {persample_mean['max_weight_mean']:.4f}, "
+              f"active experts {persample_mean['n_active_mean']:.2f}")
+        if r > 0.95:
+            print("  -> Per-sample routing is itself near-UNIFORM. That largely explains")
+            print("     any null: both regimes reduce to averaging the active experts")
+            print("     roughly equally, so the routing SOURCE cannot matter much. Treat")
+            print("     this as evidence about how much the gate specialises at all, and")
+            print("     check it before defending the section 4.6 specialisation claim.")
+        else:
+            print("  -> Per-sample routing is meaningfully peaked, so a null result is")
+            print("     NOT explained by uniform gating and is a real finding about the")
+            print("     routing source.")
 
     result = {
         "ablation_id":   "portA_support_routing",
@@ -274,6 +344,9 @@ def run(args) -> dict:
         "paired_p":            p_value,
         "cohens_d_z":          d_z,
         "forced_routing_diagnostics": diag_mean,
+        "per_sample_routing_diagnostics": persample_mean,
+        "eval_users": eval_pids,
+        "included_val_users": bool(args.include_val_users),
         "design_notes": [
             "Support gate vector computed from the PRE-adaptation model and held "
             "fixed through the inner loop and query evaluation.",
@@ -309,6 +382,9 @@ def main():
                     help="Episodes per test user (default matches the ablation suite).")
     ap.add_argument("--k-shot", type=int, default=None)
     ap.add_argument("--n-way", type=int, default=None)
+    ap.add_argument("--include-val-users", action="store_true",
+                    help="Evaluate on val+test users (8) instead of test only (4). "
+                         "Valid for this paired diagnostic; not for a headline number.")
     args = ap.parse_args()
 
     if not Path(args.checkpoint).exists():

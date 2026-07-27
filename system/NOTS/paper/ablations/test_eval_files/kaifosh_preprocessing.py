@@ -247,6 +247,87 @@ def summarise(t: torch.Tensor, mu: float = KAIFOSH_SQUASH_MU) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Module-level activation accumulator
+# ---------------------------------------------------------------------------
+#
+# WHY NOT A FORWARD HOOK.  The first version of this file registered a forward
+# hook on the model's `compression` module. It silently recorded nothing, and
+# every A11b row came back with "activations": {} and
+# valid_measurement: false.
+#
+# Cause: pretrain_finetune.finetune_and_eval_user does
+#     ft_model = copy.deepcopy(model)
+# once per episode. copy.deepcopy copies a module's _forward_hooks AND deep-copies
+# the hook callable's closure, so each episode got its own private copy of the
+# logger and appended into that copy's list. The original logger the runner held a
+# reference to was never touched.
+#
+# A module-level list is immune: module globals are not copied by deepcopy, so
+# every cloned model appends to this one list.
+#
+# Recording happens in KaifoshPreprocessedWrapper.forward rather than in a hook,
+# which is equivalent -- `pre` is exactly the tensor handed to their compression,
+# and `post` is reinhard(pre) -- and does not depend on hook survival.
+
+_ACT_RECORDS: list = []
+_ACT_MAX_RECORDS = 32          # cap: quantiles over (B,16,4300) are not free
+_ACT_SUBSAMPLE = 200_000       # elements sampled per tensor for the stats
+
+
+def reset_activations() -> None:
+    """Call before each condition, or stats bleed across gain settings."""
+    _ACT_RECORDS.clear()
+
+
+def record_activations(pre: torch.Tensor, mu: float = KAIFOSH_SQUASH_MU) -> None:
+    """Record pre/post-squash stats for one batch. Cheap and bounded."""
+    if len(_ACT_RECORDS) >= _ACT_MAX_RECORDS:
+        return
+    with torch.no_grad():
+        flat = pre.detach().float().flatten()
+        if flat.numel() > _ACT_SUBSAMPLE:
+            idx = torch.randint(0, flat.numel(), (_ACT_SUBSAMPLE,), device=flat.device)
+            flat = flat[idx]
+        _ACT_RECORDS.append({
+            "pre":  summarise(flat, mu=mu),
+            "post": summarise(reinhard(flat, mu=mu), mu=mu),
+        })
+
+
+def get_activation_summary() -> dict:
+    """Aggregate to the same shape CompressionActivationLogger.aggregate() returned."""
+    if not _ACT_RECORDS:
+        return {}
+    out = {}
+    for side in ("pre", "post"):
+        keys = _ACT_RECORDS[0][side].keys()
+        out[side] = {k: float(np.mean([r[side][k] for r in _ACT_RECORDS]))
+                     for k in keys}
+    out["n_batches"] = len(_ACT_RECORDS)
+    return out
+
+
+def report_activations(label: str = "") -> dict:
+    """Print the verdict for the accumulated stats. Returns the aggregate."""
+    agg = get_activation_summary()
+    if not agg:
+        print(f"[activations{' ' + label if label else ''}] NO BATCHES RECORDED -- "
+              f"the wrapper never called record_activations(). Check that "
+              f"KaifoshPreprocessedWrapper.forward is the forward actually used.")
+        return agg
+    pre, post = agg["pre"], agg["post"]
+    print(f"\n  --- compression activations {label} ({agg['n_batches']} batches) ---")
+    print(f"    PRE-squash   abs_mean={pre['abs_mean']:.4g}  "
+          f"abs_p99={pre['abs_p99']:.4g}  abs_max={pre['abs_max']:.4g}")
+    print(f"                 frac |x| > mu(32)  = {pre['frac_above_mu']:.4f}")
+    print(f"    POST-squash  abs_mean={post['abs_mean']:.4g}  "
+          f"abs_p99={post['abs_p99']:.4g}  abs_max={post['abs_max']:.4g}")
+    fair, why = classify_regime(agg)
+    print(f"    VERDICT: {'FAIR MEASUREMENT' if fair else 'NOT FAIR -- ' + str(why)}")
+    return agg
+
+
 class CompressionActivationLogger:
     """
     Forward hook on their `compression` module, recording input and output

@@ -94,14 +94,29 @@ from A10_A11_A12_meta_pretrained import (
     MetaEMGWrapper, build_config_meta, META_CHECKPOINT_PATH, EMG_2KHZ_PKL_PATH,
 )
 from kaifosh_preprocessing import (
-    apply_kaifosh_preprocessing, CompressionActivationLogger, classify_regime,
+    apply_kaifosh_preprocessing, classify_regime, record_activations,
+    reset_activations, report_activations, get_activation_summary,
     KAIFOSH_RESCALE_CONSTANT, DEFAULT_FS,
 )
 
 # Log-spaced gains bracketing plausible surface-EMG SNRs, plus the two
 # named conditions. "none" reproduces the published number and must stay in
 # the sweep so 62.1%/56.0% remain locatable.
-DEFAULT_GAINS = ["none", "literal", "noise_floor", 3.0, 10.0, 32.0, 100.0, 316.0]
+# (gain_mode, do_highpass). The first row is the AS-PUBLISHED control: no gain
+# AND no 40 Hz high-pass, i.e. exactly what produced 62.1% / 56.0%. Without it
+# the sweep has no anchor -- "none" WITH the high-pass is already a changed
+# pipeline and does not reproduce the published number.
+DEFAULT_CONDITIONS = [
+    ("none",        False),   # as published
+    ("none",        True),    # isolates the high-pass alone
+    ("literal",     True),
+    ("noise_floor", True),
+    (3.0,           True),
+    (10.0,          True),
+    (32.0,          True),
+    (100.0,         True),
+    (316.0,         True),
+]
 
 print(f"CUDA Available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
@@ -136,6 +151,12 @@ class KaifoshPreprocessedWrapper(MetaEMGWrapper):
             do_highpass=self.do_highpass,
             zero_phase=self.zero_phase,
         )
+        # x_emg is now exactly the tensor their internal compression receives.
+        # Recorded here rather than via a forward hook: finetune_and_eval_user
+        # deep-copies the model per episode, and deepcopy clones hooks together
+        # with their closures, so a hook-based logger records into throwaway
+        # copies and the caller sees nothing.
+        record_activations(x_emg)
         return super().forward(x_emg, x_imu, demographics)
 
 
@@ -145,11 +166,15 @@ def gain_label(g) -> str:
     return f"gain{g:g}"
 
 
-def run_one_condition(gain, ft_mode, args) -> dict:
+def run_one_condition(gain, do_highpass, ft_mode, args) -> dict:
     label = gain_label(gain)
+    if not do_highpass and label == "none":
+        label = "as_published"
     print(f"\n{'#'*70}")
-    print(f"# A11b  gain={label}  ft_mode={ft_mode}  highpass={not args.no_highpass}")
+    print(f"# A11b  gain={gain_label(gain)}  highpass={do_highpass}  ft_mode={ft_mode}")
+    print(f"#       condition label: {label}")
     print(f"{'#'*70}")
+    reset_activations()
 
     config = build_config_meta(ablation_id=f"A11b_{label}_{ft_mode}")
     config["test_procedure"] = "hpo_test_split"
@@ -159,7 +184,7 @@ def run_one_condition(gain, ft_mode, args) -> dict:
         META_CHECKPOINT_PATH,
         gain_mode=gain,
         fs=args.fs,
-        do_highpass=not args.no_highpass,
+        do_highpass=do_highpass,
         zero_phase=args.zero_phase,
         freeze_backbone=(ft_mode == "head_only"),
     )
@@ -173,19 +198,13 @@ def run_one_condition(gain, ft_mode, args) -> dict:
         print("       their discrete-gesture decoder. Run V7_checkpoint_param_count.py")
         print("       before trusting this row.")
 
-    # Attach the activation logger to their internal squash.
-    logger = CompressionActivationLogger(model.network.compression)
-
-    try:
-        test_results = run_supervised_test_eval(
-            model, config,
-            tensor_dict_path=EMG_2KHZ_PKL_PATH,
-            test_pids=config["test_PIDs"],
-            ft_mode=ft_mode,
-        )
-        activations = logger.report(label=f"gain={label}, ft={ft_mode}")
-    finally:
-        logger.remove()
+    test_results = run_supervised_test_eval(
+        model, config,
+        tensor_dict_path=EMG_2KHZ_PKL_PATH,
+        test_pids=config["test_PIDs"],
+        ft_mode=ft_mode,
+    )
+    activations = report_activations(label=f"{label}, ft={ft_mode}")
 
     # Flag conditions that are not fair measurements, so a number from a dead,
     # under-scaled or saturated network never gets quoted as their performance.
@@ -195,13 +214,15 @@ def run_one_condition(gain, ft_mode, args) -> dict:
 
     result = {
         "ablation_id":     f"A11b_{label}_{ft_mode}",
+        "is_as_published_control": (label == "as_published"),
         "description":     ("Kaifosh discrete-gesture decoder with their input pipeline "
                             "applied (gain + 40 Hz Butterworth HP); their mu=32 squash "
                             "is internal to the module."),
         "gain_mode":       label,
         "gain_value":      (None if isinstance(gain, str) else float(gain)),
         "literal_constant_used": (KAIFOSH_RESCALE_CONSTANT if gain == "literal" else None),
-        "highpass_applied": not args.no_highpass,
+        "condition_label": label,
+        "highpass_applied": do_highpass,
         "highpass_hz":     40.0,
         "highpass_order":  4,
         "highpass_zero_phase": args.zero_phase,
@@ -238,7 +259,9 @@ def main():
     ap = argparse.ArgumentParser(
         description="Kaifosh baseline re-run with their preprocessing + gain sweep.")
     ap.add_argument("--gains", nargs="+", default=None,
-                    help=f"Gain conditions. Default: {DEFAULT_GAINS}")
+                    help="Gain conditions. Each is run WITH the 40 Hz high-pass. "
+                         "Default runs the full DEFAULT_CONDITIONS list, which "
+                         "also includes the as-published (no gain, no HP) control.")
     ap.add_argument("--ft-modes", nargs="+", default=["head_only", "full"],
                     choices=["head_only", "full"])
     ap.add_argument("--fs", type=float, default=DEFAULT_FS)
@@ -249,21 +272,23 @@ def main():
                          "streaming, so causal (the default) is the faithful choice.")
     args = ap.parse_args()
 
-    gains = []
-    for g in (args.gains if args.gains is not None else DEFAULT_GAINS):
-        if isinstance(g, str) and g in ("none", "literal", "noise_floor"):
-            gains.append(g)
-        else:
-            gains.append(float(g))
+    if args.gains is not None:
+        conditions = []
+        for g in args.gains:
+            gv = g if (isinstance(g, str) and g in ("none", "literal", "noise_floor")) \
+                 else float(g)
+            conditions.append((gv, not args.no_highpass))
+    else:
+        conditions = list(DEFAULT_CONDITIONS)
 
     all_results = []
-    for gain in gains:
+    for gain, do_hp in conditions:
         for ft_mode in args.ft_modes:
             try:
-                all_results.append(run_one_condition(gain, ft_mode, args))
+                all_results.append(run_one_condition(gain, do_hp, ft_mode, args))
             except Exception as e:
-                print(f"[A11b] FAILED gain={gain_label(gain)} ft={ft_mode}: "
-                      f"{type(e).__name__}: {e}")
+                print(f"[A11b] FAILED gain={gain_label(gain)} hp={do_hp} "
+                      f"ft={ft_mode}: {type(e).__name__}: {e}")
                 all_results.append({
                     "gain_mode": gain_label(gain), "ft_mode": ft_mode,
                     "error": f"{type(e).__name__}: {e}",
@@ -284,7 +309,7 @@ def main():
             continue
         post = r.get("activations", {}).get("post", {})
         pre = r.get("activations", {}).get("pre", {})
-        print(f"{r['gain_mode']:>14}  {r['ft_mode']:>10}  "
+        print(f"{r.get('condition_label', r['gain_mode']):>14}  {r['ft_mode']:>10}  "
               f"{r['test_acc']*100:8.2f}%  "
               f"{post.get('abs_p99', float('nan')):11.4g}  "
               f"{pre.get('frac_above_mu_10', float('nan')):11.4g}  "

@@ -176,6 +176,10 @@ STEPS_M0_ALPHA="0.005066"   # maml_alpha_init_eval from Trial 89 — fixed, no a
 
 # portA reuses the same M0 checkpoint as the steps sweep.
 PORTA_CHECKPOINT="$STEPS_M0_CHECKPOINT"
+# portA n_way. 3-way sits at ~91% where a ceiling can mask a real difference;
+# 10-way sits near 68% and has headroom. Set to 10 to re-test the null with room
+# to move.
+PORTA_N_WAY=10
 
 # A13 modality-ablation conditions. "both" is the control and must be run:
 # it is the only thing proving the masking harness did not change the pipeline.
@@ -264,6 +268,9 @@ ABLATIONS=()
 DRY_RUN=false
 DEBUG=false
 OVERRIDE_PARTITION=""
+# Must be declared BEFORE the arg loop below, or --no-auto-debug is
+# parsed and then silently overwritten by a later default.
+AUTO_DEBUG=true
 TEST_PROCEDURE_ARG=""
 FT_MODE_ARG=""
 
@@ -275,6 +282,7 @@ while [[ $i -lt ${#args_array[@]} ]]; do
     case "$arg" in
         --dry-run)        DRY_RUN=true ;;
         --debug)          DEBUG=true ;;
+        --no-auto-debug)  AUTO_DEBUG=false ;;
         --test-procedure) i=$((i+1)); TEST_PROCEDURE_ARG="${args_array[$i]}" ;;
         --partition)      i=$((i+1)); OVERRIDE_PARTITION="${args_array[$i]}" ;;
         --ft-mode)        i=$((i+1)); FT_MODE_ARG="${args_array[$i]}" ;;
@@ -288,7 +296,7 @@ done
 
 if [[ ${#ABLATIONS[@]} -eq 0 ]]; then
     echo "ERROR: No ablations specified."
-    echo "Usage: bash eval_launcher.sh [$(IFS='|'; echo "${ALL_TOKENS[*]}")|all] [--dry-run] [--debug] [--cluster NOTS|RANGE] [--partition PARTITION] [--ft-mode head_only|full] [--test-procedure hpo_test_split|L2SO]"
+    echo "Usage: bash eval_launcher.sh [$(IFS='|'; echo "${ALL_TOKENS[*]}")|all] [--dry-run] [--debug] [--no-auto-debug] [--cluster NOTS|RANGE] [--partition PARTITION] [--ft-mode head_only|full] [--test-procedure hpo_test_split|L2SO]"
     echo "       'all' expands to: ${VALID_ABLATIONS[*]}  (grid and steps sweeps are opt-in, not included in 'all')"
     exit 1
 fi
@@ -316,6 +324,36 @@ done
 # Cluster defaults
 # =============================================================================
 PARTITION=commons
+
+# =============================================================================
+# Auto-route short jobs to the debug partition.
+#
+# Any job whose resolved TIME budget is <= AUTO_DEBUG_MAX_MIN minutes is sent to
+# the debug partition automatically, since a 10-minute job does not belong in a
+# queue sized for 20-hour training runs. Driven by the TIME_<token> overrides
+# above rather than a hand-maintained token list, so a job that later gets a
+# longer budget stops being auto-routed without anyone remembering to update it.
+#
+# Disable with --no-auto-debug. An explicit --partition always wins.
+# NOTE: check your debug partition actually has a GPU and allows this walltime:
+#   sinfo -p debug -o "%P %l %G %D"
+# If it has no GPU, every torch.cuda job routed there will fail on device setup.
+# =============================================================================
+AUTO_DEBUG_MAX_MIN=30
+
+time_to_minutes() {
+    # HH:MM:SS or MM:SS or MM -> whole minutes (floor). Returns 999999 if unparsable,
+    # so anything unexpected is treated as long and never auto-routed.
+    local t="$1"
+    local IFS=':'
+    read -r -a parts <<< "$t"
+    case ${#parts[@]} in
+        3) echo $(( 10#${parts[0]} * 60 + 10#${parts[1]} )) ;;
+        2) echo $(( 10#${parts[0]} )) ;;
+        1) echo $(( 10#${parts[0]} )) ;;
+        *) echo 999999 ;;
+    esac
+}
 CPUS=10
 MEM_DEFAULT=32G
 TIME_DEFAULT="12:00:00"
@@ -479,10 +517,32 @@ for ABLATION in "${ABLATIONS[@]}"; do
     fi
 
     EFFECTIVE_PARTITION="$PARTITION"
+
+    # --debug: force debug partition and a 15-minute cap for EVERY token.
+    # For training tokens this does not "pass" -- the job is killed at the wall
+    # clock. That is still a useful smoke test (imports, config, data load, model
+    # build, and for A13 the mask verification all happen first), but read the log
+    # rather than the exit status, and expect TIMEOUT/CANCELLED.
     if [[ "$DEBUG" == true ]]; then
         EFFECTIVE_PARTITION=debug
         TIME="00:15:00"
+        case "$ABLATION" in
+            A13|A15|portB|M0|A5|grid_A2|grid_A4|steps_A2)
+                echo "  NOTE: --debug on '$ABLATION', which TRAINS. It will be killed at"
+                echo "        00:15:00 rather than finishing. Useful as a smoke test;"
+                echo "        judge it from the log, not the exit status." ;;
+        esac
+    elif [[ "$AUTO_DEBUG" == true && -z "$OVERRIDE_PARTITION" ]]; then
+        # Auto-route genuinely short jobs. TIME is left alone -- only the queue changes.
+        _mins=$(time_to_minutes "$TIME")
+        if [[ "$_mins" -le "$AUTO_DEBUG_MAX_MIN" ]]; then
+            EFFECTIVE_PARTITION=debug
+            echo "  AUTO-DEBUG: '$ABLATION' budget ${TIME} (${_mins} min) <= ${AUTO_DEBUG_MAX_MIN} min"
+            echo "              -> debug partition. Override with --partition commons"
+            echo "              or disable globally with --no-auto-debug."
+        fi
     fi
+
     if [[ -n "$OVERRIDE_PARTITION" ]]; then
         EFFECTIVE_PARTITION="$OVERRIDE_PARTITION"
     fi
@@ -712,7 +772,7 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "$TIME" \
             "$MEM" \
             "$EFFECTIVE_PARTITION" \
-            "--checkpoint $PORTA_CHECKPOINT"
+            "--checkpoint $PORTA_CHECKPOINT --include-val-users --n-way $PORTA_N_WAY"
 
     elif [[ "$ABLATION" == "portB" ]]; then
         # ── portB: MoEMeta-style local adaptation, meta-trained THROUGH the ──
