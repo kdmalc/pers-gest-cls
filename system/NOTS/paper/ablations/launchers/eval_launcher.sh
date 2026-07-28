@@ -929,6 +929,14 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "$EFFECTIVE_PARTITION"
 
     elif [[ "$ABLATION" == "A10" || "$ABLATION" == "A11" || "$ABLATION" == "A12" ]]; then
+        # --test-procedure is forwarded. Without it the flag was accepted at the
+        # launcher and silently dropped here, so `A11 --test-procedure
+        # hpo_test_split` ran L2SO anyway. Same class of bug as --no-auto-debug.
+        #
+        # NOTE: these three run every L2SO fold SEQUENTIALLY in one job
+        # (_run_a11_l2so loops internally; only M0 fans folds out to separate
+        # jobs). 32 folds in one 23h wall clock is tight -- prefer
+        # --test-procedure hpo_test_split unless you have checked the budget.
         submit_single_job \
             "$ABLATION" \
             "$SCRIPT_PATH" \
@@ -936,7 +944,7 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "$TIME" \
             "$MEM" \
             "$EFFECTIVE_PARTITION" \
-            "--ablation ${ABLATION}"
+            "--ablation ${ABLATION} ${TEST_PROCEDURE_ARG:+--test-procedure ${TEST_PROCEDURE_ARG}}"
 
     elif [[ "$ABLATION" == "steps_M0" ]]; then
         # ── steps_M0: M0 (MAML) adaptation steps sweep (paper curve, no training) ──

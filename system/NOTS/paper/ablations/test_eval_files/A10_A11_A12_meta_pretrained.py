@@ -380,8 +380,13 @@ def build_l2so_folds(all_pids: list) -> list:
 # ── A10: prototypical zero-shot ───────────────────────────────────────────────
 # =============================================================================
 
-def run_a10():
+def run_a10(test_procedure_override: str = None):
     config         = build_config_meta(ablation_id="A10")
+    # CLI --test-procedure wins over the config default (L2SO).
+    # Needed for the fixed-split Kaifosh comparison: A10 must be
+    # evaluated on the same protocol as whatever it is placed beside.
+    if test_procedure_override is not None:
+        config["test_procedure"] = test_procedure_override
     test_procedure = config["test_procedure"]
 
     print("\nA10 CONFIG:")
@@ -508,8 +513,13 @@ def _run_a10_l2so(config, tensor_dict_path):
 # ── A11: Meta pretrained + 1-shot fine-tuning ─────────────────────────────────
 # =============================================================================
 
-def run_a11():
+def run_a11(test_procedure_override: str = None):
     config         = build_config_meta(ablation_id="A11")
+    # CLI --test-procedure wins over the config default (L2SO).
+    # Needed for the fixed-split Kaifosh comparison: A11 must be
+    # evaluated on the same protocol as whatever it is placed beside.
+    if test_procedure_override is not None:
+        config["test_procedure"] = test_procedure_override
     test_procedure = config["test_procedure"]
 
     print("\nA11 CONFIG:")
@@ -676,8 +686,13 @@ def build_config_a12() -> dict:
     return config
 
 
-def run_a12():
+def run_a12(test_procedure_override: str = None):
     config         = build_config_a12()
+    # CLI --test-procedure wins over the config default (L2SO).
+    # Needed for the fixed-split Kaifosh comparison: A12 must be
+    # evaluated on the same protocol as whatever it is placed beside.
+    if test_procedure_override is not None:
+        config["test_procedure"] = test_procedure_override
     test_procedure = config["test_procedure"]
 
     print("\nA12 CONFIG:")
@@ -858,14 +873,25 @@ def main():
         "--ablation", choices=["A10", "A11", "A12"], required=True,
         help="Which ablation to run.",
     )
+    parser.add_argument(
+        "--test-procedure", choices=["hpo_test_split", "L2SO"], default=None,
+        help=(
+            "Override config['test_procedure'] (default L2SO). "
+            "'hpo_test_split' = fixed 24/4/4 split, 4 held-out test subjects, "
+            "single run. Use this when the result is to be compared against "
+            "another fixed-split number (e.g. A13's modality cells). "
+            "'L2SO' = one fold per subject over all 32; note that A10/A11/A12 "
+            "run all folds SEQUENTIALLY inside one job, unlike M0."
+        ),
+    )
     args = parser.parse_args()
 
     if args.ablation == "A10":
-        run_a10()
+        run_a10(test_procedure_override=args.test_procedure)
     elif args.ablation == "A11":
-        run_a11()
+        run_a11(test_procedure_override=args.test_procedure)
     elif args.ablation == "A12":
-        run_a12()
+        run_a12(test_procedure_override=args.test_procedure)
 
 
 if __name__ == "__main__":

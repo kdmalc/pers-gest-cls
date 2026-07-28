@@ -963,13 +963,36 @@ def run_supervised_test_eval(model, config: dict, tensor_dict_path: str,
 # Save utilities
 # =============================================================================
 
-def save_results(results: dict, config: dict, tag: str = ""):
-    """Save results dict as JSON to RUN_DIR."""
+def save_results(results: dict, config: dict, tag: str = "",
+                 n_test_pids: int = None, n_folds: int = None):
+    """Save results dict as JSON to RUN_DIR.
+
+    Every JSON now carries a `protocol_check` block written by
+    `assert_protocol_consistent()`. This exists because the declared
+    `test_procedure` and the executed protocol have already diverged in shipped
+    results (the few-shot grid JSONs say "L2SO" while evaluating 4 fixed test
+    subjects). Auditing from `test_procedure` alone gives the wrong answer;
+    `protocol_check.effective_protocol` gives the right one.
+
+    n_test_pids / n_folds are optional overrides for callers that know the true
+    shape of the run — e.g. an L2SO driver that has already fanned out folds.
+    When omitted they are inferred from config["test_PIDs"].
+    """
     import json
     ablation_id = config["ablation_id"]
     ts          = config["timestamp"]
     fname       = f"{ablation_id}_{ts}{('_' + tag) if tag else ''}_results.json"
     fpath       = RUN_DIR / fname
+
+    # Stamp the real protocol alongside the declared one. Non-fatal by design:
+    # a mismatch is sometimes intentional, but it must never be silent.
+    if not isinstance(results, dict):
+        results = {"results": results}
+    results = dict(results)
+    results["protocol_check"] = assert_protocol_consistent(
+        config, n_test_pids=n_test_pids, n_folds=n_folds
+    )
+
     with open(fpath, "w") as f:
         json.dump(results, f, indent=2)
     print(f"[save_results] Saved to {fpath}")
