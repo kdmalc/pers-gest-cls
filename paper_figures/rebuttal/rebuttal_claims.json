@@ -97,10 +97,10 @@
   "probe_subj_chance": 0.03125,
   "probe_dis": 0.34319444444444447,
   "probe_dis_sd": 0.3713347369728774,
-  "probe_dis_chance": 0.16666666666666666,
+  "probe_dis_chance": 0.40625,
   "probe_kap": 0.34756944444444443,
   "probe_kap_sd": 0.30602157136231484,
-  "probe_kap_chance": 0.3333333333333333,
+  "probe_kap_chance": 0.46875,
   "probe_gest_wh": 0.32941139437851613,
   "probe_gest_chance_wh": 0.1,
   "probe_subj_wh": 0.5351851851851851,
@@ -111,10 +111,11 @@
   "probe_dis_chance_wh": 0.25,
   "probe_kap_wh": 0.18546296296296294,
   "probe_kap_sd_wh": 0.12821125479979836,
-  "probe_kap_chance_wh": 0.3333333333333333,
+  "probe_kap_chance_wh": 0.375,
   "adapt_cos_mean": 0.9948523607477868,
   "adapt_cos_min": 0.9784043057607391,
   "adapt_ov_mean": 8.3125,
   "adapt_dH": -0.008407354354858398,
-  "adapt_verdict": "adaptation materially moves the gate; report post-adaptation numbers only"
+  "adapt_mass_moved": 0.04312970127784865,
+  "adapt_verdict": "adaptation shifts the gate slightly and changes no conclusion (mean cosine 0.9949, 4.3% of gate mass relocated, mean top-k overlap 8.31/9)"
 }

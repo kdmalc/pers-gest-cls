@@ -1033,20 +1033,94 @@ def mamlpp_predict_with_params(model, adapted_params, batch, config):
     
     return logits, preds, labels, B
 
+_LEAK_CHECK_WARNED = set()
+
+
+def assert_no_support_query_leakage(support_batch, query_batch, config,
+                                    device=None, atol: float = 1e-5):
+    """Assert that no query sample is a duplicate of a support sample.
+
+    MODALITY AWARENESS -- READ BEFORE CHANGING
+    ------------------------------------------
+    The original version of this check compared ONLY the EMG block. That is a
+    latent false positive under A13's modality masking: `modality_mask="imu_only"`
+    zero-fills all 16 EMG channels, so every support EMG tensor equals every
+    query EMG tensor identically, `diffs` is 0 everywhere, and the assertion
+    fires on all N_query x N_support pairs. That is exactly what killed
+    `eval_A13_imu_only` (job 9917782) at the epoch-0 validation pass -- a masking
+    artifact, not a real leak. `both` and `emg_only` passed because EMG survives
+    in both.
+
+    The fix: compare every modality block present in the batch, and ignore any
+    block that is fully zeroed on BOTH sides (i.e. masked-out dead capacity,
+    which carries no identity information). A pair only counts as leaking if it
+    matches across all *informative* blocks. If every block is masked the check
+    cannot say anything and is skipped with one warning per condition.
+
+    Returns
+    -------
+    dict with keys: checked (bool), blocks_used (list[str]),
+    blocks_skipped (list[str]), n_pairs_flagged (int).
+    """
+    if device is None:
+        device = next(iter(query_batch.values())).device \
+            if isinstance(query_batch, dict) else None
+
+    candidate_keys = ("emg", "imu")
+    diffs = None
+    blocks_used, blocks_skipped = [], []
+
+    for key in candidate_keys:
+        s = support_batch.get(key)
+        q = query_batch.get(key)
+        if s is None or q is None:
+            continue
+        s = s.to(device).float()
+        q = q.to(device).float()
+
+        # A block that is identically zero on both sides is masked, not
+        # informative. Including it would make every pair look identical.
+        if float(s.abs().sum()) == 0.0 and float(q.abs().sum()) == 0.0:
+            blocks_skipped.append(key)
+            continue
+
+        # (N_query, N_support): max absolute deviation over (channels, time).
+        d = (q.unsqueeze(1) - s.unsqueeze(0)).abs().amax(dim=(-2, -1))
+        diffs = d if diffs is None else torch.maximum(diffs, d)
+        blocks_used.append(key)
+
+    if diffs is None:
+        tag = str(config.get("modality_mask", "unknown"))
+        if tag not in _LEAK_CHECK_WARNED:
+            _LEAK_CHECK_WARNED.add(tag)
+            print(f"[leak-check] SKIPPED: every modality block is zero-masked "
+                  f"(modality_mask={tag}). Support/query disjointness cannot be "
+                  f"verified from the tensors and must be argued from the sampler.")
+        return {"checked": False, "blocks_used": [], "blocks_skipped": blocks_skipped,
+                "n_pairs_flagged": 0}
+
+    leaking_pairs = (diffs < atol).nonzero(as_tuple=False)
+    n_flagged = int(leaking_pairs.numel() // 2)
+    assert leaking_pairs.numel() == 0, (
+        f"Support/query leakage! {n_flagged} (query, support) pair(s) match to "
+        f"within {atol} across blocks {blocks_used} "
+        f"(skipped as fully masked: {blocks_skipped}). "
+        f"First 10 pairs: {leaking_pairs[:10].tolist()}"
+    )
+    return {"checked": True, "blocks_used": blocks_used,
+            "blocks_skipped": blocks_skipped, "n_pairs_flagged": 0}
+
+
 def mamlpp_adapt_and_eval(model, config, support_batch, query_batch, debug=False):
     pre_adapt_acc = None
 
     if debug:
         device = next(model.parameters()).device
         multimodal = config["use_imu"]
-        q_emg    = query_batch["emg"].to(device)
         q_labels = query_batch["labels"].to(device)
-        s_emg    = support_batch["emg"].to(device)
 
-        diffs = (q_emg.float().unsqueeze(1) - s_emg.float().unsqueeze(0)).abs().amax(dim=(-2, -1))
-        leaking_pairs = (diffs < 1e-5).nonzero(as_tuple=False)
-        assert leaking_pairs.numel() == 0, \
-            f"Support/query leakage! Pairs: {leaking_pairs.tolist()}"
+        assert_no_support_query_leakage(support_batch, query_batch, config,
+                                        device=device)
 
         model.eval()
         with torch.no_grad():

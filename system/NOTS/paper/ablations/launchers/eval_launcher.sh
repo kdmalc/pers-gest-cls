@@ -183,6 +183,24 @@ PORTA_N_WAY=5
 # A13 modality-ablation conditions. "both" is the control and must be run:
 # it is the only thing proving the masking harness did not change the pipeline.
 A13_CONDITIONS=(both emg_only imu_only)
+#
+# A13 vocabulary sizes. The first A13 batch ran 1-shot 3-way ONLY, which is a
+# poor place to test a fusion claim:
+#   - 3-way sits near ceiling (both=87.6%, emg_only=88.7%), so a real modality
+#     difference can hide inside the run-to-run spread;
+#   - the fixed-split same-config spread is ~3 points (88.46 / 87.58 / 90.68 for
+#     three runs of the identical config), which is larger than the EMG-vs-fused
+#     delta we measured, so 3-way cannot resolve it at all;
+#   - raw kNN already scores 87% at 3-way, i.e. the condition is close to
+#     saturated for any method.
+# 5- and 10-way open up headroom and show WHERE each modality stops carrying the
+# task. 10-way is also the deployment vocabulary, which is what R2 W1 asks about.
+#
+# NOTE: 1-way is not a valid option. With one class the label is constant,
+# chance accuracy is 100%, and the metric is undefined as a discrimination test.
+# The minimum meaningful setting is 2-way; 3-way is the paper's headline.
+A13_N_WAYS=(3 5 10)
+A13_K_SHOT=1
 
 # A14 (ProtoNet) reuses the M0 checkpoint for its backbone-matched track.
 A14_CHECKPOINT="$STEPS_M0_CHECKPOINT"
@@ -456,9 +474,33 @@ which python
 python -c "import torch; print(f'PyTorch: {torch.__version__}  CUDA: {torch.version.cuda}  GPU: {torch.cuda.is_available()}')"
 nvidia-smi || true
 
+# ---------------------------------------------------------------------------
+# EXIT CODE PROPAGATION -- do not "simplify" this.
+#
+# Previously this block was:
+#     python -u \$script_path \$extra_args
+#     echo "JOB_END date=\$(date)"
+# The trailing echo always succeeds, so the wrap script's exit status was the
+# echo's (0) and NOT Python's. Slurm therefore recorded COMPLETED / ExitCode 0:0
+# for jobs that had died on a traceback -- e.g. eval_portA (9917771, state-dict
+# shape mismatch, "COMPLETED" in 6 s) and eval_A13_imu_only (9917782, assertion
+# failure, "COMPLETED" in 11 s). sacct became unusable as a success signal.
+#
+# Capture the status, print it, and exit with it so sacct/squeue tell the truth.
+# ---------------------------------------------------------------------------
+set +e
 python -u $script_path $extra_args
+PY_RC=\$?
+set -e
 
-echo "JOB_END date=\$(date)"
+echo "PYTHON_EXIT_CODE=\${PY_RC}"
+echo "JOB_END date=\$(date) rc=\${PY_RC}"
+
+if [[ \${PY_RC} -ne 0 ]]; then
+    echo "JOB_FAILED: python exited \${PY_RC} -- this job did NOT produce valid results."
+fi
+
+exit \${PY_RC}
 WRAPEOF
 )
 
@@ -716,25 +758,45 @@ for ABLATION in "${ABLATIONS[@]}"; do
             "--ablation ${ABLATION}"
 
     elif [[ "$ABLATION" == "A13" ]]; then
-        # ── A13: one job per modality condition (fixed split only) ────────────
+        # ── A13: one job per (modality condition x n_way) cell ─────────────────
+        # 3-way 1-shot alone is a weak place to test fusion: it sits near
+        # ceiling (~88%) where a real EMG/IMU difference can hide, and raw kNN
+        # already reaches 87% there. Sweeping n_way shows WHERE each modality
+        # stops carrying the task, which is the actual reviewer question.
+        _n_a13_jobs=$(( ${#A13_CONDITIONS[@]} * ${#A13_N_WAYS[@]} ))
         echo ""
         echo "##################################################"
-        echo "  A13 Modality Ablation: ${#A13_CONDITIONS[@]} jobs"
+        echo "  A13 Modality Ablation: ${_n_a13_jobs} jobs"
         echo "  Conditions: ${A13_CONDITIONS[*]}"
+        echo "  n_way     : ${A13_N_WAYS[*]}   k_shot: $A13_K_SHOT"
+        echo "  'both' is the CONTROL and must be run at every n_way -- it is"
+        echo "  the only thing proving the masking harness is inert."
         echo "  Channels are MASKED, not removed -> parameter count identical"
         echo "  across conditions. Fixed 24/4/4 split: compare against the"
-        echo "  fixed-split baseline (88.4%), NOT the L2SO headline (86.7%)."
+        echo "  fixed-split baseline, NOT the L2SO headline."
         echo "##################################################"
         for COND in "${A13_CONDITIONS[@]}"; do
-            submit_single_job \
-                "A13_${COND}" \
-                "$SCRIPT_PATH" \
-                "$EVAL_OUT_BASE/A13/${COND}" \
-                "$TIME" \
-                "$MEM" \
-                "$EFFECTIVE_PARTITION" \
-                "--condition ${COND}"
+            for NW in "${A13_N_WAYS[@]}"; do
+                if [[ "$NW" == "${A13_N_WAYS[0]}" && ${#A13_N_WAYS[@]} -eq 1 ]]; then
+                    # Single-n_way run keeps the original flat output layout so
+                    # existing collection scripts and JSON paths still resolve.
+                    _a13_out="$EVAL_OUT_BASE/A13/${COND}"
+                    _a13_tag="A13_${COND}"
+                else
+                    _a13_out="$EVAL_OUT_BASE/A13/${COND}/n${NW}"
+                    _a13_tag="A13_${COND}_n${NW}"
+                fi
+                submit_single_job \
+                    "$_a13_tag" \
+                    "$SCRIPT_PATH" \
+                    "$_a13_out" \
+                    "$TIME" \
+                    "$MEM" \
+                    "$EFFECTIVE_PARTITION" \
+                    "--condition ${COND} --n-way ${NW} --k-shot $A13_K_SHOT"
+            done
         done
+        unset _n_a13_jobs _a13_out _a13_tag
 
     elif [[ "$ABLATION" == "A11b" ]]; then
         # ── A11b: Kaifosh re-run with their preprocessing; sweeps internally ──
@@ -936,4 +998,24 @@ echo "  squeue -u \$USER"
 echo ""
 echo "Log locations:"
 echo "  $LOG_DIR/eval_<ID>_<jobid>.out"
+echo ""
+echo "=============================================================="
+echo " AUDIT AFTER THE JOBS LAND -- do not trust sacct alone."
+echo ""
+echo " Jobs submitted before the exit-code fix reported COMPLETED 0:0"
+echo " even when Python died on a traceback. New jobs propagate the"
+echo " real status, but the logs remain the authoritative record:"
+echo ""
+echo "   # any job whose python call failed"
+echo "   grep -l 'JOB_FAILED\\|Traceback' $LOG_DIR/*.out"
+echo ""
+echo "   # any job that never reached the end of the wrap script"
+echo "   grep -L 'JOB_END' $LOG_DIR/*.out"
+echo ""
+echo "   # exit codes at a glance"
+echo "   grep -H 'PYTHON_EXIT_CODE' $LOG_DIR/*.out | grep -v '=0$'"
+echo ""
+echo "   # suspiciously fast finishes (crash-in-seconds signature)"
+echo "   sacct -X --format=JobID,JobName%22,State,ExitCode,Elapsed"
+echo "=============================================================="
 echo ""

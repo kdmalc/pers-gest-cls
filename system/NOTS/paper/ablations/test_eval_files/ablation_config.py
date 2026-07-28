@@ -159,6 +159,13 @@ def make_base_config(ablation_id: str) -> dict:
     # DEFAULT is L2SO for all final ablation results.
     # 'hpo_test_split' is only for development/debugging — HPO was run on that
     # split, so using it for ablation comparison conflates HPO with ablation effects.
+    #
+    # WARNING FOR ANYONE AUDITING A RESULTS JSON: this field records the config
+    # DEFAULT, not necessarily what the script executed. fewshot_grid.py and
+    # fewshot_grid_A2.py both wrote "test_procedure": "L2SO" into their snapshots
+    # while evaluating the fixed 4-user split (test_PIDs = P004, P104, P105,
+    # P121). Establish protocol from test_PIDs / fold count, never from this key.
+    # `assert_protocol_consistent()` below makes the mismatch loud.
     config["test_procedure"] = "L2SO"
 
     # ── Input dimensions (FIXED per spec) ─────────────────────────────────────
@@ -178,6 +185,15 @@ def make_base_config(ablation_id: str) -> dict:
     # "disability_coding_No_Disability", "disability_coding_PN", "disability_coding_SCI", "disability_coding_other", "handedness_Left",
     # "handedness_Right", "gender_Man", "gender_Non-binary", "gender_Woman",
     #]
+
+    # ── Seed ──────────────────────────────────────────────────────────────────
+    # Set HERE, not in each ablation script. get_maml_dataloaders reads
+    # config["seed"] directly, and scripts that forgot to set it died with
+    # KeyError: 'seed' at the dataloader build -- i.e. AFTER model construction
+    # and after their pre-flight checks had already printed PASS (A13, A15 and
+    # portB all lost jobs this way). Ablations that genuinely need a different
+    # seed override it explicitly; nothing has to remember to add it.
+    config["seed"] = FIXED_SEED
 
     # ── Task setup ────────────────────────────────────────────────────────────
     config["n_way"]      = 3    # eval/finetuning: 3-way classification
@@ -714,12 +730,109 @@ def replace_head_for_eval(model: torch.nn.Module, config: dict) -> torch.nn.Modu
 # Seed / reproducibility helpers
 # =============================================================================
 
-def set_seeds(seed: int):
+def set_seeds(seed: int, strict_determinism: bool = False):
+    """Seed every RNG this pipeline touches.
+
+    NOT SUFFICIENT ON ITS OWN -- READ THIS
+    --------------------------------------
+    Seeding pins the RNG *stream*; it does not pin the *order in which the stream
+    is consumed*. Anything that changes the sequence of sampling calls -- most
+    notably the order of config["train_PIDs"] -- produces a different trajectory
+    from the same seed. Three runs of the nominally identical fixed-split 3-way
+    1-shot config have returned 88.46% / 87.58% / 90.68%, and the only visible
+    difference was PID ordering (A15 sorted its list, the grid did not).
+
+    So: treat ~3 points as the fixed-split same-config band until proven
+    otherwise, and do not build an argument on a fixed-split delta smaller than
+    that. See A15_metatrain_user_sweep.subsample_train_users for the ordering fix
+    and --vary-training-seed for how to measure the band directly.
+
+    `strict_determinism=True` additionally requests deterministic kernels. It is
+    off by default because it raises on ops with no deterministic implementation
+    and can slow training substantially -- turn it on for reproducibility
+    experiments, not for production sweeps.
+    """
+    os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+    if strict_determinism:
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        try:
+            torch.use_deterministic_algorithms(True, warn_only=True)
+            print(f"[set_seeds] strict determinism ON (seed={seed})")
+        except Exception as exc:
+            print(f"[set_seeds] could not enable deterministic algorithms: {exc}")
+
+
+def assert_protocol_consistent(config: dict, n_test_pids: int = None,
+                               n_folds: int = None) -> dict:
+    """Cross-check config["test_procedure"] against what the run is actually doing.
+
+    Exists because the label and the behaviour have already diverged in shipped
+    results: the few-shot grid JSONs record "L2SO" while evaluating 4 fixed test
+    subjects. Anyone auditing those files from the config key alone concludes the
+    wrong protocol, which is very likely what confused the meta-reviewer about
+    the 86.7% / 88.4% pair.
+
+    Call this right before saving results. It does not raise -- a mismatch is
+    sometimes intentional -- but it prints loudly and returns a record that
+    save_results can embed, so the JSON carries the truth alongside the label.
+    """
+    declared = str(config.get("test_procedure", "unknown"))
+    test_pids = list(config.get("test_PIDs", []))
+    if n_test_pids is None:
+        n_test_pids = len(test_pids)
+
+    if declared == "L2SO":
+        expected = "one test subject per fold, 32 folds over all subjects"
+        looks_right = (n_test_pids == 1) or (n_folds is not None and n_folds >= 32)
+    elif declared == "hpo_test_split":
+        expected = "fixed 24/4/4 split, 4 held-out test subjects"
+        looks_right = n_test_pids == 4
+    else:
+        expected, looks_right = "unrecognised", True
+
+    record = {
+        "declared_test_procedure": declared,
+        "expected_shape": expected,
+        "n_test_pids_observed": n_test_pids,
+        "n_folds_observed": n_folds,
+        "consistent": bool(looks_right),
+        "effective_protocol": (declared if looks_right else
+                               ("hpo_test_split" if n_test_pids == 4 else "unknown")),
+    }
+
+    if not looks_right:
+        print("\n" + "!" * 72)
+        print(f"[protocol] MISMATCH: test_procedure says '{declared}' "
+              f"({expected}) but this run has {n_test_pids} test subject(s)"
+              + (f" and {n_folds} fold(s)" if n_folds is not None else "") + ".")
+        print(f"[protocol] Effective protocol is '{record['effective_protocol']}'. "
+              f"Caption and filename must say so.")
+        print(f"[protocol] test_PIDs = {test_pids}")
+        print("!" * 72 + "\n")
+    else:
+        print(f"[protocol] OK: '{declared}' with {n_test_pids} test subject(s).")
+    return record
+
+
+def seed_worker(worker_id: int):
+    """DataLoader worker_init_fn. Pass alongside a seeded generator:
+
+        g = torch.Generator(); g.manual_seed(config["seed"])
+        DataLoader(..., worker_init_fn=seed_worker, generator=g)
+
+    Without this, each worker inherits a base seed derived from the parent's RNG
+    state at loader-construction time, so worker sampling is not reproducible
+    across runs that reach loader construction in a different RNG state.
+    """
+    worker_seed = torch.initial_seed() % 2 ** 32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 
 # =============================================================================

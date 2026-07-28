@@ -172,6 +172,82 @@ def routing_diagnostics(v: torch.Tensor) -> dict:
     }
 
 
+def load_state_dict_shape_safe(model, state: dict, verbose: bool = True) -> dict:
+    """Load a checkpoint, dropping entries whose shape does not match the model.
+
+    WHY THIS EXISTS
+    ---------------
+    `load_state_dict(..., strict=False)` tolerates missing and unexpected KEYS
+    but still raises on a SHAPE mismatch. portA builds the model at
+    `config["n_way"]`, so running it at 5-way against the 3-way M0 checkpoint
+    raised:
+
+        RuntimeError: size mismatch for head.3.weight:
+          copying a param with shape torch.Size([3, 64]) from checkpoint,
+          the shape in current model is torch.Size([5, 64]).
+
+    and job 9917771 died in 6 s while Slurm recorded COMPLETED 0:0.
+
+    Dropping the classifier head is sound here, and specifically sound for what
+    portA measures. The head is inside the MAML inner loop: it is adapted from
+    the support set on every episode regardless, and `replace_head_for_eval()`
+    already discards the pretrained head in the normal eval path. More
+    importantly, portA is a PAIRED within-episode contrast of two routing
+    sources -- both regimes share whatever head this model starts from, so a
+    freshly-initialised head shifts both arms equally and leaves the contrast
+    intact. It does lower the absolute accuracy, which is why the returned
+    report is written into the results JSON: the absolute number from a
+    head-reinitialised run must not be quoted as an accuracy result.
+
+    Trunk and MoE weights (the parameters routing actually depends on) load
+    normally, because their shapes do not depend on n_way.
+    """
+    model_sd = model.state_dict()
+    filtered, shape_mismatched = {}, []
+    for k, v in state.items():
+        if k in model_sd and hasattr(v, "shape") and v.shape != model_sd[k].shape:
+            shape_mismatched.append((k, tuple(v.shape), tuple(model_sd[k].shape)))
+            continue
+        filtered[k] = v
+
+    missing, unexpected = model.load_state_dict(filtered, strict=False)
+
+    if verbose:
+        if shape_mismatched:
+            print(f"[portA] DROPPED {len(shape_mismatched)} shape-mismatched "
+                  f"tensor(s) -- these keep their freshly-initialised values:")
+            for k, ck, mk in shape_mismatched:
+                print(f"          {k}: checkpoint {ck} vs model {mk}")
+            heads = [k for k, _, _ in shape_mismatched if "head" in k]
+            if heads and len(heads) == len(shape_mismatched):
+                print("        All mismatches are in the classifier head, which "
+                      "the inner loop re-adapts per episode. The paired routing "
+                      "contrast is unaffected; the ABSOLUTE accuracy is not "
+                      "comparable to a matched-n_way run.")
+            else:
+                raise RuntimeError(
+                    "Shape mismatches outside the classifier head: "
+                    f"{[k for k, _, _ in shape_mismatched if 'head' not in k]}. "
+                    "These are trunk/MoE weights and dropping them would "
+                    "invalidate the routing comparison. Refusing to continue."
+                )
+        if missing or unexpected:
+            print(f"[portA] load_state_dict: {len(missing)} missing, "
+                  f"{len(unexpected)} unexpected keys")
+            print(f"        missing[:5]={list(missing)[:5]}")
+            print(f"        unexpected[:5]={list(unexpected)[:5]}")
+
+    return {
+        "shape_mismatched_dropped": [
+            {"key": k, "checkpoint_shape": list(ck), "model_shape": list(mk)}
+            for k, ck, mk in shape_mismatched
+        ],
+        "head_reinitialised": bool(shape_mismatched),
+        "n_missing": len(missing),
+        "n_unexpected": len(unexpected),
+    }
+
+
 def run(args) -> dict:
     config = make_base_config(ablation_id="portA")
     config["test_procedure"] = "hpo_test_split"
@@ -197,12 +273,7 @@ def run(args) -> dict:
     model = build_maml_moe_model(config)
     ckpt = torch.load(args.checkpoint, map_location=device)
     state = ckpt.get("model_state_dict", ckpt.get("best_state", ckpt))
-    missing, unexpected = model.load_state_dict(state, strict=False)
-    if missing or unexpected:
-        print(f"[portA] WARNING load_state_dict: {len(missing)} missing, "
-              f"{len(unexpected)} unexpected keys")
-        print(f"        missing[:5]={list(missing)[:5]}")
-        print(f"        unexpected[:5]={list(unexpected)[:5]}")
+    load_report = load_state_dict_shape_safe(model, state, verbose=True)
     print(f"[portA] Loaded checkpoint: {args.checkpoint}")
     print(f"[portA] Parameters: {count_parameters(model):,}")
 
@@ -345,6 +416,12 @@ def run(args) -> dict:
         "cohens_d_z":          d_z,
         "forced_routing_diagnostics": diag_mean,
         "per_sample_routing_diagnostics": persample_mean,
+        # Provenance for the checkpoint load. If head_reinitialised is True the
+        # classifier head did not come from the checkpoint (n_way mismatch), so
+        # the PAIRED delta below is valid but the absolute accuracies are not
+        # comparable to a matched-n_way run and must not be quoted as such.
+        "checkpoint_load": load_report,
+        "absolute_acc_quotable": not load_report["head_reinitialised"],
         "eval_users": eval_pids,
         "included_val_users": bool(args.include_val_users),
         "design_notes": [

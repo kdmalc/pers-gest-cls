@@ -23,13 +23,28 @@ identical to a purpose-built unimodal model.
 
 SPLIT
 -----
-Fixed 24/4/4 HPO split, because L2SO is 16 runs per condition. Consequences,
-all of which need stating in the response:
+Fixed 24/4/4 HPO split, because L2SO is 32 runs per condition (one per subject:
+test = subjects[i], val = subjects[(i+1) % 32]) -- not 16, as an earlier version
+of this docstring said. Consequences, all of which need stating in the response:
   - these cells CANNOT enter the paired RM-ANOVA (not evaluable per-participant
     across all 32 participants)
-  - they must be compared against the FIXED-SPLIT baseline (88.4%), NOT the
-    L2SO headline (86.7%)
+  - they must be compared against the FIXED-SPLIT baseline from THIS harness
+    (the `both` control), NOT the published 88.4% and NOT the L2SO headline
+    (86.7%). Three runs of the identical fixed-split config have produced
+    88.46 / 87.58 / 90.68, a ~3-point spread, so the `both` control is the only
+    legitimate reference for the unimodal cells.
   - label them preliminary single-split and commit L2SO to camera-ready
+
+VOCABULARY SIZE
+---------------
+`--n-way` is a CLI argument, defaulting to the config value (3). The first A13
+batch ran 3-way only, which is the weakest available test of a fusion claim:
+3-way is near ceiling (both=87.6%, emg_only=88.7%) and the ~3-point same-config
+spread above is larger than that difference, so 3-way cannot resolve it. Sweep
+3/5/10-way instead -- 10-way is also the deployment vocabulary.
+
+1-way is rejected explicitly (see the argparse validator): with a single class
+the label is constant and chance accuracy is 100%, so it measures nothing.
 
 HYPERPARAMETERS
 ---------------
@@ -82,10 +97,15 @@ if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
 
-def build_config(condition: str) -> dict:
+def build_config(condition: str, n_way: int = None, k_shot: int = None) -> dict:
     assert condition in CONDITIONS, f"--condition must be one of {CONDITIONS}"
 
-    config = make_base_config(ablation_id=f"A13_{condition}")
+    ablation_id = f"A13_{condition}"
+    if n_way is not None:
+        ablation_id += f"_n{n_way}"
+    if k_shot is not None and int(k_shot) != 1:
+        ablation_id += f"_k{k_shot}"
+    config = make_base_config(ablation_id=ablation_id)
 
     # REQUIRED: get_maml_dataloaders reads config["seed"] directly and
     # make_base_config does not set it (M0_full_model.py sets it explicitly at
@@ -96,6 +116,22 @@ def build_config(condition: str) -> dict:
 
     # The ablation-defining flag. Everything else inherits M0's HPO values.
     config["modality_mask"] = condition
+
+    # ── Task size ─────────────────────────────────────────────────────────────
+    # Overridable so the modality question can be asked at more than one
+    # vocabulary size. These are the ONLY task-shape keys an A13 run may change;
+    # every HPO-tuned hyperparameter stays at its M0 value.
+    if n_way is not None:
+        config["n_way"] = int(n_way)
+    if k_shot is not None:
+        config["k_shot"] = int(k_shot)
+
+    # q_query is nominal. The eval path assigns every non-support repetition to
+    # the query set, so the realised per-class count is (n_reps - k_shot). Record
+    # both so the caption can state the realised number rather than the config
+    # value -- this is the disclosure promised in the R2 W1 response.
+    n_reps = len(config["target_trial_reps"])
+    config["realised_q_per_class"] = n_reps - int(config["k_shot"])
 
     # Fixed split only. L2SO is 16 runs per condition; see docstring.
     config["test_procedure"] = "hpo_test_split"
@@ -117,6 +153,10 @@ def build_config(condition: str) -> dict:
     print(f"[A13] imu_in_ch        : {config['imu_in_ch']}")
     print(f"[A13] test_procedure   : {config['test_procedure']}")
     print(f"[A13] n_way / k_shot   : {config['n_way']} / {config['k_shot']}")
+    print(f"[A13] q_query (nominal): {config['q_query']}  -> realised per class: "
+          f"{config['realised_q_per_class']} ({len(config['target_trial_reps'])} reps "
+          f"- {config['k_shot']} support)")
+    print(f"[A13] chance level     : {100.0 / config['n_way']:.1f}%")
     return config
 
 
@@ -188,8 +228,8 @@ def verify_masking(config: dict, tensor_dict_path: str) -> dict:
     return {"emg_energy": emg_energy, "imu_energy": imu_energy}
 
 
-def run(condition: str) -> dict:
-    config = build_config(condition)
+def run(condition: str, n_way: int = None, k_shot: int = None) -> dict:
+    config = build_config(condition, n_way=n_way, k_shot=k_shot)
     set_seeds(FIXED_SEED)
 
     tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
@@ -224,7 +264,7 @@ def run(condition: str) -> dict:
             "best_val_acc":     best_val_acc,
         },
         config,
-        tag=f"A13_{condition}_seed{FIXED_SEED}_best",
+        tag=f"{config['ablation_id']}_seed{FIXED_SEED}_best",
     )
 
     trained_model.load_state_dict(train_history["best_state"])
@@ -233,11 +273,18 @@ def run(condition: str) -> dict:
     )
 
     result = {
-        "ablation_id":     f"A13_{condition}",
-        "description":     f"Modality ablation ({condition}), masked channels, fixed split",
+        "ablation_id":     config["ablation_id"],
+        "description":     (f"Modality ablation ({condition}), masked channels, "
+                            f"fixed split, {config['n_way']}-way "
+                            f"{config['k_shot']}-shot"),
         "condition":       condition,
         "modality_mask":   condition,
         "test_procedure":  "hpo_test_split",
+        "n_way":           int(config["n_way"]),
+        "k_shot":          int(config["k_shot"]),
+        "q_query_nominal": int(config["q_query"]),
+        "q_per_class_realised": int(config["realised_q_per_class"]),
+        "chance_level":    1.0 / float(config["n_way"]),
         "seed":            FIXED_SEED,
         "n_params":        n_params,
         "mask_check":      mask_check,
@@ -247,30 +294,66 @@ def run(condition: str) -> dict:
         "caveats": [
             "Channels are zero-masked, not removed; masked channels are dead "
             "capacity, so this is not a purpose-built unimodal model.",
-            "Fixed 24/4/4 split: cannot enter the paired RM-ANOVA and must be "
-            "compared against the fixed-split baseline (88.4%), not L2SO (86.7%).",
-            "Hyperparameters were tuned for the fused model, so unimodal "
-            "conditions are handicapped. Bias runs against the ablations.",
+            "Fixed 24/4/4 split: cannot enter the paired RM-ANOVA. Compare "
+            "against the `both` control FROM THIS HARNESS at the same n_way, "
+            "not against the published 88.4% and not against L2SO (86.7%): "
+            "three runs of the identical fixed-split config have spanned "
+            "88.46 / 87.58 / 90.68.",
+            "Hyperparameters were tuned for the fused model at 3-way, so "
+            "unimodal conditions and larger vocabularies are handicapped. Bias "
+            "runs against the ablations.",
+            f"Realised query count is {config['realised_q_per_class']} per class "
+            f"({len(config['target_trial_reps'])} reps - {config['k_shot']} "
+            f"support), not the nominal q_query={config['q_query']}.",
         ],
         "config_snapshot": {k: str(v) for k, v in config.items()},
     }
-    save_results(result, config, tag=f"A13_{condition}_final")
+    save_results(result, config, tag=f"{config['ablation_id']}_final")
 
     print(f"\n{'='*70}")
     print(f"[A13] FINAL {condition}: {test_results['mean_acc']*100:.2f}% "
           f"± {test_results['std_acc']*100:.2f}%")
     print(f"      {config['n_way']}-way {config['k_shot']}-shot, fixed split, "
           f"seed={FIXED_SEED}")
-    print(f"      params={n_params:,}   compare against fixed-split M0, NOT 86.7%")
+    print(f"      chance={100.0 / config['n_way']:.1f}%   "
+          f"q/class realised={config['realised_q_per_class']}")
+    print(f"      params={n_params:,}   compare against the `both` control at "
+          f"{config['n_way']}-way, NOT 88.4% and NOT 86.7%")
     print(f"{'='*70}")
     return result
+
+
+def _n_way_arg(value: str) -> int:
+    """n_way validator.
+
+    1-way is rejected rather than silently allowed: with a single class every
+    label is identical, chance accuracy is 100%, and the resulting number is not
+    a discrimination measurement at all. 2-way is the minimum meaningful task.
+    """
+    n = int(value)
+    if n < 2:
+        raise argparse.ArgumentTypeError(
+            f"--n-way must be >= 2, got {n}. A 1-way task has a constant label "
+            "and 100% chance accuracy, so it cannot measure discrimination. "
+            "Use 2 for the easiest meaningful setting, 3 for the paper headline, "
+            "or 10 for the deployment vocabulary."
+        )
+    return n
 
 
 def main():
     ap = argparse.ArgumentParser(description="A13: modality ablation for M0.")
     ap.add_argument("--condition", choices=list(CONDITIONS), required=True)
+    ap.add_argument("--n-way", type=_n_way_arg, default=None,
+                    help="Vocabulary size. Default: config value (3). "
+                         "Sweep 3 5 10 -- 3-way alone is near ceiling and "
+                         "cannot resolve the modality difference.")
+    ap.add_argument("--k-shot", type=int, default=None,
+                    help="Support examples per class. Default: config value (1).")
     args = ap.parse_args()
-    run(args.condition)
+    if args.k_shot is not None and args.k_shot < 1:
+        ap.error(f"--k-shot must be >= 1, got {args.k_shot}")
+    run(args.condition, n_way=args.n_way, k_shot=args.k_shot)
 
 
 if __name__ == "__main__":
