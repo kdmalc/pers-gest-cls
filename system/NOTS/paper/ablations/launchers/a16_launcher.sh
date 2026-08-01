@@ -107,18 +107,22 @@ mamba activate $ENV_PATH
 # by default -- the job then runs base python and dies confusingly on
 # "ModuleNotFoundError: torch/numpy" deep inside a script that has nothing
 # wrong with it. Check explicitly and abort with a clear message instead.
-ACTIVATED_PY=\$(which python)
-echo "Activated python: \$ACTIVATED_PY"
-if [[ "\$ACTIVATED_PY" != "$ENV_PATH"* ]]; then
-    echo "ERROR: mamba activate did not switch to the target environment."
-    echo "  Expected python under : $ENV_PATH"
-    echo "  Got                   : \$ACTIVATED_PY"
-    echo "  PATH=\$PATH"
+# mamba activate can leave the environment correctly ACTIVE (mamba env list
+# shows the right one marked with '*') while PATH ordering still resolves
+# bare 'python' to the base Mamba install -- observed on this cluster's debug
+# partition, where module load appears to place its own bin dirs ahead of
+# whatever activate prepends. Rather than fight PATH ordering, bypass it:
+# every python invocation below uses the env's interpreter by absolute path.
+ENV_PYTHON="$ENV_PATH/bin/python"
+if [[ ! -x "\$ENV_PYTHON" ]]; then
+    echo "ERROR: expected python binary not found or not executable:"
+    echo "  \$ENV_PYTHON"
     echo "  --- mamba/conda env list ---"
     mamba env list 2>&1 || conda env list 2>&1 || true
-    echo "JOB_FAILED: environment activation did not take effect on this node."
+    echo "JOB_FAILED: environment python binary missing."
     exit 1
 fi
+echo "Using interpreter: \$ENV_PYTHON"
 
 export RUN_DIR=$out_dir
 mkdir -p "\$RUN_DIR"
@@ -130,8 +134,7 @@ echo "JOB      : $job_name"
 echo "RUN_DIR  : $out_dir"
 echo "CMD      : $pycmd"
 
-which python
-python -c "import torch; print(f'PyTorch: {torch.__version__}  CUDA: {torch.version.cuda}  GPU: {torch.cuda.is_available()}')"
+"\$ENV_PYTHON" -c "import torch; print(f'PyTorch: {torch.__version__}  CUDA: {torch.version.cuda}  GPU: {torch.cuda.is_available()}')"
 nvidia-smi || true
 
 set +e
@@ -191,7 +194,7 @@ case "$MODE" in
         echo "A2 checkpoints, which predate parameter matching (~0.6M params vs"
         echo "the matched ~6.1M) and would understate the CNN-LSTM ceiling."
         submit "a16_manifest" "$EVAL_OUT_BASE" "00:30:00" "16G" "" \
-            "python -u $ABLATIONS_DIR/find_a16_checkpoints.py --out $MANIFEST"
+            "$ENV_PATH/bin/python -u $ABLATIONS_DIR/find_a16_checkpoints.py --out $MANIFEST"
         echo ""
         echo "To run it inline instead (faster, no queue):"
         echo "  mamba activate $ENV_PATH"
@@ -214,7 +217,7 @@ case "$MODE" in
         fi
         submit "a16_smoke_${BASE}" "$EVAL_OUT_BASE/A16_smoke" \
             "$TIME_SMOKE" "32G" "gpu:1" \
-            "python -u $ABLATIONS_DIR/A16_upper_bound.py --base $BASE --manifest $MANIFEST --smoke$EXTRA_ARGS"
+            "$ENV_PATH/bin/python -u $ABLATIONS_DIR/A16_upper_bound.py --base $BASE --manifest $MANIFEST --smoke$EXTRA_ARGS"
         ;;
 
     run)
@@ -225,7 +228,7 @@ case "$MODE" in
         fi
         submit "a16_run_${BASE}" "$EVAL_OUT_BASE/A16" \
             "$TIME_RUN" "$MEM" "gpu:1" \
-            "python -u $ABLATIONS_DIR/A16_upper_bound.py --base $BASE --manifest $MANIFEST --stage both$EXTRA_ARGS"
+            "$ENV_PATH/bin/python -u $ABLATIONS_DIR/A16_upper_bound.py --base $BASE --manifest $MANIFEST --stage both$EXTRA_ARGS"
         ;;
 
     *)
