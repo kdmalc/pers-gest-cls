@@ -60,7 +60,7 @@ MEM="32G"
 # HP grid on val subjects. M0 is MoE with 22 experts and runs slower than A2,
 # so "both" gets the larger budget.
 TIME_RUN="10:00:00"
-TIME_SMOKE="00:20:00"
+TIME_SMOKE="00:15:00"   # debug partition caps wall time at 15:00
 
 MODE="${1:-}"
 shift || true
@@ -100,6 +100,25 @@ submit() {
     wrap_body=$(cat <<WRAPEOF
 $MODULE_LOAD_BLOCK
 mamba activate $ENV_PATH
+
+# mamba activate can silently no-op on some nodes (seen on the debug partition:
+# module/hook sourcing appears to succeed with no error, but PATH still points
+# at the base Mamba install rather than the target env). That failure is silent
+# by default -- the job then runs base python and dies confusingly on
+# "ModuleNotFoundError: torch/numpy" deep inside a script that has nothing
+# wrong with it. Check explicitly and abort with a clear message instead.
+ACTIVATED_PY=\$(which python)
+echo "Activated python: \$ACTIVATED_PY"
+if [[ "\$ACTIVATED_PY" != "$ENV_PATH"* ]]; then
+    echo "ERROR: mamba activate did not switch to the target environment."
+    echo "  Expected python under : $ENV_PATH"
+    echo "  Got                   : \$ACTIVATED_PY"
+    echo "  PATH=\$PATH"
+    echo "  --- mamba/conda env list ---"
+    mamba env list 2>&1 || conda env list 2>&1 || true
+    echo "JOB_FAILED: environment activation did not take effect on this node."
+    exit 1
+fi
 
 export RUN_DIR=$out_dir
 mkdir -p "\$RUN_DIR"
@@ -184,6 +203,14 @@ case "$MODE" in
             echo "ERROR: manifest not found at $MANIFEST"
             echo "Run:  bash a16_launcher.sh manifest"
             exit 1
+        fi
+        # Smoke runs default to the debug partition -- short, low-priority jobs
+        # queue almost instantly there, and 15:00 comfortably fits the smoke
+        # workload. Override with --partition if debug is unavailable/full.
+        if [[ -z "$OVERRIDE_PARTITION" ]]; then
+            PARTITION=debug
+            echo "  (smoke mode defaults to the debug partition; pass --partition"
+            echo "   to override, e.g. --partition commons)"
         fi
         submit "a16_smoke_${BASE}" "$EVAL_OUT_BASE/A16_smoke" \
             "$TIME_SMOKE" "32G" "gpu:1" \
