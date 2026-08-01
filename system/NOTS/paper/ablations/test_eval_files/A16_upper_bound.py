@@ -285,6 +285,38 @@ def load_subject_checkpoint(base, pid, manifest, config):
           f"{n_params:,} params  fold={entry.get('fold_idx')}  "
           f"dropped_head={len(dropped)}  unexpected={len(unexpected)}")
 
+    # Unexpected keys are tensors present in the checkpoint with no counterpart
+    # in the model, so load_state_dict silently discards them. For M0 these are
+    # expected to be MAML++ inner-loop machinery (LSLR per-layer/per-step alphas,
+    # MSL state) which plain Adam fine-tuning genuinely does not need. But if a
+    # real backbone weight ever lands here under an unrecognised name, the arm
+    # would be fine-tuning a partly-default network and still look plausible.
+    # Print a prefix histogram so that stays visible rather than assumed.
+    unexpected_prefixes = {}
+    for k in unexpected:
+        head = k.split(".")[0]
+        unexpected_prefixes[head] = unexpected_prefixes.get(head, 0) + 1
+    if unexpected:
+        summary = ", ".join(f"{p}:{c}" for p, c in
+                            sorted(unexpected_prefixes.items(),
+                                   key=lambda kv: -kv[1])[:8])
+        print(f"         unexpected-key prefixes -> {summary}")
+        print(f"         examples: {list(unexpected)[:4]}")
+
+    # Anything that looks like a weight/bias on a conv/lstm/expert module is NOT
+    # inner-loop bookkeeping and should not be silently discarded.
+    suspicious = [k for k in unexpected
+                  if any(t in k.lower() for t in
+                         ("conv", "lstm", "expert", "encoder", "proj"))
+                  and k.split(".")[-1] in ("weight", "bias")]
+    assert not suspicious, (
+        f"{len(suspicious)} unexpected checkpoint keys look like real backbone "
+        f"weights, not MAML inner-loop state (e.g. {suspicious[:5]}). These are "
+        f"being discarded, which would leave part of the network at its default "
+        f"initialisation. Refusing to report an upper bound from a partly-"
+        f"untrained model."
+    )
+
     del ckpt, state
     return model, {
         "path":       str(ckpt_path),
@@ -293,6 +325,7 @@ def load_subject_checkpoint(base, pid, manifest, config):
         "n_params":   n_params,
         "dropped_head_tensors": len(dropped),
         "n_unexpected": len(unexpected),
+        "unexpected_prefixes": unexpected_prefixes,
     }
 
 
@@ -462,6 +495,15 @@ def run_base(base, args, manifest, tensor_dict_cache):
     val_pids  = args.val_pids  or config["val_PIDs"]
     config["test_PIDs"] = list(test_pids)
     config["val_PIDs"]  = list(val_pids)
+
+    # make_base_config defaults test_procedure to "L2SO", but A16 evaluates a
+    # fixed set of test subjects using per-subject fold checkpoints -- the
+    # effective protocol is the fixed split. Left unset, assert_protocol_consistent
+    # fires and the saved JSON claims "L2SO" while reporting 4 subjects, which is
+    # exactly the mismatch that already contaminated the fewshot_grid JSONs.
+    config["test_procedure"] = (
+        "L2SO" if len(test_pids) == len(config["all_PIDs"]) else "hpo_test_split"
+    )
 
     held_out_reps = ALL_REPS if not args.smoke else ALL_REPS[:2]
 
