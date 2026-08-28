@@ -206,6 +206,27 @@ def make_base_config(ablation_id: str) -> dict:
     # At eval time the head is replaced with a fresh `n_way`-class head.
     config["pretrain_num_classes"] = 10
 
+    # ── Episode-sampler semantics ─────────────────────────────────────────────
+    # These four are consumed by MetaGestureDataset / get_maml_dataloaders via
+    # .get(key, default). They were previously UNDECLARED here, so the sampler's
+    # fallback was the only source of truth and a caller had to know the key
+    # name to change one. Declared explicitly, with values identical to those
+    # fallbacks, so the default path is bit-for-bit unchanged.
+    #
+    #   modality_mask       "both" | "emg_only" | "imu_only"  (A13; zero-masked,
+    #                       parameter count unchanged)
+    #   q_query_eval_mode   "all_remaining" (current behaviour: realised Q is
+    #                       n_reps - k_shot, i.e. 9/7/5 at K=1/3/5, NOT q_query)
+    #                       | "fixed" (cap at q_query)
+    #   strict_n_way        False -> RuntimeWarning and drop a class with too few
+    #                       trials; True -> raise
+    #   subject_specific_model  True disables the cross-subject leakage checks
+    #                       (A7/A8 train within a single subject)
+    config["modality_mask"]          = "both"
+    config["q_query_eval_mode"]      = "all_remaining"
+    config["strict_n_way"]           = False
+    config["subject_specific_model"] = False
+
     # ── Architecture ──────────────────────────────────────────────────────────
     config["cnn_base_filters"]    = 64    # was 128
     config["cnn_layers"]          = 3

@@ -1,0 +1,19 @@
+# Minimal pyproject: this repo is not an installable package (module resolution
+# is done by sys.path manipulation in the run scripts and in tests/conftest.py).
+# The file exists solely to configure pytest, so `pytest` works from the repo
+# root with no arguments.
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "slow: takes more than ~2s (deselect with '-m \"not slow\"')",
+    "torch_version: pinned-digest test, valid only on a matching torch build",
+]
+# Mirror the suppressions ablation_config.py installs at import time, so tests
+# that import it do not fail on unrelated upstream warnings.
+filterwarnings = [
+    "ignore:.*weights_only=False.*:UserWarning",
+    "ignore:.*weights_only=False.*:FutureWarning",
+]
