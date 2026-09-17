@@ -191,7 +191,7 @@ its prestige is still accruing relative to NeurIPS/ICML.
 
 ---
 
-## On NeurIPS, ICML and ICLR specifically
+## On NeurIPS, ICML, ICLR — and AAAI
 
 You asked about these directly, so here is the unvarnished version.
 
@@ -217,12 +217,19 @@ of them, not some:
    CIs. The current 5-point M0-vs-A4 gap against a ~3-point same-config spread
    would not survive a careful reviewer.
 
-If all four hold, **ICLR is the best of the three** for us: the open-review
-process makes it far easier to pre-empt a repeat of the MoEMeta objection in the
-paper itself, and rebuttal-driven score movement is more common there. ICML would
-be second. NeurIPS is the worst option of the three specifically because a
-resubmission may reach reviewers who saw it, and the meta-review's inverted
-premise about our 3-way/10-way numbers may persist in institutional memory.
+If all four hold, **ICLR is the best of these** for us: the open-review process
+makes it far easier to pre-empt a repeat of the MoEMeta objection in the paper
+itself, and rebuttal-driven score movement is more common there. **ICML and
+AAAI are both reasonable second choices** — added 2026-09-17 at Kai's request.
+AAAI's review process is closed, like ICML's and NeurIPS's, so the open-review
+pre-emption advantage doesn't apply there, but it's a broader-scope AI venue
+(not ML-only) with its own deadline cadence, which may line up better with our
+timeline than ICML's — worth checking both once Phase 3 (`PLAN.md`) is
+actually reached, rather than picking now on no new information. NeurIPS
+stays the worst option of these specifically because a resubmission may reach
+reviewers who saw it, and the meta-review's inverted premise about our
+3-way/10-way numbers may persist in institutional memory even though it's
+since been corrected in the record.
 
 **Also worth knowing:** ICLR 2027 and CHI 2027 deadlines both fall roughly 3–4
 weeks from now. Neither is achievable alongside the plan's experimental work.
@@ -270,8 +277,9 @@ smaller than the measured variance (B1).
 ## 2026-09-17 decision addendum
 
 Open question 2 below is answered: **target a top ML venue again**, gated
-strictly on the 4 conditions in "On NeurIPS, ICML and ICLR specifically" above
-— ICLR first if they clear, ICML second, NeurIPS deprioritized given at least
+strictly on the 4 conditions in "On NeurIPS, ICML, ICLR — and AAAI" above —
+ICLR first if they clear, ICML or AAAI second (AAAI added 2026-09-17 at Kai's
+request — see that section), NeurIPS deprioritized given at least
 one reviewer (ARaC, confidence 4) may recur and the meta-review's numeric
 inversion may persist in institutional memory even though it's since been
 corrected in the record. This is a real risk acceptance, not a rejection of
