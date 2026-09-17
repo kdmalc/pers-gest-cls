@@ -22,6 +22,22 @@ and `rebuttal/REBUTTAL_CODE_FINDINGS.md` (code audit). Reviewer labels below: **
 LPUC, **R2** XH89, **R3** ARAC (confidence 4), **R4** FKXS (originality 1), **MR**
 meta-review.
 
+**2026-09-17 sync.** The discussion closed 2026-08-04 with several results posted to
+OpenReview that this file predates. Folded in below (A1, D4, D6, D9, new D10, new E11)
+from a full read of the OpenReview thread (`OpenReview_downloaded.pdf`). The paper was
+rejected in substance — 4 reviewers at Quality 3/3/3/2 (Lpuc/xh89/ARaC/fkxS) /
+Significance 2/2/2/2 / **Originality 3/2/2/1**; R1 (Lpuc) stayed unmoved through the whole rebuttal ("I do not see any
+results... all my concerns remain"); R4 (fkxS) ended the thread explicitly distrusting
+the paper's results after a late unprompted retraction ("makes it hard to trust the
+results obtained by the authors") — see new §H. Citation checker found 0/29
+problematic references, so that is not a live concern. **Provenance note that applies
+to every number folded in this pass:** these are numbers the authors *posted to
+OpenReview*, not numbers with a committed results JSON in this repo — same gap class as
+E1/E2. Treat them as `IN PROGRESS`, not `CLOSED`, until a results artifact lands here,
+even where the corresponding script (A13, A14, A15, Port A/B) already exists in the tree.
+See `PLAN.md` for the phased plan to close A1/A5/D2 — referenced throughout this file
+but not previously committed.
+
 ---
 
 ## A. Architecture and modelling
@@ -39,10 +55,33 @@ by modality even in principle.
   two lines at `:698`, `:1133`, `:1328`, `:1606`;
   `system/pretraining/pretrain_models.py:142`, `:269`, `:443`. Channel counts at
   `.../test_eval_files/ablation_config.py` (`emg_in_ch=16`, `imu_in_ch=72`).
+- **Now measured, not just architecturally predicted** (posted 2026-08-04, `A13_modality_ablation.py`,
+  fixed 24/4/4 split, 1-shot, four held-out subjects, 500 episodes, channels zero-masked
+  not deleted so param count is unchanged):
+
+  | | 3-way | 5-way | 10-way |
+  |---|---|---|---|
+  | Fused | 87.6 | 80.3 | 63.3 |
+  | EMG-only | 88.7 | 71.8 | 45.2 |
+  | IMU-only | 90.4 | 81.5 | 65.4 |
+
+  Two-way repeated-measures ANOVA: significant condition × n-way interaction
+  (F(4,12)=19.2, p<.001). EMG-only falls significantly below fused at 10-way (Δ=−18.1pp,
+  Holm-adjusted p=.023, all four subjects agreeing); **IMU-only is statistically
+  indistinguishable from fused at every N** (adjusted p=.385/.631/.646). The authors are
+  dropping the L34–38 multimodal-complementarity claim and stating plainly that fusion
+  does not beat IMU alone on this split. With 4 test subjects the fusion contrast is
+  underpowered (smallest detectable effect at 80% power ≈6–8pp) — re-run under L2SO
+  before leaning on the null. **This is now the sharpest evidence for this item**: not
+  only can experts not specialise by modality, the fused model cannot even match its best
+  unimodal branch, and EMG in particular is close to dead weight at 10-way. Directly
+  motivates prototyping a **per-modality** mechanism first (see D2's `$B` insight and
+  `PLAN.md` Phase 0.5/Phase 2) rather than a generic fusion-gate fix.
 - Fix: `fusion_mode` flag with per-modality stems / gated / cross-attention /
   modality-expert variants (`system/MOE/fusion.py`), + modality dropout + per-modality
-  auxiliary heads. Plan Phase 0.5–0.6.
-- Paper: Contribution 1 as written is unsupported without this.
+  auxiliary heads. `PLAN.md` Phase 0.5.
+- Paper: Contribution 1 as written is unsupported without this, and the modality-ablation
+  table above needs to replace L34–38 rather than just append to it.
 
 ### A2. Per-channel scale is never normalised
 `OPEN` · raised by MR Q9, R4 Q2
@@ -453,7 +492,18 @@ classical suite (`system/nonparametric/eval_knn_proto.py`) is fully implemented.
 A presentation failure, not a missing experiment. Relabel all three.
 
 ### D4. The Kaifosh comparison as executed is not a fair evaluation of their model
-`IN PROGRESS` · raised by R1 W3, R3 Q3, MR Q2/Q5
+`IN PROGRESS` (corrected numbers posted, no committed results JSON — see 2026-09-17
+sync note) · raised by R1 W3, R3 Q3, MR Q2/Q5
+
+**Corrected numbers posted 2026-08-04**, their own preprocessing applied (40 Hz
+high-pass, noise-floor normalisation, replacing the signal-normalised input that placed
+their squash in its near-linear regime): linear probing **66.5%** (published 62.1%,
++4.4pp), full fine-tuning **49.2%** (published 56.0%, −6.8pp). Note the direction is not
+uniform — the correction helps their linear probe and hurts their full fine-tune — so
+"we were unfair to them" is not a one-line story; both directions need to be reported
+together, as the authors did. This *strengthens* rather than resolves the LP>FT reading
+already flagged below (full-FT overfitting on ~10 samples with 6.5M params is now an
+even simpler explanation, since FT dropped further after correcting the input scale).
 
 Four defects, **all biasing against their model**: their preprocessing was never applied;
 our input arrives normalised to *signal* s.d. 1.0 while their pipeline expects *noise*
@@ -515,6 +565,27 @@ adaptation.
   the idea. Promote it to a trained condition (`MOE_task_routing_mode`).
 - Contribution 1 must be reframed away from "combining MAML with MoE is novel."
   **PI sign-off required** (Appendix C.2).
+- **Both ports completed and posted 2026-08-04** (`portA_support_routing.py`,
+  `portB_local_adaptation.py`; numbers not yet in a committed results JSON here — see
+  2026-09-17 sync note). **Port A** (support-derived vs. query-conditioned routing, done
+  as a trained condition per the note above): 91.24% vs. 91.25%, a null — the
+  query-conditioned-routing accuracy claim was withdrawn from the paper. **Port B**
+  (inner-loop restricted to the classification head, 8,451 of 5,535,609 params, 0.15%,
+  meta-trained through the restriction per the note above): 59.76% ± 2.98% vs. 88.4% full
+  adaptation, a 28.6pt cost, consistent across all four held-out subjects.
+  **R3's (ARaC) load-bearing follow-up**, at confidence 4, after seeing both results:
+  full inner-loop adaptation is standard MAML, head-only is ANIL (Raghu et al., ICLR
+  2020), so **Port B is a MAML-vs-ANIL comparison that instantiates a known boundary
+  condition from that literature rather than establishing new originality** — "I see no
+  further experiment resolves the originality question... including the Q2 upper bound
+  and Q3 modality ablations." This is the single fact that most constrains venue
+  condition 1 in `VENUE_STRATEGY.md`/`PLAN.md`: Port B is real evidence for the paper's
+  *empirical* claim (adaptation is necessary here) but does **not** buy back originality,
+  and the authors' own response accepted this and relabeled Contribution 1 from Method to
+  Application accordingly. Any resubmission claiming Contribution 1 as a method
+  contribution again needs a genuinely new result (task-conditional routing beating both
+  fixed baselines is the best current candidate — see `PLAN.md` Phase 1.5) to survive the
+  same reviewer a second time.
 
 ### D7. Single dataset, single session, 10 repetitions
 `IRREDUCIBLE` (mostly) · raised by R1 W4, R2 W3, MR
@@ -544,10 +615,54 @@ vocabulary; ours is cross-subject with user-defined semantics. Make both the cit
 the distinction explicit in §2.
 
 ### D9. §2 asserts metric-learning is fragile at 1-shot, about a method never run
-`OPEN` · raised by R1 W1 · L110–112. `A14_protonet_baseline.py` exists to fix this. **If
-A14 drops for time, still soften L110–112** — the free half of the fix is the more
-important half. (Note: the prototype head in A5's fix delivers a ProtoNet readout of our
-own encoder at step 0 for free, which partially answers this at zero extra cost.)
+`IN PROGRESS` (numbers posted, no committed results JSON — see 2026-09-17 sync note) ·
+raised by R1 W1 · L110–112. `A14_protonet_baseline.py` exists and produced numbers,
+posted 2026-08-04: Prototypical Networks on the meta-trained backbone (identical encoder
+and support budget, meta-learned inner-loop adaptation replaced by nearest-prototype
+readout), 1-shot:
+
+| n-way | ProtoNet (encoded) | EncoderMoE |
+|---|---|---|
+| 3-way | 78.7 ± 14.0 | 88.4 |
+| 5-way | 71.7 ± 12.9 | 78.2 |
+| 10-way | 52.2 ± 10.8 | 67.7 |
+
+ProtoNet trails at every N and the **gap widens with N** (9.7 / 6.5 / 15.5 pts) —
+support for L110–112 rather than a refutation, and a useful data point for A5 (below):
+a bare prototype readout degrades with N similarly to the MLP head, just from a worse
+starting point, so the *adaptation* is doing real work even though the *head shape* is
+also part of the story. Caveat the authors themselves flagged: the backbone was
+meta-trained under an adaptation objective, not for prototype separation, so this is not
+a fully clean embedding-quality comparison — note this alongside the numbers rather than
+letting a reviewer find it. Land the results JSON in this repo to close.
+
+### D10. Meta-training user count was never swept — is cross-subject gain a diversity or volume effect?
+`IN PROGRESS` (numbers posted, no committed results JSON — see 2026-09-17 sync note) ·
+raised by R2 (xh89) Q3, and by R2's related Q2 ("is cross-subject meta-training
+outperforming within-subject training highly due to the limited within-subject sample
+count?")
+
+`A15_metatrain_user_sweep.py` exists and produced numbers, posted 2026-08-04: N ∈
+{4, 8, 16} meta-training users, val/test splits held fixed, 3 subsample seeds per N,
+1-shot 3-way:
+
+| Meta-training users | Test accuracy |
+|---|---|
+| 4 | 82.4% ± 0.5% |
+| 8 | 85.3% ± 1.7% |
+| 16 | 87.9% ± 0.5% |
+
+Monotonic, and **the gain continues from N=8 to N=16** — past the point where
+within-subject sample scarcity alone would explain the cross-subject advantage. Read
+together with the existing parameter-matched single-encoder control (MAML, No MoE:
+81.7% at N=24 vs EncoderMoE's 86.7%, a 5.0pt gap the identical 24-user corpus cannot
+explain by volume), this supports "meta-training benefits from user *diversity*, not
+just aggregate sample count" — directly answers R2 Q2/Q3, but note the authors did not
+extend to N=24/30, so the curve's *upper* end (where it would plateau, if it does) is
+still open. The existing paper endpoints (1 user, i.e. Subject-Specific EncoderMoE:
+64.6%; 24 users: 86.7%) bracket this sweep. Land the results JSON in this repo to close,
+and consider extending to N=24/30 given the existing HPO/checkpoint infrastructure —
+cheap relative to most of Phase 3's other gates.
 
 ---
 
@@ -642,6 +757,26 @@ for the resubmission checklist instead.
 `OPEN`, no compute · §4.6 says 100 query episodes per user, but A.7's 21,600 samples ÷ 32
 users = 675 per user, and 100 × 27 = 2,700 ≠ 675 (675 = 25 × 27). Reconcile.
 
+### E11. ARaC's Q2 upper bound (subject-specific fine-tune ceiling) still has no result
+`OPEN` · raised by R3 (ARaC) Q2, committed for camera-ready in the 2026-08-04 summary
+comment but explicitly listed there as "not completed" during the discussion window
+
+Confirmed present on `main` (committed 2026-08-01, *after* the rebuttal closed):
+`system/NOTS/paper/ablations/test_eval_files/A16_upper_bound.py` (643 lines),
+`system/NOTS/paper/ablations/launchers/a16_launcher.sh`,
+`.../test_eval_files/find_a16_checkpoints.py`. **A full repo search
+(`find . -iname "*A16*"`) turns up only these three files — no results JSON, no figure,
+no notebook cell referencing A16 anywhere in the tree.** ARaC's actual question (Q2): does
+fine-tuning your own parameter-matched pretrained model on all of a test user's training
+data — the "how close to ideal is K-shot adaptation" ceiling — ever get run? As things
+stand the answer is still no, and this is the most reviewer-visible unresolved item
+going into a resubmission: it was explicitly promised, by name, to the most confident
+reviewer.
+
+- Fix: run `a16_launcher.sh`, commit the resulting JSON under a `results/` or
+  `paper_figures/` path consistent with the rest of the suite, and add a one-line
+  `LIMITATIONS.md` update the moment a number exists (not before). `PLAN.md` Phase 3.
+
 ---
 
 ## F. Paper edits requiring no compute
@@ -692,3 +827,43 @@ From rebuttal Appendix C:
    across all 32 participants — including everything on the fixed split — sits outside the
    paired analysis, stated. (B1, B7)
 4. **A10 provenance** (E1) and **A1/A2/A4 fold counts** (E2).
+
+## H. What reviewers actually thought at close
+
+Not a fix-it list — a read on which categories of fix actually move a reviewer, taken
+directly from their own words in the closing exchanges. Relevant to sequencing `PLAN.md`
+and to how a resubmission's rebuttal-proofing should be paced.
+
+- **R1 (Lpuc) was not moved by promises, only by numbers, and even then did not fully
+  recover.** After the first response (all `[TODO]`s), Lpuc wrote: "I do not see any
+  results of any additional experimental results presented during rebuttal period. All
+  my concerns listed in the weaknesses section remain as is." The final results (D9, D6
+  Port A/B, D4) landed after that comment; there is no recorded reply from Lpuc
+  acknowledging them. **Lesson for `PLAN.md`: land results before the response, not a
+  commitment to results** — a `[TODO]` is read as evasion regardless of how well the
+  eventual number turns out, and this paper's rebuttal window was consistently too short
+  for the promised compute.
+- **R3 (ARaC), the highest-confidence reviewer (4/4), was the most persuadable by rigor**
+  — explicitly credited "good practice" for withdrawing the Port A claim on a null result
+  and for stating Port B's interpretation *before* running it — but held firm on the
+  structural originality point even after being satisfied on every empirical one (D6).
+  This is the reviewer whose reasoning most directly sets venue condition 1 in
+  `VENUE_STRATEGY.md`.
+- **R4 (fkxS) ended the thread with reduced trust, not increased trust, following an
+  unprompted retraction.** After the modality-ablation prediction in the architecture
+  response did not hold (A1: predicted a widening multimodal advantage at high N; the
+  measured result showed no such thing, and the paper dropped the complementarity claim
+  as a result), fkxS wrote: "The retraction made by the authors (without being prompted
+  by me) and the discussion with the other reviewers makes it hard to trust the results
+  obtained by the authors." **This is the sharpest process lesson here**: an honest,
+  unprompted correction was read as evidence of unreliability rather than rigor, in a
+  discussion that also included several other last-minute reversals (the L34–38 claim,
+  the query-routing claim, the L171–173 inductive-bias claim). The implication for
+  camera-ready and any resubmission is not "don't retract things" — it's **don't publish
+  the claim until it's checked**, so there is nothing left to retract under review. Every
+  claim in `LIMITATIONS.md` §F should be treated as provisional until its cited evidence
+  is a committed artifact, precisely to avoid re-running this failure mode.
+- **R2 (xh89) asked the most forward-looking questions** (user-count sweep, foundation-
+  model scaling, MoE failure modes) and got substantive answers (D10 above; the
+  Discussion-section additions on scaling and failure modes) but never posted a
+  closing comment either way — no signal on whether the answers satisfied.

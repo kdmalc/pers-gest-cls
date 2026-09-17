@@ -2,12 +2,20 @@
 
 ## The strategic read
 
-Four reviewers scored the paper 3/3/3/3 and, critically, split their assessment
-the same way every time: **originality 2/2/1, but R2 and R4 credited the
-evaluation rigor unprompted.** That is a very specific signal. It says the paper
-is not weak — it is *mis-venued*. We submitted an empirical-characterisation
-paper about an under-served population to a venue whose primary currency is
-methodological novelty, and it was correctly judged against that currency.
+Four reviewers (Lpuc, xh89, ARaC, fkxS) scored Quality 3/3/3/2 and Significance
+2/2/2/2, and split lower on **originality: 3/2/2/1** — fkxS (originality 1) was
+also the most skeptical throughout and ended the discussion explicitly
+distrusting the results (see `LIMITATIONS.md` §H); R2 (xh89) and R4 (fkxS)
+both credited the evaluation rigor unprompted despite that. That is a very
+specific signal. It says the paper is not weak — it is *mis-venued*. We
+submitted an empirical-characterisation paper about an under-served
+population to a venue whose primary currency is methodological novelty, and
+it was correctly judged against that currency.
+
+*(2026-09-17: corrected from an earlier "3/3/3/3 / originality 2/2/1" — that
+undercounted a reviewer and had fkxS's quality score wrong; verified directly
+against the closed OpenReview thread. The reasoning above doesn't change, but
+don't propagate the old numbers into a paper draft.)*
 
 Three consequences shape everything below.
 
@@ -188,7 +196,7 @@ its prestige is still accruing relative to NeurIPS/ICML.
 You asked about these directly, so here is the unvarnished version.
 
 **The main tracks are a bad bet for this paper as currently scoped.** With
-originality scored 2/2/1 and a NeurIPS 2025 precedent for the core pairing, the
+originality scored 3/2/2/1 and a NeurIPS 2025 precedent for the core pairing, the
 novelty objection is structural. Rewriting the contribution statement does not
 remove it, and reviewers at these venues are specifically selected to weigh it.
 
@@ -259,14 +267,30 @@ smaller than the measured variance (B1).
    all of these, and the revision feedback from a journal-track venue is worth
    more than a parallel lottery ticket.
 
+## 2026-09-17 decision addendum
+
+Open question 2 below is answered: **target a top ML venue again**, gated
+strictly on the 4 conditions in "On NeurIPS, ICML and ICLR specifically" above
+— ICLR first if they clear, ICML second, NeurIPS deprioritized given at least
+one reviewer (ARaC, confidence 4) may recur and the meta-review's numeric
+inversion may persist in institutional memory even though it's since been
+corrected in the record. This is a real risk acceptance, not a rejection of
+this document's own recommendation: IMWUT/TNSRE/TMLR remain the documented
+fallback if the gates (now also tracked as `PLAN.md` Phase 3) haven't cleared
+once Phases 0–2 land. See `PLAN.md` for the phased path to the 4 conditions,
+cross-referenced against `LIMITATIONS.md`'s items. Re-open this addendum, not
+just re-read it, once Phase 3's checklist is scored — the decision was made
+before that evidence exists, which is itself a version of the mistake this
+document warns against ("choose the framing... after the evidence").
+
 ## Open questions for the PI
 
 1. **Can the dataset be released publicly?** Consent language, IRB amendment
    feasibility, de-identification requirements, and institutional appetite.
    Gates Goal 2.
-2. **Is an HCI/accessibility venue acceptable as the primary target**, or is
-   there a requirement for a core-ML venue? This is a career/lab-strategy
-   question, not a research one, and it should be answered before we write.
+2. ~~Is an HCI/accessibility venue acceptable as the primary target, or is
+   there a requirement for a core-ML venue?~~ **Answered 2026-09-17** — see the
+   decision addendum above.
 3. **Is there appetite for a two-paper split** — a benchmark/dataset paper and a
    methods paper — given that the material plausibly supports both and they suit
    different venues?

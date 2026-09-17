@@ -26,6 +26,20 @@ If there is time for four papers, these are the four.
 | ★★★ | **Chen, Liu, Kira, Wang & Huang, "A Closer Look at Few-shot Classification", ICLR 2019** | A plain **cosine-classifier baseline** ("Baseline++") matches or beats sophisticated meta-learners, and the gap shrinks as the backbone gets better. Read together with **Tian et al., "Rethinking Few-Shot Image Classification: A Good Embedding Is All You Need?", ECCV 2020** — a simple embedding plus a nearest-centroid/linear readout beats meta-learning on standard benchmarks. **This is the literature that makes "PCA+KNN beats us" a well-documented result rather than a fatal flaw** (D2). It also tells us how to respond: the field's answer is a cosine/prototype readout on a good embedding, which is precisely the plan's prototype head. |
 | ★★★ | **Bouthillier, Delaunay, Bronzi, et al., "Accounting for Variance in Machine Learning Benchmarks", MLSys 2021** | Decomposes benchmark variance into its sources (seed, data order, splits) and shows how much of the literature's reported improvements sit inside it. This is the citation for our 88.46 / 87.58 / 90.68 problem (B1) and the template for the variance decomposition the plan proposes. Pair with **Agarwal, Schwarzer, Castro, Courville & Bellemare, "Deep RL at the Edge of the Statistical Precipice", NeurIPS 2021** for small-N reporting practice (stratified bootstrap CIs, interquartile mean) — our n=32 is exactly the regime it was written for. |
 
+**Non-literature companion, not for the `.bib`.** An internal planning report
+(`Claude_FirstPrinciples_Aim2_Approach.pdf`, March 2026 — predates the rebuttal
+and doesn't know its results) independently argues, from `$B`'s mechanics
+rather than from the multimodal literature above, that per-sample channel
+covariance is the natural discriminative feature for this problem and that
+inter-user variability dominates intra-user gesture variability in raw signal
+space. Its proposed "Covariance Embedding Network" (learn a metric on
+per-window channel covariance rather than raw signal) is now cross-referenced
+in `PLAN.md` Phase 0.5/Phase 2 as a candidate that could address the fusion
+problem (A1) and the classical-baseline problem (D2) with one mechanism, done
+per-modality. Read it for the mechanism argument; verify every empirical claim
+in it against post-rebuttal results before reusing it, since it was written
+without them.
+
 ---
 
 ## 1. Fusion — why EMG contributes nothing, and what to do (A1, A2, A3)
