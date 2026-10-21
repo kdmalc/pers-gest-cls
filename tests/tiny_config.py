@@ -75,6 +75,7 @@ def make_tiny_config(pids: list[str], **overrides) -> dict:
         "n_way": 3,
         "k_shot": 1,
         "q_query": 4,
+        "val_episode_source": "sampled",   # synthetic PIDs: no cache file exists for them
         "pretrain_num_classes": 10,
         "maml_gesture_classes": list(range(10)),
         "target_trial_reps": list(range(1, 11)),

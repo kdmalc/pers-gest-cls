@@ -128,12 +128,38 @@ def maml_mm_collate(batch):
         "query":     stack_samples(episode["query"]),
         "user_id":   episode["user_id"],
         "label_map": episode["label_map"],
+        "episode_id": episode["episode_id"],
     }
 
 
 # ==========================================
 # 2. THE META-LEARNING DATASET
 # ==========================================
+
+def apply_modality_mask(modality_mask, emg, imu):
+    """
+    Zero-fill the ablated modality. Returns (emg, imu).
+
+    Returns a NEW zero tensor rather than writing into the slice, because
+    the slices are views onto the shared tensor_dict -- zeroing in place
+    would permanently corrupt the dataset for every later episode.
+
+    The retained modality is returned unmodified (nothing ever writes to
+    it, so passing the view through is safe and avoids a copy).
+    """
+    if modality_mask == "both":
+        return emg, imu
+    if modality_mask == "emg_only":
+        return emg, (None if imu is None else torch.zeros_like(imu))
+    # imu_only
+    if imu is None:
+        raise ValueError(
+            "modality_mask='imu_only' requires IMU data, but this sample has "
+            "imu=None. Check that use_imu is True and the tensor_dict has an "
+            "'imu' entry for every user x class."
+        )
+    return torch.zeros_like(emg), imu
+
 
 class MetaGestureDataset(Dataset):
     """
@@ -361,28 +387,7 @@ class MetaGestureDataset(Dataset):
                 self.val_episodes_cache.append(episode)
 
     def _apply_modality_mask(self, emg, imu):
-        """
-        Zero-fill the ablated modality. Returns (emg, imu).
-
-        Returns a NEW zero tensor rather than writing into the slice, because
-        the slices are views onto the shared tensor_dict — zeroing in place
-        would permanently corrupt the dataset for every later episode.
-
-        The retained modality is returned unmodified (nothing ever writes to
-        it, so passing the view through is safe and avoids a copy).
-        """
-        if self.modality_mask == "both":
-            return emg, imu
-        if self.modality_mask == "emg_only":
-            return emg, (None if imu is None else torch.zeros_like(imu))
-        # imu_only
-        if imu is None:
-            raise ValueError(
-                "modality_mask='imu_only' requires IMU data, but this sample has "
-                "imu=None. Check that use_imu is True and the tensor_dict has an "
-                "'imu' entry for every user x class."
-            )
-        return torch.zeros_like(emg), imu
+        return apply_modality_mask(self.modality_mask, emg, imu)
 
     def _build_episode(
         self,
@@ -496,6 +501,7 @@ class MetaGestureDataset(Dataset):
             "query":     query_samples,
             "user_id":   user_id,
             "label_map": label_map,
+            "episode_id": None,   # on-the-fly episodes have no cache id
         }
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -602,7 +608,6 @@ def get_maml_dataloaders(config, tensor_dict_path):
 
     # ── Leakage check: train and val PIDs must be disjoint ────────────────────
     if config["subject_specific_model"] is False:
-        num_eval_episodes = config["num_eval_episodes"]
         train_pids = config["train_PIDs"]
         val_pids   = (
             config["train_PIDs"]
@@ -621,8 +626,6 @@ def get_maml_dataloaders(config, tensor_dict_path):
             )
         print(f"[get_maml_dataloaders] Train PIDs ({len(train_pids)}): {sorted(train_pids)}")
         print(f"[get_maml_dataloaders] Val   PIDs ({len(val_pids)}):   {sorted(val_pids)}")
-        print(f"[get_maml_dataloaders] num_eval_episodes per val user: {num_eval_episodes}")
-        print(f"[get_maml_dataloaders] Total val episodes in cache: {len(val_pids) * num_eval_episodes}")
 
     train_ds = MetaGestureDataset(
         tensor_dict,
@@ -648,23 +651,41 @@ def get_maml_dataloaders(config, tensor_dict_path):
         else config["val_PIDs"]
     )
 
-    val_ds = MetaGestureDataset(
-        tensor_dict,
-        target_pids             = val_pids,
-        target_gesture_classes  = gesture_classes,
-        target_trial_reps    = target_trial_reps,
-        n_way                   = config["n_way"],
-        k_shot                  = config["k_shot"],
-        q_query                 = config["q_query"],
-        num_eval_episodes       = config["num_eval_episodes"],
-        is_train                = False,
-        seed                    = config["seed"],
-        debug_one_episode       = config["debug_one_episode"],
-        debug_five_episodes     = config["debug_five_episodes"],
-        debug_one_user_only     = config["debug_one_user_only"],
-        modality_mask           = modality_mask,
-        strict_n_way            = strict_n_way,
-    )
+    # Validation episodes: the shared cache (docs/SPEC_episode_cache.md) unless the config
+    # explicitly asks for on-the-fly sampling ("sampled": tests, debug, subject-specific runs).
+    #   "val" -> val_fold{fold_idx}.json.gz   (kfold7 training; checkpoint selection)
+    #   "dev" -> dev.json.gz                  (HPO; the 4 dev users)
+    val_source = config["val_episode_source"]
+    assert val_source in ("val", "dev", "sampled"), val_source
+    debug_mode = config["debug_one_episode"] or config["debug_five_episodes"]
+    if val_source == "sampled" or debug_mode or config["subject_specific_model"]:
+        val_ds = MetaGestureDataset(
+            tensor_dict,
+            target_pids             = val_pids,
+            target_gesture_classes  = gesture_classes,
+            target_trial_reps    = target_trial_reps,
+            n_way                   = config["n_way"],
+            k_shot                  = config["k_shot"],
+            q_query                 = config["q_query"],
+            num_eval_episodes       = config["num_eval_episodes"],
+            is_train                = False,
+            seed                    = config["seed"],
+            debug_one_episode       = config["debug_one_episode"],
+            debug_five_episodes     = config["debug_five_episodes"],
+            debug_one_user_only     = config["debug_one_user_only"],
+            modality_mask           = modality_mask,
+            strict_n_way            = strict_n_way,
+        )
+    else:
+        from episodes import episode_cache as _ec
+        from episodes.episode_torch import CachedEpisodeDataset
+        es = _ec.load("dev", None) if val_source == "dev" else _ec.load("val", config["fold_idx"])
+        assert set(config["val_PIDs"]) == set(es.users), (
+            f"val_PIDs {sorted(config['val_PIDs'])} != episode-file users {sorted(es.users)}")
+        val_ds = CachedEpisodeDataset(
+            tensor_dict, es.select(config["n_way"], config["k_shot"]), modality_mask)
+        print(f"[get_maml_dataloaders] val episodes from cache {es.source_block()} "
+              f"cell=(n={config['n_way']}, k={config['k_shot']}): {len(val_ds)} episodes")
 
     train_dl = DataLoader(
         train_ds,

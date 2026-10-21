@@ -1,0 +1,22 @@
+{
+ "base_seed": 20261021,
+ "files": {
+  "dev.json.gz": "24e8c50a3e60ef7ac7d3df9e8c63cd3966b96241e4640f4dea32d2eeb8bb73ad",
+  "test_fold0.json.gz": "9e436bd07c1790341a42cff2d1ffe79e281778106d5fdcf3a49df1a4bd006bae",
+  "test_fold1.json.gz": "20aedba3ca5467a0f5f2aa332b8a5363376f2529a324678bd6c13fbb6e8a191a",
+  "test_fold2.json.gz": "da720dd0baf636da090f7c0e6eccbf508384a99a4b4618a0519bbfa06182bfb8",
+  "test_fold3.json.gz": "f97f8f5c9a5f35ceec4f11e637697f2c10c666045ff58a87ad8a694c00db7a0b",
+  "test_fold4.json.gz": "a25457f65d42758b264beb84685e943ecd3eb55d685787f13ed0f9d8b624b40f",
+  "test_fold5.json.gz": "5a0cc34985a93773ed2fad7aa1a6aafa5a08c3a2e39e6131a9a4cabf116855af",
+  "test_fold6.json.gz": "293bf97b324114e9e47463f80cf2ba3d9f9bd00c578efe13cdb3aa9f145a8426",
+  "val_fold0.json.gz": "dc61b7f51afe74fc72ba9bfd67122f666018ad346a1188b0999f0c22a8679e5c",
+  "val_fold1.json.gz": "fe89bf380919799cac1be57cb6f33b207edc77fdc76add7a43e6732369c679a9",
+  "val_fold2.json.gz": "b110d0ba147bc9634df97338221c27ec5161d8f9e054fcc358f2c5a3e8b09e50",
+  "val_fold3.json.gz": "0fc6843dfebc88e99a9e46ddd9ae9fbae2069d801cd1286d7646f54a37ae6784",
+  "val_fold4.json.gz": "6e9568631f00cd8c89f7b99727bb954cdb73cd443ad0cbc82768782441aeca91",
+  "val_fold5.json.gz": "08fdef11ad4524920c2c341f5b05e9cee3b9aea421d33bd0a42e95d4d4ae1dac",
+  "val_fold6.json.gz": "ace483330dde0e30e6d05ff732fca7c38eb9db0f5b874bd9ad52c50e9ba9b194"
+ },
+ "protocol": "kfold7",
+ "schema_version": 1
+}

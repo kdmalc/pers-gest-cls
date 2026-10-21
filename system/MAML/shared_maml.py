@@ -42,9 +42,7 @@ def meta_evaluate(model, episodic_loader, config, adapt_and_eval_fn, print_per_u
 
             # Per-user: accumulate one float per episode.
             # user_id is set at the episode level by maml_mm_collate.
-            uid = ep.get("user_id")
-            if uid is not None:
-                user_episode_accs[uid].append(metrics["acc"])
+            user_episode_accs[ep["user_id"]].append(metrics["acc"])
 
             if metrics.get("pre_adapt_acc") is not None:
                 pre_adapt_accs.append(metrics["pre_adapt_acc"])
@@ -62,9 +60,14 @@ def meta_evaluate(model, episodic_loader, config, adapt_and_eval_fn, print_per_u
         for uid, acc in sorted(per_user_acc.items()):
             print(f"  [Val] user={uid}  acc={acc*100:.2f}%")
 
+    # "acc" is the mean over USERS of the per-user mean accuracy (the metric reported in the
+    # paper and used for checkpoint selection), not accuracy pooled over query samples.
+    if not per_user_acc:
+        raise ValueError("meta_evaluate: no episode carried a user_id")
     return {
         "loss":         total_loss / max(n_eps, 1),
-        "acc":          total_correct / max(total_count, 1),
+        "acc":          float(np.mean(list(per_user_acc.values()))),
+        "pooled_acc":   total_correct / max(total_count, 1),
         "per_user_acc": per_user_acc,
     }
 

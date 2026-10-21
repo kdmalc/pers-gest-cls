@@ -631,6 +631,7 @@ def apply_fold_to_config(config: dict) -> dict:
     config["train_PIDs"] = split["train"]
     config["val_PIDs"]   = split["val"]
     config["test_PIDs"]  = split["test"]
+    config["val_episode_source"] = "dev"   # cached dev episodes (SPEC_episode_cache.md)
     return config
 
 

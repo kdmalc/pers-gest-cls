@@ -143,6 +143,7 @@ def apply_kfold_fold(config: dict, fold_idx: int) -> dict:
     kfold_split.assert_fold_disjoint(f["train"], f["val"], f["test"], KFOLD_HPO_VAL_PIDS)
     c["train_PIDs"], c["val_PIDs"], c["test_PIDs"] = f["train"], f["val"], f["test"]
     c["fold_idx"] = fold_idx
+    c["val_episode_source"] = "val"          # cached val_fold{k} episodes (checkpoint selection)
     c["test_procedure"] = "kfold7"
     return c
 
@@ -245,6 +246,7 @@ def make_base_config(ablation_id: str) -> dict:
     config["test_PIDs"]  = _f0["test"]
     config["all_PIDs"]   = list(KFOLD_ALL_TEST_PIDS)
     config["fold_idx"]   = 0
+    config["val_episode_source"] = "val"   # "val" | "dev" | "sampled" (see get_maml_dataloaders)
     config["hpo_val_PIDs"] = list(KFOLD_HPO_VAL_PIDS)
 
     # DEFAULT is 'kfold7' (28/4 outer split, 7 folds of 20/4/4; one fold per job).
@@ -956,126 +958,137 @@ def _assert_test_users_unseen(config: dict, test_pids: list):
     assert not overlap, f"test users also in train/val: {sorted(overlap)}"
 
 
+def _load_test_episodes(config: dict, test_pids: list):
+    """The fold's cached TEST episode file, verified against the manifest and the caller's users."""
+    from episodes import episode_cache as ec
+    _assert_test_users_unseen(config, test_pids)
+    es = ec.load("test", config["fold_idx"])
+    assert set(test_pids) == set(es.users), (
+        f"test_pids {sorted(test_pids)} != cached test users of fold "
+        f"{config['fold_idx']}: {sorted(es.users)}")
+    return es
+
+
+def _eval_cells(config: dict, cells) -> list:
+    """Cells to evaluate. None -> the single cell the model was trained for (n_way, k_shot).
+    The classification head has config['n_way'] outputs, so every cell must use that n_way."""
+    cells = [(config["n_way"], config["k_shot"])] if cells is None else [tuple(c) for c in cells]
+    bad = [c for c in cells if c[0] != config["n_way"]]
+    assert not bad, f"cells {bad} have n_way != trained head size {config['n_way']}"
+    return cells
+
+
+def _summarise_eval(es, rows_by_cell: dict) -> dict:
+    """rows_by_cell[(n, k)] = list of per-episode rows (outcomes_to_per_episode)."""
+    import numpy as _np
+    from collections import defaultdict as _dd
+
+    def per_cell(rows):
+        correct, total = _dd(int), _dd(int)
+        for r in rows:
+            correct[r["user"]] += r["n_correct"]
+            total[r["user"]] += r["n_query"]
+        per_user = {u: correct[u] / total[u] for u in total}
+        vals = list(per_user.values())
+        return {"per_user_acc": per_user, "mean_acc": float(_np.mean(vals)),
+                "std_acc": float(_np.std(vals)), "n_episodes": len(rows)}
+
+    cells = list(rows_by_cell)
+    out = dict(per_cell(rows_by_cell[cells[0]]))        # first cell = backwards-compatible keys
+    out["per_cell"] = {f"n{n}k{k}": per_cell(rows) for (n, k), rows in rows_by_cell.items()}
+    out["episode_source"] = es.source_block()
+    out["per_episode"] = [r for rows in rows_by_cell.values() for r in rows]
+    return out
+
+
+def _print_eval(res: dict):
+    print(f"  [Test] Per-user results ({len(res['per_user_acc'])} users), "
+          f"{res['n_episodes']} episodes, source {res['episode_source']['sha256'][:12]}:")
+    for uid, acc in sorted(res["per_user_acc"].items()):
+        print(f"    user={uid}  acc={acc*100:.2f}%")
+    print(f"  [Test] Mean: {res['mean_acc']*100:.2f}%  Std over users: {res['std_acc']*100:.2f}%")
+
+
 def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
-                            test_pids: list, num_episodes: int = NUM_TEST_EPISODES) -> dict:
+                            test_pids: list, cells=None) -> dict:
     """
-    Evaluate a MAML model on test_pids using episodic (1-shot 3-way) sampling.
-    Returns dict with per-user accs, mean, std.
+    Evaluate a MAML model on the fold's cached TEST episodes (docs/SPEC_episode_cache.md).
+
+    cells: list of (n_way, k_shot); None = the trained cell. Returns the first cell's per-user
+    summary at the top level (mean_acc / std_acc / per_user_acc), plus per_cell, episode_source
+    (file + sha256) and per_episode rows (id, user, n_query, n_correct) for the aggregator.
     """
-    from MAML.maml_data_pipeline import MetaGestureDataset, maml_mm_collate, reorient_tensor_dict
+    from MAML.maml_data_pipeline import maml_mm_collate, reorient_tensor_dict
     from MAML.mamlpp import mamlpp_adapt_and_eval
+    from episodes.episode_torch import CachedEpisodeDataset, outcomes_to_per_episode
     import pickle
     from torch.utils.data import DataLoader
-    from collections import defaultdict
 
-    _assert_test_users_unseen(config, test_pids)
+    es = _load_test_episodes(config, test_pids)
     with open(tensor_dict_path, "rb") as f:
-        full_dict   = pickle.load(f)
+        full_dict = pickle.load(f)
     tensor_dict = reorient_tensor_dict(full_dict, config)
 
-    test_ds = MetaGestureDataset(
-        tensor_dict,
-        target_pids            = test_pids,
-        target_gesture_classes = config["maml_gesture_classes"],
-        target_trial_reps   = config["target_trial_reps"],
-        n_way                  = config["n_way"],
-        k_shot                 = config["k_shot"],
-        q_query                = config["q_query"],
-        num_eval_episodes      = num_episodes,
-        is_train               = False,
-        seed                   = FIXED_SEED,
-    )
-    test_dl = DataLoader(test_ds, batch_size=1, shuffle=False, num_workers=4,
-                         collate_fn=maml_mm_collate)
-
     model.eval()
-    user_metrics: dict = defaultdict(list)
-    for batch in test_dl:
-        uid = batch["user_id"]
-        metrics = mamlpp_adapt_and_eval(model, config, batch["support"], batch["query"])
-        user_metrics[uid].append(metrics["acc"])
+    rows_by_cell = {}
+    for n, k in _eval_cells(config, cells):
+        eps = es.select(n, k)
+        ds = CachedEpisodeDataset(tensor_dict, eps, config["modality_mask"])
+        dl = DataLoader(ds, batch_size=1, shuffle=False, num_workers=4, collate_fn=maml_mm_collate)
+        correct = []
+        for batch in dl:
+            metrics = mamlpp_adapt_and_eval(model, config, batch["support"], batch["query"])
+            correct.append(int(round(metrics["acc"] * batch["query"]["labels"].numel())))
+        rows_by_cell[(n, k)] = outcomes_to_per_episode(eps, correct)
 
-    per_user = {uid: float(np.mean(accs)) for uid, accs in user_metrics.items()}
-    vals = list(per_user.values())
-
-    print(f"  [Test] Per-user results ({len(per_user)} users):")
-    for uid, acc in sorted(per_user.items()):
-        print(f"    user={uid}  acc={acc*100:.2f}%")
-    print(f"  [Test] Mean: {float(np.mean(vals))*100:.2f}%  Std: {float(np.std(vals))*100:.2f}%")
-
-    return {
-        "per_user_acc": per_user,
-        "mean_acc":     float(np.mean(vals)),
-        "std_acc":      float(np.std(vals)),
-        "num_episodes": num_episodes,
-    }
+    res = _summarise_eval(es, rows_by_cell)
+    _print_eval(res)
+    return res
 
 
 def run_supervised_test_eval(model, config: dict, tensor_dict_path: str,
-                              test_pids: list, ft_mode: str,
-                              num_episodes: int = NUM_TEST_EPISODES) -> dict:
+                              test_pids: list, ft_mode: str, cells=None) -> dict:
     """
-    Evaluate a non-MAML model using episodic finetune-then-eval.
-    ft_mode: 'head_only' | 'full'
+    Evaluate a non-MAML model by fine-tuning on each cached episode's support set.
+    ft_mode: 'head_only' | 'full'. Same return structure as run_episodic_test_eval.
     """
-    from MAML.maml_data_pipeline import MetaGestureDataset, maml_mm_collate, reorient_tensor_dict
+    from MAML.maml_data_pipeline import maml_mm_collate, reorient_tensor_dict
     from pretraining.pretrain_finetune import finetune_and_eval_user
     from MAML.mamlpp import assert_support_query_rep_disjoint
+    from episodes.episode_torch import CachedEpisodeDataset, outcomes_to_per_episode
     import pickle
     from torch.utils.data import DataLoader
-    from collections import defaultdict
 
-    _assert_test_users_unseen(config, test_pids)
+    es = _load_test_episodes(config, test_pids)
     with open(tensor_dict_path, "rb") as f:
-        full_dict   = pickle.load(f)
-    # Reorient tensors from disk layout (trials, T, C) → (trials, C, T) so that
-    # MetaGestureDataset slices yield (C, T) samples, which maml_mm_collate stacks
-    # into (B, C, T) — the channel-first layout expected by all Conv1d / LSTM models.
-    # run_episodic_test_eval already does this; omitting it here caused the
-    # "Expected size 16 but got size 72" RuntimeError in the MOE_encoder cat.
+        full_dict = pickle.load(f)
+    # Reorient (trials, T, C) -> (trials, C, T): the channel-first layout all Conv1d/LSTM models expect.
     tensor_dict = reorient_tensor_dict(full_dict, config)
 
-    test_ds = MetaGestureDataset(
-        tensor_dict,
-        target_pids            = test_pids,
-        target_gesture_classes = config["maml_gesture_classes"],
-        target_trial_reps   = config["target_trial_reps"],
-        n_way                  = config["n_way"],
-        k_shot                 = config["k_shot"],
-        q_query                = config["q_query"],
-        num_eval_episodes      = num_episodes,
-        is_train               = False,
-        seed                   = FIXED_SEED,
-    )
-    test_dl = DataLoader(test_ds, batch_size=1, shuffle=False, num_workers=4,
-                         collate_fn=maml_mm_collate)
-
     model.eval()
-    user_metrics: dict = defaultdict(list)
-    for batch in test_dl:
-        uid     = batch["user_id"]
-        support = batch["support"]
-        query   = batch["query"]
-        assert_support_query_rep_disjoint(support, query)
-        metrics = finetune_and_eval_user(
-            model, config,
-            support_emg=support["emg"], support_imu=support.get("imu"),
-            support_labels=support["labels"],
-            query_emg=query["emg"],     query_imu=query.get("imu"),
-            query_labels=query["labels"],
-            mode=ft_mode,
-        )
-        user_metrics[uid].append(metrics["acc"])
+    rows_by_cell = {}
+    for n, k in _eval_cells(config, cells):
+        eps = es.select(n, k)
+        ds = CachedEpisodeDataset(tensor_dict, eps, config["modality_mask"])
+        dl = DataLoader(ds, batch_size=1, shuffle=False, num_workers=4, collate_fn=maml_mm_collate)
+        correct = []
+        for batch in dl:
+            support, query = batch["support"], batch["query"]
+            assert_support_query_rep_disjoint(support, query)
+            metrics = finetune_and_eval_user(
+                model, config,
+                support_emg=support["emg"], support_imu=support.get("imu"),
+                support_labels=support["labels"],
+                query_emg=query["emg"],     query_imu=query.get("imu"),
+                query_labels=query["labels"],
+                mode=ft_mode,
+            )
+            correct.append(int(round(metrics["acc"] * query["labels"].numel())))
+        rows_by_cell[(n, k)] = outcomes_to_per_episode(eps, correct)
 
-    per_user = {uid: float(np.mean(accs)) for uid, accs in user_metrics.items()}
-    vals = list(per_user.values())
-    return {
-        "per_user_acc": per_user,
-        "mean_acc":     float(np.mean(vals)),
-        "std_acc":      float(np.std(vals)),
-        "ft_mode":      ft_mode,
-        "num_episodes": num_episodes,
-    }
+    res = _summarise_eval(es, rows_by_cell)
+    res["ft_mode"] = ft_mode
+    return res
 
 
 # =============================================================================

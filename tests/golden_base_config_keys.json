@@ -1,5 +1,5 @@
 {
- "n_keys": 116,
+ "n_keys": 117,
  "types": {
   "FILM_on_context_or_demo": "str",
   "MOE_aux_coeff": "float",
@@ -110,6 +110,7 @@
   "use_earlystopping": "bool",
   "use_film_x_demo": "bool",
   "use_imu": "bool",
+  "val_episode_source": "str",
   "use_lslr_at_eval": "bool",
   "use_maml_msl": "str",
   "user_split_json_filepath": "str",
