@@ -26,7 +26,7 @@ dependencies:
   - h5py
 
   # Baselines added 2026-10-21 (Riemannian tangent-space, MiniRocket) and test runner
-  - pyriemann
+  - pyriemann=0.9   # 0.10+ needs numpy>=2, which breaks numba/scipy here
   - aeon
   - pytest
   

@@ -13,7 +13,7 @@ git fetch origin && git checkout main && git pull   # all work is on main now
 module purge && module load Mamba/23.11.0-0
 source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/conda.sh
 source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/mamba.sh
-mamba install --dry-run -p /projects/my13/kai/meta-pers-gest/envs/fl-torch -c conda-forge pyriemann aeon pytest 2>&1 | tail -40
+mamba install --dry-run -p /projects/my13/kai/meta-pers-gest/envs/fl-torch -c conda-forge pyriemann=0.9 aeon pytest 2>&1 | tail -40
 ```
 If the dry run does **not** list `pytorch`, `torch` or `cuda` among the packages it would change (numpy/numba/scikit-learn bumps are OK), run the same command without `--dry-run`. If it does touch torch, do not run it, and paste the output to me instead (then we use `pip install --no-deps` into the env).
 ```bash
