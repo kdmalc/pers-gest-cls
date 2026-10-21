@@ -7,7 +7,8 @@
 # eval_launcher.sh, which is LEGACY (do not use it for new numbers).
 #
 # Usage:
-#   bash kfold_launcher.sh TOKEN [TOKEN ...] [--folds 0 1 2 ...] [--dry-run] [--debug]
+#   bash kfold_launcher.sh TOKEN [TOKEN ...] --hpo-config {legacy|frozen|tuned} [--folds 0 1 2 ...]
+#                          [--dry-run] [--debug]
 #                          [--partition P] [--cluster NOTS|RANGE]
 #
 # Examples:
@@ -26,8 +27,10 @@
 #   grid_M0 grid_A2 grid_A4                     (k in {1,3,5} x n in {3,5,10} = 9 cells per fold;
 #                                                63 jobs per token with all folds -- pass --folds!)
 #
+#   A14_M0 A14_A4                               (ProtoNet / kNN readout on the fold's frozen M0 / A4 backbone;
+#                                                submit AFTER that fold's M0 / A4 job has finished)
 # NOT on the shared episode cache yet, so deliberately NOT launchable (the aggregator would reject
-# their results): A7/A8 (subject-specific), A14 (ProtoNet on the M0 encoder), portA, A16.
+# their results): A7/A8 (subject-specific), portA, A16.
 # NOT wired yet (use only after the pending work in docs/FULL_RUNNING_LOG.md):
 #   A10/A11/A12/A11b (2 kHz + Kaifosh, waits on the O1 design), A16 (needs fold checkpoints
 #   manifest), A5, portA, steps sweeps (must use the dev users P005 P131 P116 P109).
@@ -42,6 +45,8 @@ CLUSTER="NOTS"
 DRY_RUN=false
 DEBUG=false
 PARTITION_ARG=""
+HPO_CONFIG_ARG=""
+EMG_REPR_ARG="env20"   # env20 | fs64 (needs segfilt_fs64_tensor_dict.pkl next to the env20 dict)
 TOKENS=()
 FOLDS=()
 N_FOLDS=7
@@ -52,6 +57,8 @@ while [[ $# -gt 0 ]]; do
         --debug)     DEBUG=true; shift ;;
         --partition) PARTITION_ARG="$2"; shift 2 ;;
         --cluster)   CLUSTER="$2"; shift 2 ;;
+        --hpo-config) HPO_CONFIG_ARG="$2"; shift 2 ;;
+        --emg-repr)  EMG_REPR_ARG="$2"; shift 2 ;;
         --folds)
             shift
             while [[ $# -gt 0 && "$1" =~ ^[0-9]+$ ]]; do FOLDS+=("$1"); shift; done
@@ -61,6 +68,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+case "$HPO_CONFIG_ARG" in legacy|frozen|tuned) ;; *)
+    echo "ERROR: --hpo-config legacy|frozen|tuned is required (legacy = Trial-89, smoke only)"; exit 1 ;;
+esac
 [[ ${#TOKENS[@]} -gt 0 ]] || { echo "ERROR: no tokens given. See header for usage."; exit 1; }
 if [[ ${#FOLDS[@]} -eq 0 ]]; then
     for ((k = 0; k < N_FOLDS; k++)); do FOLDS+=("$k"); done
@@ -72,7 +82,8 @@ done
 if [[ "$CLUSTER" == "NOTS" ]]; then
     CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
     DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
-    EVAL_OUT_BASE=/scratch/my13/kai/runs/paper/ablations/eval
+    # sub2 = the resubmission runs; HPO lives next to it in /scratch/my13/kai/runs/paper/sub2/hpo
+    EVAL_OUT_BASE=/scratch/my13/kai/runs/paper/sub2/eval
     LOG_DIR=$EVAL_OUT_BASE/logs
     ENV_PATH=/projects/my13/kai/meta-pers-gest/envs/fl-torch
 elif [[ "$CLUSTER" == "RANGE" ]]; then
@@ -90,6 +101,12 @@ module load Mamba/23.11.0-0
 source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/conda.sh
 source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/mamba.sh'
 
+# Compute nodes have no git: resolve the revision HERE (login node) and export it into the job.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GIT_REV="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD)" || { echo "ERROR: cannot read git revision"; exit 1; }
+if ! git -C "$SCRIPT_DIR" diff --quiet HEAD; then GIT_REV="${GIT_REV}-dirty"; fi
+echo "Submitting revision: $GIT_REV"
+
 ABL_DIR=$CODE_DIR/system/NOTS/paper/ablations/test_eval_files
 CPUS=10
 
@@ -106,6 +123,9 @@ SPEC[A13_imu_only]="A13_modality_ablation.py|--condition imu_only|12:00:00|32G"
 for n in 4 8 12 16 20; do
     SPEC[A15_N$n]="A15_metatrain_user_sweep.py|--n-users $n|12:00:00|32G"
 done
+# ProtoNet / kNN readout on the frozen backbone of the SAME fold's checkpoint (run after M0 / A4).
+SPEC[A14_M0]="A14_protonet_encoder.py|@CKPT:M0|03:00:00|32G"
+SPEC[A14_A4]="A14_protonet_encoder.py|@CKPT:A4|03:00:00|32G"
 SPEC[portB_head]="portB_local_adaptation.py|--local-module head|12:00:00|32G"
 # Classical / non-parametric baselines on the cached episodes (CPU only, all 9 cells).
 for m in dollar_b dollar_b_user knn_l1 proto_euclid; do
@@ -129,7 +149,11 @@ echo \"CKPT      : \$CKPT\""
     local out_dir="$EVAL_OUT_BASE/kfold7/$token/fold$fold"
     local name="kfold7_${token}${tag}_f${fold}"
     local partition="${PARTITION_ARG:-commons}"
-    if [[ "$DEBUG" == true ]]; then partition="debug"; time="00:15:00"; fi
+    if [[ "$DEBUG" == true ]]; then
+        partition="debug"; time="00:15:00"
+        # --smoke (1 epoch x 48 episodes) so train -> val -> TEST -> save all run inside 15 min
+        case "$script" in M0_full_model.py|A3_A4_maml_no_moe.py) extra="$extra --smoke" ;; esac
+    fi
 
     local wrap_body
     wrap_body=$(cat <<WRAPEOF
@@ -139,7 +163,10 @@ export RUN_DIR=$out_dir
 mkdir -p "\$RUN_DIR"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 echo "JOB_START host=\$(hostname) date=\$(date) jobid=\${SLURM_JOB_ID}"
-echo "GIT_REV   : \$(cd $CODE_DIR && git rev-parse --short HEAD)"
+export GIT_REV=$GIT_REV
+export HPO_CONFIG=$HPO_CONFIG_ARG
+export EMG_REPR=$EMG_REPR_ARG
+echo "GIT_REV   : \$GIT_REV"
 echo "TOKEN     : $token  fold=$fold  tag=$tag"
 echo "SCRIPT    : $ABL_DIR/$script $extra --fold-idx $fold"
 python -c "import torch; print('PyTorch', torch.__version__, 'CUDA', torch.cuda.is_available())"
@@ -180,10 +207,11 @@ for token in "${TOKENS[@]}"; do
             for k in 1 3 5; do for n in 3 5 10; do
                 submit_job "$token" "$fold" "$script" "--k-shot $k --n-way $n" "$time" "$mem" "_k${k}n${n}" "" "$kind"
             done; done
-        elif [[ "$extra" == "@CKPT" ]]; then
-            # M0 checkpoint of the same fold; fail the job loudly if absent (no silent fallback).
-            ckpt_glob="$EVAL_OUT_BASE/kfold7/M0/fold$fold/M0_*_kfold7_fold${fold}_seed42_best.pt"
-            submit_job "$token" "$fold" "$script" '--checkpoint "$CKPT"' "$time" "$mem" "" "$ckpt_glob" "$kind"
+        elif [[ "$extra" == @CKPT:* ]]; then
+            # checkpoint of the same fold from the named run; the job fails loudly if absent.
+            src="${extra#@CKPT:}"
+            ckpt_glob="$EVAL_OUT_BASE/kfold7/$src/fold$fold/${src}_*_kfold7_fold${fold}_seed42_best.pt"
+            submit_job "$token" "$fold" "$script" "--model $src --cells all --checkpoint \"\$CKPT\"" "$time" "$mem" "" "$ckpt_glob" "$kind"
         else
             submit_job "$token" "$fold" "$script" "$extra" "$time" "$mem" "" "" "$kind"
         fi

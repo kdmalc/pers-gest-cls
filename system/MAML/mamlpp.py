@@ -489,6 +489,7 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
                     collapse_consecutive_checks: int = 2,
                     periodic_checkpoint_fn=None,
                     periodic_test_eval_fn=None,
+                    epoch_callback=None,
                     checkpoint_every: int = 10):
     """
     Args:
@@ -634,6 +635,9 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
             cur_val_loss, cur_val_acc = val_metrics["loss"], val_metrics["acc"]
             val_loss_log.append(cur_val_loss)
             val_acc_log.append(cur_val_acc)
+            if epoch_callback is not None:
+                # e.g. Optuna pruning: called once per epoch with the per-user-mean val accuracy
+                epoch_callback(ep, cur_val_acc)
             print(f"Val completed in {time.time() - val_start_time:.2f}s")
             print(f"Val loss/acc: {cur_val_loss:.4f}, {cur_val_acc*100:.2f}%")
 
@@ -998,6 +1002,9 @@ def mamlpp_adapt(model, config, support_batch, *, use_lslr_at_eval=False):
             f_s = FunctionalModel(model, theta)
             outputs_s, labels_s, _ = _model_forward_router(f_s, support_batch, device, multimodal=multimodal)
             logits_s = outputs_s[0] if isinstance(outputs_s, tuple) else outputs_s
+            # A head with more outputs than the episode has classes (e.g. a 10-way head on a
+            # 3-way episode) uses only its first n outputs; labels are 0..n-1 per episode.
+            logits_s = logits_s[:, :episode_n_way(labels_s)]
             s_loss = criterion(logits_s, labels_s)
 
             # create_graph=False because we don't backprop to theta0 during EVALUATION
@@ -1026,6 +1033,7 @@ def mamlpp_predict_with_params(model, adapted_params, batch, config):
     fmodel = FunctionalModel(model, adapted_params)
     outputs, labels, B = _model_forward_router(fmodel, batch, device, multimodal=multimodal)
     logits = outputs[0] if isinstance(outputs, tuple) else outputs
+    logits = logits[:, :episode_n_way(labels)]          # see mamlpp_adapt
     preds = torch.argmax(logits, dim=1)
     
     # Revert base model to train immediately to prevent silent state bugs in next episode
@@ -1111,6 +1119,14 @@ def assert_no_support_query_leakage(support_batch, query_batch, config,
             "blocks_skipped": blocks_skipped, "n_pairs_flagged": 0}
 
 
+def episode_n_way(labels) -> int:
+    """Number of classes in an episode; local labels must be exactly 0..n-1."""
+    uniq = torch.unique(labels).tolist()
+    if uniq != list(range(len(uniq))):
+        raise AssertionError(f"episode labels must be 0..n-1, got {uniq}")
+    return len(uniq)
+
+
 def assert_support_query_rep_disjoint(support_batch, query_batch):
     """
     Assert that no (gesture, repetition) appears in both support and query.
@@ -1148,6 +1164,7 @@ def mamlpp_adapt_and_eval(model, config, support_batch, query_batch, debug=False
                 fmodel, query_batch, device, multimodal=multimodal, config=config
             )
             pre_adapt_logits = outputs[0] if isinstance(outputs, tuple) else outputs
+            pre_adapt_logits = pre_adapt_logits[:, :episode_n_way(q_labels)]
             pre_adapt_acc = (pre_adapt_logits.argmax(dim=-1) == q_labels).float().mean().item()
         model.train()
 

@@ -56,6 +56,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
+    tensor_dict_file,
     apply_kfold_fold, add_fold_arg,
     make_base_config, build_maml_moe_model, set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
@@ -154,7 +155,7 @@ def run_one(n_users: int, subsample_seed: int, fold_idx: int,
         print(f"[A15] NOTE: N={n_users} == pool size, so the draw cannot vary. "
               f"Seeds are {'training replicates' if vary_training_seed else 'IDENTICAL runs'}.")
 
-    tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
+    tensor_dict_path = tensor_dict_file(config)
 
     model = build_maml_moe_model(config)
     n_params = count_parameters(model)

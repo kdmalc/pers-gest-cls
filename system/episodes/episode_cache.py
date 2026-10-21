@@ -17,6 +17,7 @@ import hashlib
 import importlib.util
 import json
 import random
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -184,7 +185,7 @@ class EpisodeSet:
                     tuple(tuple(s) for s in e["support"]), obj["n_reps"])
             for e in obj["episodes"])
 
-    def select(self, n_way: int, k_shot: int, users=None) -> list:
+    def select(self, n_way: int, k_shot: int, users=None, max_per_user=None) -> list:
         if (n_way, k_shot) not in self.cells:
             raise KeyError(f"cell (n={n_way}, k={k_shot}) not in this file: {self.cells}")
         if users is not None:
@@ -195,6 +196,16 @@ class EpisodeSet:
                and (users is None or e.user in users)]
         if not out:
             raise ValueError(f"no episodes for cell (n={n_way}, k={k_shot}), users={users}")
+        if max_per_user is not None:
+            # first m episodes per user in file order (a deterministic prefix of each user's stream)
+            if max_per_user < 1:
+                raise ValueError("max_per_user must be >= 1")
+            seen, kept = defaultdict(int), []
+            for e in out:
+                seen[e.user] += 1
+                if seen[e.user] <= max_per_user:
+                    kept.append(e)
+            out = kept
         return out
 
     def source_block(self) -> dict:

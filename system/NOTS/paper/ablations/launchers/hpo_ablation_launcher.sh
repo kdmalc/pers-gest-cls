@@ -17,7 +17,7 @@
 #   bash hpo_ablation_launcher.sh A3 --n-trials 50        # custom trial count
 #
 # Output layout:
-#   Optuna journals : $HPO_DB_DIR/ablation_<ID>_1s3w_hpo_v1.log
+#   Optuna journals : $HPO_DB_DIR/ablation_<ID>_10w1s_kfold7_v1.log
 #   Trial checkpts  : $HPO_OUT_BASE/<ID>/trial_<array_task_id>/
 #   SLURM logs      : $LOG_DIR/<jobname>_<jobid>_<taskid>.out
 #
@@ -34,9 +34,10 @@ CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
 DATA_DIR=/scratch/my13/kai/meta-pers-gest/data
 HPO_SCRIPT_PATH="$CODE_DIR/system/NOTS/paper/ablations/ablation_hpo.py"
 MOE_HPO_SCRIPT_PATH="$CODE_DIR/system/NOTS/paper/ablations/M0_MOE_hpo.py"
-HPO_DB_DIR=/scratch/my13/kai/meta-pers-gest/optuna_dbs
-HPO_OUT_BASE=/scratch/my13/kai/runs/paper/ablations/hpo
-LOG_DIR=/scratch/my13/kai/runs/paper/ablations/hpo/logs
+# sub2 = the resubmission runs (10-way 1-shot, kfold7 protocol, dev-user HPO)
+HPO_OUT_BASE=/scratch/my13/kai/runs/paper/sub2/hpo
+HPO_DB_DIR=$HPO_OUT_BASE/optuna_dbs
+LOG_DIR=$HPO_OUT_BASE/logs
 
 ENV_PATH=/projects/my13/kai/meta-pers-gest/envs/fl-torch
 
@@ -49,7 +50,7 @@ mkdir -p "$HPO_DB_DIR" "$HPO_OUT_BASE" "$LOG_DIR"
 ABLATIONS=()
 DRY_RUN=false
 DEBUG=false
-N_TRIALS=100
+N_TRIALS=60     # equal budget per method family (docs/SPEC_hpo.md)
 EXPLICIT_N_TRIALS=""   
 OVERRIDE_PARTITION=""  
 i=0
@@ -88,15 +89,15 @@ fi
 PARTITION=commons
 CPUS=10
 MEM_DEFAULT=32G
-TIME_DEFAULT="07:00:00"    # 7h per trial is generous; MAML+MoE typically ~3-4h
+TIME_DEFAULT="12:00:00"    # 10-way MAML trials cost ~3x the old 3-way ones (old: 3-4h)
 
 # =============================================================================
 # Per-ablation resource overrides
 # (comment these back in and adjust if you have per-ablation time data)
 # =============================================================================
 # TIME_M0="06:00:00";  MEM_M0=32G    # full MAML+MoE: ~3-4h
-TIME_A1="00:35:00";  MEM_A1=24G    # supervised MoE: fast (~15 min observed)
-TIME_A2="00:35:00";  MEM_A2=16G    # supervised, no MoE: fast (~15 min observed)
+TIME_A1="01:30:00";  MEM_A1=24G    # supervised MoE; 10-way dev fine-tune evaluation (100 episodes)
+TIME_A2="01:30:00";  MEM_A2=16G    # supervised, no MoE
 # TIME_A3="04:00:00";  MEM_A3=24G    # MAML, no MoE
 # TIME_A4="04:00:00";  MEM_A4=24G    # MAML, no MoE, wider
 # TIME_A5="06:00:00";  MEM_A5=32G    # same as M0
@@ -216,7 +217,7 @@ for ABLATION in "${ABLATIONS[@]}"; do
         EFFECTIVE_PARTITION="$PARTITION"
         EFFECTIVE_CONCURRENCY="10"
         EFFECTIVE_SCRIPT="$HPO_SCRIPT_PATH"
-        EFFECTIVE_JOURNAL="$HPO_DB_DIR/ablation_${ABLATION}_1s3w_hpo_v1.log"
+        EFFECTIVE_JOURNAL="$HPO_DB_DIR/ablation_${ABLATION}_10w1s_kfold7_v1.log"
     fi
 
     # --partition flag overrides whatever was resolved above for all ablations
@@ -334,7 +335,7 @@ echo "Inspect ablation HPO results:"
 echo "  python -c \""
 echo "    import optuna"
 echo "    from optuna.storages.journal import JournalStorage, JournalFileBackend"
-echo "    storage = JournalStorage(JournalFileBackend('$HPO_DB_DIR/ablation_<ID>_1s3w_hpo_v1.log'))"
+echo "    storage = JournalStorage(JournalFileBackend('$HPO_DB_DIR/ablation_<ID>_10w1s_kfold7_v1.log'))"
 echo "    study = optuna.load_study(study_name='ablation_<ID>_1s3w_hpo_v1', storage=storage)"
 echo "    print(study.best_trial)"
 echo "  \""

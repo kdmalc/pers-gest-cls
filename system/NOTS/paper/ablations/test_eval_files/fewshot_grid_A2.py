@@ -68,6 +68,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
+    tensor_dict_file,
     apply_kfold_fold, add_fold_arg,
     make_base_config, build_supervised_no_moe_model,
     set_seeds, FIXED_SEED,
@@ -139,7 +140,7 @@ def run(k_shot: int, n_way: int, fold_idx: int) -> dict:
     print(f"  Parameters : {n_params:,}")
 
     # ── Load tensor dict once; reused for both pretrain and eval dataloaders ──
-    tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
+    tensor_dict_path = tensor_dict_file(config)
     with open(tensor_dict_path, "rb") as f:
         full_dict = pickle.load(f)
     tensor_dict = reorient_tensor_dict(full_dict, config)

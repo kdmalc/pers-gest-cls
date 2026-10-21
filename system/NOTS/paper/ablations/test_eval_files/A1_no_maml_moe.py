@@ -47,6 +47,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
+    tensor_dict_file,
     make_base_config, build_supervised_moe_model,
     set_seeds, FIXED_SEED,
     run_supervised_test_eval, save_results, save_model_checkpoint, count_parameters,
@@ -144,7 +145,7 @@ def run_one_fold(fold_id: str, seed: int, config: dict, tensor_dict: dict) -> di
         tag=f"{fold_id}_seed{seed}_best",
     )
 
-    tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
+    tensor_dict_path = tensor_dict_file(config)
 
     head_results = run_supervised_test_eval(
         trained_model, config, tensor_dict_path, config["test_PIDs"],
@@ -189,7 +190,7 @@ def main():
     print("\nA1 CONFIG:")
     print(json.dumps({k: str(v) for k, v in config.items()}, indent=2))
 
-    tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
+    tensor_dict_path = tensor_dict_file(config)
     with open(tensor_dict_path, "rb") as f:
         full_dict = pickle.load(f)
     tensor_dict = reorient_tensor_dict(full_dict, config)

@@ -33,8 +33,8 @@ def fold0_setup(tiny_config, tmp_path, monkeypatch):
     # keep it fast: 3 episodes per user per cell, no worker processes
     real_select = ec.EpisodeSet.select
 
-    def short_select(self, n_way, k_shot, users=None):
-        eps = real_select(self, n_way, k_shot, users)
+    def short_select(self, n_way, k_shot, users=None, max_per_user=None):
+        eps = real_select(self, n_way, k_shot, users, max_per_user)
         keep, seen = [], {}
         for e in eps:
             seen[e.user] = seen.get(e.user, 0) + 1
@@ -112,3 +112,70 @@ def test_cached_val_loader_in_get_maml_dataloaders(fold0_setup):
     bad = dict(cfg, val_PIDs=f["val"][:2])
     with pytest.raises(AssertionError, match="episode-file users"):
         get_maml_dataloaders(bad, tensor_dict_path=path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# One 10-output head serves smaller-n episodes (train/HPO once at 10-way)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_ten_way_head_serves_three_and_five_way_episodes(fold0_setup):
+    from MAML.maml_data_pipeline import maml_mm_collate, reorient_tensor_dict
+    from MAML.mamlpp import mamlpp_adapt, mamlpp_predict_with_params, episode_n_way
+    from episodes.episode_torch import CachedEpisodeDataset
+
+    cfg, path, f = fold0_setup
+    cfg = dict(cfg, n_way=10)
+    model = _build("DeepCNNLSTM", cfg)                      # 10-output head
+    with open(path, "rb") as fh:
+        td = reorient_tensor_dict(pickle.load(fh), cfg)
+    es = ec.load("test", 0)
+    for n in (3, 5, 10):
+        ep = es.select(n, 1)[0]
+        ds = CachedEpisodeDataset(td, [ep], "both")
+        batch = maml_mm_collate([ds[0]])
+        assert episode_n_way(batch["support"]["labels"]) == n
+        theta = mamlpp_adapt(model, cfg, batch["support"])
+        logits, preds, labels, B = mamlpp_predict_with_params(model, theta, batch["query"], cfg)
+        assert logits.shape == (B, n) and int(preds.max()) < n
+
+
+def test_run_episodic_test_eval_allows_smaller_n_but_not_larger(fold0_setup):
+    cfg, path, f = fold0_setup
+    cfg = dict(cfg, n_way=5)
+    model = _build("DeepCNNLSTM", cfg)
+    res = ac.run_episodic_test_eval(model, cfg, path, f["test"], cells=[(5, 1), (3, 1)])
+    assert set(res["per_cell"]) == {"n5k1", "n3k1"}
+    with pytest.raises(AssertionError, match="more outputs"):
+        ac.run_episodic_test_eval(model, cfg, path, f["test"], cells=[(10, 1)])
+
+
+def test_episode_n_way_requires_contiguous_labels():
+    from MAML.mamlpp import episode_n_way
+    assert episode_n_way(torch.tensor([0, 1, 2, 1, 0])) == 3
+    with pytest.raises(AssertionError):
+        episode_n_way(torch.tensor([0, 2, 3]))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A14: ProtoNet / kNN readouts on a frozen backbone, via the cache
+# ─────────────────────────────────────────────────────────────────────────────
+def test_a14_protonet_readouts_run_on_cached_episodes(fold0_setup, monkeypatch):
+    import importlib.util, os
+    from pathlib import Path
+    from MAML.maml_data_pipeline import reorient_tensor_dict
+    cfg, path, f = fold0_setup
+    cfg = dict(cfg, n_way=10)
+    monkeypatch.setenv("CODE_DIR", str(Path(ac.__file__).resolve().parents[5]))
+    spec = importlib.util.spec_from_file_location(
+        "a14", Path(ac.__file__).parent / "A14_protonet_encoder.py")
+    a14 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(a14)
+
+    model = _build("DeepCNNLSTM", cfg)
+    with open(path, "rb") as fh:
+        td = reorient_tensor_dict(pickle.load(fh), cfg)
+    es = ec.load("test", 0)
+    rows = a14.evaluate(model, td, es, [(3, 1), (10, 1)], "both", torch.device("cpu"), moe=False)
+    assert set(rows) == {"proto", "knn"}
+    for name in rows:
+        assert set(rows[name]) == {(3, 1), (10, 1)}
+        assert all(0 <= r["n_correct"] <= r["n_query"] for r in rows[name][(3, 1)])

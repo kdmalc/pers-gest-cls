@@ -99,7 +99,7 @@ def _write_results(path, method, bias, seed=0, drop_ids=0, tamper_hash=False, ce
         if tamper_hash:
             src = dict(src, sha256="0" * 64)
         fold_results.append({"seed": seed, "test_results": {"episode_source": src, "per_episode": rows}})
-    path.write_text(json.dumps({"ablation_id": method, "fold_results": fold_results}))
+    path.write_text(json.dumps({"ablation_id": method, "smoke": False, "fold_results": fold_results}))
     return path
 
 
@@ -154,6 +154,15 @@ def test_aggregate_rejects_missing_users(tmp_path):
 
 def test_collect_blocks_requires_contract(tmp_path):
     p = tmp_path / "bad.json"
-    p.write_text(json.dumps({"ablation_id": "X", "test_results": {"mean_acc": 0.5}}))
+    p.write_text(json.dumps({"ablation_id": "X", "smoke": False, "test_results": {"mean_acc": 0.5}}))
     with pytest.raises(ValueError, match="no block"):
         agg.collect_blocks(p)
+
+
+def test_aggregate_rejects_smoke_results(tmp_path):
+    p = _write_results(tmp_path / "s.json", "MA", 0.8)
+    obj = json.loads(p.read_text())
+    obj["smoke"] = True
+    p.write_text(json.dumps(obj))
+    with pytest.raises(ValueError, match="SMOKE"):
+        agg.aggregate([p])

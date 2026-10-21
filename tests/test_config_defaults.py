@@ -216,7 +216,7 @@ def test_base_config_still_has_the_published_m0_values(base_config):
         "MOE_top_k": 9,
         "maml_inner_steps": 10,
         "maml_inner_steps_eval": 10,
-        "n_way": 3,
+        "n_way": 10,        # primary task is 10-way 1-shot (2026-10-21)
         "k_shot": 1,
         "q_query": 9,
         "cnn_base_filters": 64,

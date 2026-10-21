@@ -88,6 +88,9 @@ torch.backends.cudnn.benchmark = False
 
 FIXED_SEED = 42
 N_TRIALS   = int(os.environ.get("N_TRIALS", 1))
+# Set only by --replay-trial (top-3 re-evaluation): training seed, and dev episodes per user.
+SEED_OVERRIDE = None
+VAL_EPISODES_OVERRIDE = None
 
 CODE_DIR = Path(os.environ.get("CODE_DIR", "./")).resolve()
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")).resolve()
@@ -106,10 +109,7 @@ for _p in [CODE_DIR, CODE_DIR / "system", CODE_DIR / "system" / "MAML",
            CODE_DIR / "system" / "MOE", CODE_DIR / "system" / "pretraining"]:
     sys.path.insert(0, str(_p))
 
-HPO_DB_DIR = Path(os.environ.get(
-    "HPO_DB_DIR",
-    "/scratch/my13/kai/meta-pers-gest/optuna_dbs"
-))
+HPO_DB_DIR = Path(os.environ["HPO_DB_DIR"])   # set by the launcher (sub2/hpo/optuna_dbs); no default
 HPO_DB_DIR.mkdir(parents=True, exist_ok=True)
 
 # MoE collapse detection (same as v3 HPO script)
@@ -399,10 +399,13 @@ def _suggest_moe_hps(trial: optuna.Trial, config: dict, ablation_id: str) -> dic
         config["num_experts"] = trial.suggest_categorical(
             "num_experts", [4, 8, 12, 16, 20, 24, 32, 40])
     else:
+        # widened (SPEC_hpo.md): the old space started at 20 and could not find small expert banks
         config["num_experts"] = trial.suggest_categorical(
-            "num_experts", [20, 22, 24, 25, 26, 27, 28, 30, 32, 36, 40, 44])
+            "num_experts", [4, 8, 16, 22, 28, 36])
 
-    config["MOE_top_k"]     = trial.suggest_categorical("MOE_top_k", [4, 5, 6, 7, 8, 9, 10])
+    # top_k is clipped to the bank size (Optuna categorical sets cannot depend on num_experts)
+    config["MOE_top_k"]     = min(trial.suggest_categorical("MOE_top_k", [1, 2, 4, 6, 9, 12]),
+                                  config["num_experts"])
     config["top_k"]         = config["MOE_top_k"]
     config["MOE_gate_temperature"] = trial.suggest_float(
         "MOE_gate_temperature", 0.3, 2.5, log=True)
@@ -436,7 +439,9 @@ def _suggest_supervised_ft_hps(trial: optuna.Trial, config: dict) -> dict:
               adaptation budget across MAML and non-MAML ablations.
     """
     config["ft_lr"]           = trial.suggest_float("ft_lr", 5e-4, 0.1, log=True)
-    config["ft_steps"]        = 50   # FIXED — mirrors maml_inner_steps_eval
+    # eval-time fine-tune budget is tuned on the dev users (SPEC_hpo.md); the MAML-mirrored budget
+    # (10 sgd steps at maml_alpha_init_eval) is reported separately by the eval scripts.
+    config["ft_steps"]        = trial.suggest_categorical("ft_steps", [10, 25, 50, 100, 200])
     config["ft_optimizer"]    = "adam"
     config["ft_weight_decay"] = config["weight_decay"]
     return config
@@ -495,12 +500,16 @@ def build_config_from_trial(
     config["models_save_dir"]  = str(RUN_DIR)
 
     # ── Fixed architecture / task setup ──────────────────────────────────────
-    config["n_way"]                 = 3
+    config["n_way"]                 = 10    # HPO at the primary task: 10-way 1-shot (Kai, 2026-10-21)
     config["k_shot"]                = 1
     config["q_query"]               = 9
     config["num_classes"]           = 10
     config["pretrain_num_classes"]  = 10
-    config["num_eval_episodes"]     = 100   # HPO uses 100 val episodes (speed)
+    config["num_eval_episodes"]     = 100   # only used by the "sampled" val path (unused here)
+    # Dev episodes per user per epoch (cached file has 100/user). A 10-way eval episode is ~3x the
+    # cost of a 3-way one, so the per-epoch HPO signal uses the first 25 per user (100 episodes in
+    # total); the final top-3 re-evaluation uses all 100.
+    config["val_episodes_per_user"] = 25
     config["num_epochs"]            = 50
     config["num_workers"]           = 8
     config["batch_size"]            = 64
@@ -529,7 +538,9 @@ def build_config_from_trial(
     config["debug_five_episodes"]      = False
     config["NOTS"] = True
     config["device"] = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    config["seed"]      = FIXED_SEED
+    config["seed"]      = FIXED_SEED if SEED_OVERRIDE is None else SEED_OVERRIDE
+    if VAL_EPISODES_OVERRIDE is not None:
+        config["val_episodes_per_user"] = VAL_EPISODES_OVERRIDE
     config["timestamp"] = TIMESTAMP
     config["cnn_layers"]    = 3
     config["cnn_kernel"]    = 5
@@ -671,7 +682,8 @@ def _objective_episodic(trial: optuna.Trial, config: dict) -> float:
 
     HPO_BURNIN_EPOCHS = 5   # ignore val acc from epochs 0..HPO_BURNIN_EPOCHS-1
 
-    tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
+    from ablation_config import tensor_dict_file as _tdp
+    tensor_dict_path = _tdp(config)
 
     # A12 uses its own pkl path (set in build_config_from_trial)
     if config.get("ablation_id") == "A12":
@@ -680,8 +692,16 @@ def _objective_episodic(trial: optuna.Trial, config: dict) -> float:
     train_dl, val_dl = get_maml_dataloaders(config, tensor_dict_path=tensor_dict_path)
 
     model = build_model(config)
+
+    def _prune_cb(epoch, val_acc):
+        # report the per-user-mean dev accuracy each epoch; MedianPruner cuts weak trials early
+        trial.report(val_acc, epoch)
+        if trial.should_prune():
+            raise optuna.TrialPruned()
+
     trained_model, history = mamlpp_pretrain(model, config, train_dl,
-                                             episodic_val_loader=val_dl)
+                                             episodic_val_loader=val_dl,
+                                             epoch_callback=_prune_cb)
     val_acc_log  = history.get("val_acc_log", [])   # one entry per epoch (including epoch 0)
     global_best_val_acc = history["best_val_acc"]
     best_state          = history["best_state"]
@@ -779,7 +799,8 @@ def _objective_supervised(trial: optuna.Trial, config: dict) -> float:
     from torch.utils.data import DataLoader
 
     # ── Load tensor_dict once — reuse for both the flat DL and episodic eval ─
-    tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
+    from ablation_config import tensor_dict_file as _tdp
+    tensor_dict_path = _tdp(config)
     with open(tensor_dict_path, "rb") as f:
         full_dict = pickle.load(f)
     tensor_dict = reorient_tensor_dict(full_dict, config)
@@ -1055,7 +1076,7 @@ def run_study(ablation_id: str, profile: dict, n_trials: int = 1) -> optuna.Stud
     time.sleep(sleep_time)
 
     use_journal = int(os.environ.get("HPO_USE_JOURNAL", "1"))
-    study_name  = f"ablation_{ablation_id}_1s3w_hpo_v1"
+    study_name  = f"ablation_{ablation_id}_10w1s_kfold7_v1"
     journal_path = HPO_DB_DIR / f"{study_name}.log"
 
     if use_journal:
@@ -1111,6 +1132,7 @@ def run_study(ablation_id: str, profile: dict, n_trials: int = 1) -> optuna.Stud
         storage=storage,
         load_if_exists=True,
         sampler=sampler,
+        pruner=optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5),
     )
 
     if warm_start and len(study.trials) == 0:
@@ -1146,6 +1168,10 @@ if __name__ == "__main__":
                         help="Override DATA_DIR env var.")
     parser.add_argument("--out_dir",  type=str, default=None,
                         help="Override RUN_DIR env var (per-trial checkpoint dir).")
+    parser.add_argument("--replay-trial", type=int, default=None,
+                        help="Re-evaluate this finished trial's exact config (top-3 re-evaluation) "
+                             "instead of running a new trial. Needs --seed.")
+    parser.add_argument("--seed", type=int, default=None, help="Training seed for --replay-trial.")
     args = parser.parse_args()
 
     if args.data_dir:
@@ -1171,4 +1197,21 @@ if __name__ == "__main__":
     print(f"  RUN_DIR     : {RUN_DIR}")
     print(f"{'='*70}\n")
 
-    run_study(ablation_id=ablation_id, profile=profile, n_trials=N_TRIALS)
+    if args.replay_trial is None:
+        run_study(ablation_id=ablation_id, profile=profile, n_trials=N_TRIALS)
+    else:
+        if args.seed is None:
+            raise SystemExit("--replay-trial needs --seed")
+        SEED_OVERRIDE = args.seed
+        VAL_EPISODES_OVERRIDE = 100            # all cached dev episodes per user
+        random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
+        study_name = f"ablation_{ablation_id}_10w1s_kfold7_v1"
+        study = optuna.load_study(
+            study_name=study_name,
+            storage=JournalStorage(JournalFileBackend(str(HPO_DB_DIR / f"{study_name}.log"))))
+        params = study.trials[args.replay_trial].params
+        score = objective(optuna.trial.FixedTrial(params), ablation_id, profile)
+        out = RUN_DIR / f"reeval_{ablation_id}_trial{args.replay_trial}_seed{args.seed}.json"
+        out.write_text(json.dumps({"ablation": ablation_id, "trial": args.replay_trial,
+                                   "seed": args.seed, "score": score, "params": params}, indent=1))
+        print(f"[replay] trial {args.replay_trial} seed {args.seed}: dev acc {score*100:.2f}% -> {out}")

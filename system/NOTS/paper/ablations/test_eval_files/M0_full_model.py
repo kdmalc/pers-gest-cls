@@ -35,12 +35,14 @@ sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
+    tensor_dict_file,
     make_base_config, build_maml_moe_model,
     set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
     make_periodic_checkpoint_fn, make_periodic_test_eval_fn,
     RUN_DIR,
     apply_kfold_fold, KFOLD_N_FOLDS, TRAIN_PIDS, VAL_PIDS, TEST_PIDS,
+    add_smoke_arg, apply_smoke,
 )
 from MAML.maml_data_pipeline import get_maml_dataloaders
 
@@ -71,6 +73,7 @@ def parse_args() -> argparse.Namespace:
             "Ignored when --test-procedure is hpo_test_split."
         ),
     )
+    add_smoke_arg(parser)
     return parser.parse_args()
 
 
@@ -79,7 +82,7 @@ def build_config(args: argparse.Namespace) -> dict:
     # Apply CLI override if provided; otherwise the config default (L2SO) stands.
     if args.test_procedure is not None:
         config["test_procedure"] = args.test_procedure
-    return config
+    return apply_smoke(config, args.smoke)
 
 
 def run_one_fold(fold_id: str, seed: int, config: dict) -> dict:
@@ -98,7 +101,7 @@ def run_one_fold(fold_id: str, seed: int, config: dict) -> dict:
     print(f"  val_PIDs   : {config['val_PIDs']}")
     print(f"  test_PIDs  : {config['test_PIDs']}")
 
-    tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
+    tensor_dict_path = tensor_dict_file(config)
     train_dl, val_dl = get_maml_dataloaders(config, tensor_dict_path=tensor_dict_path)
 
     from MAML.mamlpp import mamlpp_pretrain

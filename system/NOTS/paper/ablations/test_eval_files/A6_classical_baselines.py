@@ -22,6 +22,7 @@ for rel in ("", "system", "system/MAML", "system/MOE", "system/pretraining",
     sys.path.insert(0, str(CODE_DIR / rel) if rel else str(CODE_DIR))
 
 from ablation_config import (  # noqa: E402
+    tensor_dict_file,
     _summarise_eval, _print_eval, apply_kfold_fold, add_fold_arg, make_base_config,
     save_results,
 )
@@ -60,7 +61,7 @@ def main():
     es = ec.load("test", args.fold_idx)
     assert set(test_pids) == set(es.users)
 
-    with open(os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl"), "rb") as f:
+    with open(tensor_dict_file(config), "rb") as f:
         tensor_dict = reorient_tensor_dict(pickle.load(f), config)
 
     rows_by_cell = {}

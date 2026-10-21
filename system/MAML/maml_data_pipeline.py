@@ -683,7 +683,10 @@ def get_maml_dataloaders(config, tensor_dict_path):
         assert set(config["val_PIDs"]) == set(es.users), (
             f"val_PIDs {sorted(config['val_PIDs'])} != episode-file users {sorted(es.users)}")
         val_ds = CachedEpisodeDataset(
-            tensor_dict, es.select(config["n_way"], config["k_shot"]), modality_mask)
+            tensor_dict,
+            es.select(config["n_way"], config["k_shot"],
+                      max_per_user=config["val_episodes_per_user"]),   # None = all cached episodes
+            modality_mask)
         print(f"[get_maml_dataloaders] val episodes from cache {es.source_block()} "
               f"cell=(n={config['n_way']}, k={config['k_shot']}): {len(val_ds)} episodes")
 

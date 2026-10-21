@@ -38,6 +38,8 @@ def collect_blocks(results_path) -> list:
     obj = json.loads(Path(results_path).read_text())
     if "ablation_id" not in obj:
         raise KeyError(f"{results_path}: no top-level ablation_id")
+    if obj["smoke"]:
+        raise ValueError(f"{results_path}: SMOKE run results must not be aggregated")
     found = []
     _walk(obj, [], [], found)
     if not found:

@@ -80,6 +80,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
+    tensor_dict_file,
     apply_kfold_fold, add_fold_arg,
     make_base_config, build_maml_moe_model, set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
@@ -167,7 +168,7 @@ def run(args) -> dict:
     config = build_config(local_module, args.eval_only_freeze, args.fold_idx)
     set_seeds(FIXED_SEED)
 
-    tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
+    tensor_dict_path = tensor_dict_file(config)
 
     model = build_maml_moe_model(config)
     n_params = count_parameters(model)

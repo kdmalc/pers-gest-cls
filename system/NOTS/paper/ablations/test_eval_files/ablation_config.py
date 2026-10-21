@@ -106,8 +106,8 @@ TRAIN_PIDS = ALL_SPLITS[FOLD_IDX]["train"]
 VAL_PIDS   = ALL_SPLITS[FOLD_IDX]["val"]
 TEST_PIDS  = ALL_SPLITS[FOLD_IDX]["test"]
 
-print(f"Using fold {FOLD_IDX}: {len(TRAIN_PIDS)} train | "
-      f"{len(VAL_PIDS)} val | {len(TEST_PIDS)} test PIDs")
+print(f"[legacy] old kapanji fold-0 constants loaded ({len(TRAIN_PIDS)}/{len(VAL_PIDS)}/"
+      f"{len(TEST_PIDS)} train/val/test); the kfold7 protocol does NOT use them")
 
 # ── Evaluation protocol (decided 2026-10-21): 28/4 outer split + 7 folds of 20/4/4 ──
 # 4 HPO-val users are never tested; each of the other 28 is a test user in exactly
@@ -135,8 +135,77 @@ def build_kfold_folds() -> list:
     return out
 
 
+# EMG representation of the tensor dict a run reads (docs/SPEC_2khz_emg.md):
+#   env20 : 20 Hz MAV envelope, 16 channels   (the original input)
+#   fs64  : windowed spectral features of the native-rate EMG, 112 channels (16 x 7)
+EMG_REPRS = {"env20": ("segfilt_rts_tensor_dict.pkl", 16), "fs64": ("segfilt_fs64_tensor_dict.pkl", 112)}
+
+
+def apply_emg_repr(config: dict, emg_repr: str) -> dict:
+    if emg_repr not in EMG_REPRS:
+        raise ValueError(f"EMG_REPR must be one of {sorted(EMG_REPRS)}, got {emg_repr!r}")
+    config["emg_repr"] = emg_repr
+    config["emg_in_ch"] = EMG_REPRS[emg_repr][1]
+    return config
+
+
+def tensor_dict_file(config: dict) -> str:
+    """Path of the tensor dict matching config['emg_repr'] (replaces the hard-coded file name)."""
+    return os.path.join(config["dfs_load_path"], EMG_REPRS[config["emg_repr"]][0])
+
+
+HPO_CONFIG_PATH = CODE_DIR / "models" / "hpo_best_models" / "best_hpo_configs.json"
+HPO_MODES = ("legacy", "frozen", "tuned")
+# keys that define an ablation's structure; a frozen M0 override must never change them
+_STRUCTURAL_KEYS = {"use_MOE", "meta_learning", "cnn_base_filters", "lstm_hidden",
+                    "MOE_placement", "model_type", "n_way", "k_shot"}
+
+
+def apply_hpo_config(config: dict, mode: str) -> dict:
+    """
+    Which hyperparameters a run uses (docs/SPEC_hpo.md). Raises on any inconsistency.
+
+      legacy : keep the Trial-89 values hard-coded in make_base_config (tuned for the OLD 3-way
+               protocol). Only for smoke tests / regression; results are labelled.
+      tuned  : this ablation's own exported HPO result (best_hpo_configs.json[ablation]).
+               Ablations without their own HPO (A13, A15, grids, portB, ...) use M0's.
+      frozen : M0's exported result applied to the ablation (only the ablated part differs).
+    Overrides must name keys that already exist in the config (a typo raises), and a frozen M0
+    override may not touch structural keys.
+    """
+    import json as _json
+    if mode not in HPO_MODES:
+        raise ValueError(f"HPO_CONFIG must be one of {HPO_MODES}, got {mode!r}")
+    config["hpo_config"] = mode
+    if mode == "legacy":
+        print("[hpo] LEGACY hyperparameters (Trial 89, tuned for the old 3-way protocol): "
+              "smoke/regression only")
+        return config
+    if not HPO_CONFIG_PATH.exists():
+        raise FileNotFoundError(
+            f"{HPO_CONFIG_PATH} missing: finalize the HPO first (hpo_export_best.py finalize)")
+    allcfg = _json.loads(HPO_CONFIG_PATH.read_text())
+    own = config["ablation_id"] if config["ablation_id"] in allcfg else None
+    key = "M0" if mode == "frozen" or own is None else own
+    if key not in allcfg:
+        raise KeyError(f"no HPO result for {key!r} in {HPO_CONFIG_PATH}: have {sorted(allcfg)}")
+    for k, v in allcfg[key]["overrides"].items():
+        if k not in config:
+            raise KeyError(f"HPO override {k!r} (from {key}) is not a config key")
+        if mode == "frozen" and k in _STRUCTURAL_KEYS:
+            continue
+        config[k] = v
+    if mode == "frozen" and config["meta_learning"] is False and "ft_steps" in config:
+        # supervised ablations mirror the MAML inner-loop eval budget of the (now M0-tuned) config
+        config["ft_steps"], config["ft_lr"] = config["maml_inner_steps_eval"], config["maml_alpha_init_eval"]
+    config["hpo_source"] = f"{key}:{allcfg[key]['provenance']['study']}/trial{allcfg[key]['provenance']['trial']}"
+    print(f"[hpo] {mode}: applied {len(allcfg[key]['overrides'])} overrides from {config['hpo_source']}")
+    return config
+
+
 def apply_kfold_fold(config: dict, fold_idx: int) -> dict:
-    """Return a copy of config with train/val/test PIDs set to fold `fold_idx`."""
+    """Return a copy of config with train/val/test PIDs set to fold `fold_idx` and the hyperparameter
+    mode applied (env HPO_CONFIG = legacy|frozen|tuned, exported by kfold_launcher.sh; required)."""
     import copy as _copy
     c = _copy.deepcopy(config)
     f = kfold_split.get_fold(fold_idx)
@@ -145,7 +214,12 @@ def apply_kfold_fold(config: dict, fold_idx: int) -> dict:
     c["fold_idx"] = fold_idx
     c["val_episode_source"] = "val"          # cached val_fold{k} episodes (checkpoint selection)
     c["test_procedure"] = "kfold7"
-    return c
+    if "HPO_CONFIG" not in os.environ:
+        raise KeyError("HPO_CONFIG not set: export HPO_CONFIG=legacy|frozen|tuned "
+                       "(kfold_launcher.sh --hpo-config does this)")
+    if "EMG_REPR" in os.environ:
+        apply_emg_repr(c, os.environ["EMG_REPR"])
+    return apply_hpo_config(c, os.environ["HPO_CONFIG"])
 
 
 def add_fold_arg(parser, required: bool = False):
@@ -247,6 +321,10 @@ def make_base_config(ablation_id: str) -> dict:
     config["all_PIDs"]   = list(KFOLD_ALL_TEST_PIDS)
     config["fold_idx"]   = 0
     config["val_episode_source"] = "val"   # "val" | "dev" | "sampled" (see get_maml_dataloaders)
+    # Cached val episodes used per user for checkpoint selection (file has 50/user; dev file 100/user).
+    # 25/user = 100 episodes per epoch: a 10-way episode costs ~3x a 3-way one. None = all.
+    config["val_episodes_per_user"] = 25
+    config["test_episodes_per_user"] = None   # None = all 200 cached test episodes per user and cell
     config["hpo_val_PIDs"] = list(KFOLD_HPO_VAL_PIDS)
 
     # DEFAULT is 'kfold7' (28/4 outer split, 7 folds of 20/4/4; one fold per job).
@@ -264,6 +342,7 @@ def make_base_config(ablation_id: str) -> dict:
     # ── Input dimensions (FIXED per spec) ─────────────────────────────────────
     config["sequence_length"] = 64
     config["emg_in_ch"]       = 16
+    config["emg_repr"]        = "env20"   # explicit; EMG_REPR env (kfold_launcher --emg-repr) overrides
     config["imu_in_ch"]       = 72
     config["demo_in_dim"]     = 12
 
@@ -289,7 +368,10 @@ def make_base_config(ablation_id: str) -> dict:
     config["seed"] = FIXED_SEED
 
     # ── Task setup ────────────────────────────────────────────────────────────
-    config["n_way"]      = 3    # eval/finetuning: 3-way classification
+    # 10-way 1-shot is the primary task (Kai, 2026-10-21): train and HPO at 10-way. The 10-output
+    # head serves smaller n_way episodes at eval by using its first n outputs (see
+    # mamlpp.episode_n_way), so 3/5-way come from the SAME checkpoint with no retraining.
+    config["n_way"]      = 10
     config["k_shot"]     = 1
     config["q_query"]    = 9
     config["num_classes"] = 10  # unused by architecture directly; pretrain_num_classes is the
@@ -969,12 +1051,14 @@ def _load_test_episodes(config: dict, test_pids: list):
     return es
 
 
-def _eval_cells(config: dict, cells) -> list:
+def _eval_cells(config: dict, cells, episodic: bool = True) -> list:
     """Cells to evaluate. None -> the single cell the model was trained for (n_way, k_shot).
-    The classification head has config['n_way'] outputs, so every cell must use that n_way."""
+    Episodic (MAML) heads have config['n_way'] outputs and serve any n <= that by using the first
+    n outputs; supervised fine-tuning builds a fresh head per episode, so any n works."""
     cells = [(config["n_way"], config["k_shot"])] if cells is None else [tuple(c) for c in cells]
-    bad = [c for c in cells if c[0] != config["n_way"]]
-    assert not bad, f"cells {bad} have n_way != trained head size {config['n_way']}"
+    if episodic:
+        bad = [c for c in cells if c[0] > config["n_way"]]
+        assert not bad, f"cells {bad} need more outputs than the trained head size {config['n_way']}"
     return cells
 
 
@@ -1032,7 +1116,7 @@ def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
     model.eval()
     rows_by_cell = {}
     for n, k in _eval_cells(config, cells):
-        eps = es.select(n, k)
+        eps = es.select(n, k, max_per_user=config["test_episodes_per_user"])
         ds = CachedEpisodeDataset(tensor_dict, eps, config["modality_mask"])
         dl = DataLoader(ds, batch_size=1, shuffle=False, num_workers=4, collate_fn=maml_mm_collate)
         correct = []
@@ -1067,8 +1151,8 @@ def run_supervised_test_eval(model, config: dict, tensor_dict_path: str,
 
     model.eval()
     rows_by_cell = {}
-    for n, k in _eval_cells(config, cells):
-        eps = es.select(n, k)
+    for n, k in _eval_cells(config, cells, episodic=False):
+        eps = es.select(n, k, max_per_user=config["test_episodes_per_user"])
         ds = CachedEpisodeDataset(tensor_dict, eps, config["modality_mask"])
         dl = DataLoader(ds, batch_size=1, shuffle=False, num_workers=4, collate_fn=maml_mm_collate)
         correct = []
@@ -1094,6 +1178,24 @@ def run_supervised_test_eval(model, config: dict, tensor_dict_path: str,
 # =============================================================================
 # Save utilities
 # =============================================================================
+
+def add_smoke_arg(parser):
+    """--smoke: a 15-minute pipeline check (1 epoch, 48 training episodes); results are labelled."""
+    parser.add_argument("--smoke", action="store_true",
+                        help="1 epoch x 48 episodes: proves train -> val -> test -> save end to end.")
+
+
+def apply_smoke(config: dict, smoke: bool) -> dict:
+    config["smoke"] = bool(smoke)
+    if smoke:
+        config["num_epochs"] = 1
+        config["episodes_per_epoch_train"] = 48
+        config["val_episodes_per_user"] = 5        # 20 val episodes
+        config["test_episodes_per_user"] = 10      # 40 test episodes
+        print("[smoke] SMOKE RUN: 1 epoch x 48 training episodes, 20 val / 40 test episodes -- "
+              "results are NOT meaningful and are rejected by the aggregator")
+    return config
+
 
 def save_results(results: dict, config: dict, tag: str = "",
                  n_test_pids: int = None, n_folds: int = None):
@@ -1121,6 +1223,12 @@ def save_results(results: dict, config: dict, tag: str = "",
     if not isinstance(results, dict):
         results = {"results": results}
     results = dict(results)
+    # Provenance: the launcher exports GIT_REV (git is not available on compute nodes). None means
+    # "not launched through the launcher" and is recorded as such, never invented.
+    results["git_rev"] = os.environ["GIT_REV"] if "GIT_REV" in os.environ else None
+    results["smoke"] = bool(config["smoke"]) if "smoke" in config else False
+    results["hpo_config"] = config["hpo_config"] if "hpo_config" in config else None
+    results["hpo_source"] = config["hpo_source"] if "hpo_source" in config else None
     results["protocol_check"] = assert_protocol_consistent(
         config, n_test_pids=n_test_pids, n_folds=n_folds
     )

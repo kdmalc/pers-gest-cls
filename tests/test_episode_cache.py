@@ -235,3 +235,14 @@ def test_source_block_has_hash_and_relative_path():
     blk = ec.load("test", 0).source_block()
     assert blk["file"].endswith("system/episodes/kfold7/test_fold0.json.gz")
     assert blk["sha256"] == ec.load_manifest()["files"]["test_fold0.json.gz"]
+
+
+def test_select_max_per_user_is_a_prefix_per_user():
+    es = ec.load("dev", None)
+    full = es.select(10, 1)
+    part = es.select(10, 1, max_per_user=25)
+    assert len(part) == 25 * len(es.users) and len(full) == 100 * len(es.users)
+    for u in es.users:
+        assert [e.id for e in part if e.user == u] == [e.id for e in full if e.user == u][:25]
+    with pytest.raises(ValueError):
+        es.select(10, 1, max_per_user=0)

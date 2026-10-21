@@ -31,13 +31,14 @@ sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
+    tensor_dict_file,
     make_base_config, build_maml_no_moe_model,
     set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
     make_periodic_checkpoint_fn, make_periodic_test_eval_fn,
     compute_matched_filters_for_ablation,
     RUN_DIR,
-    run_kfold, add_fold_arg, kfold_tag, resolve_fold_ids,
+    run_kfold, add_fold_arg, kfold_tag, resolve_fold_ids, add_smoke_arg, apply_smoke,
 )
 from MAML.maml_data_pipeline import get_maml_dataloaders
 from MAML.mamlpp import mamlpp_pretrain
@@ -131,7 +132,7 @@ def run_one_fold(ablation_id: str, fold_id: str, seed: int, config: dict) -> dic
     n_params = count_parameters(model)
     print(f"  Total parameters : {n_params:,}")
 
-    tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
+    tensor_dict_path = tensor_dict_file(config)
     train_dl, val_dl = get_maml_dataloaders(config, tensor_dict_path=tensor_dict_path)
 
     trained_model, train_history = mamlpp_pretrain(
@@ -238,14 +239,15 @@ def main():
         ),
     )
     add_fold_arg(parser)
+    add_smoke_arg(parser)
     args = parser.parse_args()
 
     if args.ablation == "A3":
-        run_ablation("A3", build_config_a3(),
+        run_ablation("A3", apply_smoke(build_config_a3(), args.smoke),
                      "MAML + No-MoE (single encoder matched to ONE M0 expert)",
                      fold_idx=args.fold_idx)
     else:
-        run_ablation("A4", build_config_a4(),
+        run_ablation("A4", apply_smoke(build_config_a4(), args.smoke),
                      "MAML + No-MoE (single encoder matched to ALL M0 experts) ← CRITICAL",
                      fold_idx=args.fold_idx)
 

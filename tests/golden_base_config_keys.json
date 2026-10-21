@@ -1,5 +1,5 @@
 {
- "n_keys": 117,
+ "n_keys": 120,
  "types": {
   "FILM_on_context_or_demo": "str",
   "MOE_aux_coeff": "float",
@@ -39,6 +39,7 @@
   "earlystopping_patience": "int",
   "emg_imu_pkl_full_path": "str",
   "emg_in_ch": "int",
+  "emg_repr": "str",
   "fold_idx": "int",
   "hpo_val_PIDs": "list",
   "enable_inner_loop_optimizable_bn_params": "bool",
@@ -96,6 +97,7 @@
   "subject_specific_model": "bool",
   "target_trial_reps": "list",
   "test_PIDs": "list",
+  "test_episodes_per_user": "none",
   "test_procedure": "str",
   "timestamp": "str",
   "top_k": "int",
@@ -111,6 +113,7 @@
   "use_film_x_demo": "bool",
   "use_imu": "bool",
   "val_episode_source": "str",
+  "val_episodes_per_user": "int",
   "use_lslr_at_eval": "bool",
   "use_maml_msl": "str",
   "user_split_json_filepath": "str",

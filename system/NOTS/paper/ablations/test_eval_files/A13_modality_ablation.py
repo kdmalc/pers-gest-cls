@@ -83,6 +83,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
+    tensor_dict_file,
     make_base_config, build_maml_moe_model,
     set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
@@ -232,7 +233,7 @@ def run(condition: str, fold_idx: int, n_way: int = None, k_shot: int = None) ->
     config = build_config(condition, fold_idx, n_way=n_way, k_shot=k_shot)
     set_seeds(FIXED_SEED)
 
-    tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
+    tensor_dict_path = tensor_dict_file(config)
 
     mask_check = verify_masking(config, tensor_dict_path)
 

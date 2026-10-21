@@ -41,6 +41,7 @@ os.environ["RUN_DIR"] = os.environ.get(
 )
 
 # Keep CPU tests from oversubscribing; also makes timings stable.
+os.environ.setdefault("HPO_CONFIG", "legacy")   # apply_kfold_fold requires it (no silent default in prod)
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 
