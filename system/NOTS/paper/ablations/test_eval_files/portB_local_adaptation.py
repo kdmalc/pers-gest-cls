@@ -80,6 +80,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
+    apply_kfold_fold, add_fold_arg,
     make_base_config, build_maml_moe_model, set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
     make_periodic_checkpoint_fn, make_periodic_test_eval_fn,
@@ -98,8 +99,8 @@ if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
 
-def build_config(local_module: str, eval_only_freeze: bool) -> dict:
-    config = make_base_config(ablation_id=f"portB_{local_module}")
+def build_config(local_module: str, eval_only_freeze: bool, fold_idx: int) -> dict:
+    config = apply_kfold_fold(make_base_config(ablation_id=f"portB_{local_module}"), fold_idx)
 
     # REQUIRED: get_maml_dataloaders reads config["seed"] directly and
     # make_base_config does not set it (M0_full_model.py sets it explicitly at
@@ -107,7 +108,6 @@ def build_config(local_module: str, eval_only_freeze: bool) -> dict:
     # i.e. AFTER model construction and any pre-flight checks have printed --
     # which is why the mask verification passed and the job still died.
     config["seed"] = FIXED_SEED
-    config["test_procedure"] = "hpo_test_split"
 
     if not eval_only_freeze:
         # The faithful regime: restrict the inner loop during META-TRAINING.
@@ -164,7 +164,7 @@ def report_partition(model, config, local_module: str) -> dict:
 
 def run(args) -> dict:
     local_module = args.local_module
-    config = build_config(local_module, args.eval_only_freeze)
+    config = build_config(local_module, args.eval_only_freeze, args.fold_idx)
     set_seeds(FIXED_SEED)
 
     tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
@@ -252,7 +252,7 @@ def run(args) -> dict:
         "caveats":           caveats,
         "config_snapshot":   {k: str(v) for k, v in config.items()},
     }
-    save_results(result, config, tag=f"portB_{local_module}_final")
+    save_results(result, config, tag=f"portB_{local_module}_fold{args.fold_idx:02d}_final")
 
     print(f"\n{'='*70}")
     print(f"[portB] FINAL {local_module}: {test_results['mean_acc']*100:.2f}% "
@@ -273,6 +273,7 @@ def main():
     ap.add_argument("--eval-only-freeze", action="store_true",
                     help="INVALID variant: meta-train unrestricted, restrict only at "
                          "eval. Only for demonstrating the confound.")
+    add_fold_arg(ap, required=True)
     args = ap.parse_args()
     run(args)
 

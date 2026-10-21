@@ -520,7 +520,6 @@ def build_config_from_trial(
     config["use_earlystopping"]     = True
     config["earlystopping_patience"]  = 8
     config["earlystopping_min_delta"] = 0.005
-    config["use_label_shuf_meta_aug"] = True
     config["gradient_clip_max_norm"]  = 10.0
     config["ft_label_smooth"]         = 0.0
     config["track_gradient_alignment"] = False
@@ -626,7 +625,9 @@ FOLD_IDX = 0
 
 
 def apply_fold_to_config(config: dict) -> dict:
-    split = ALL_SPLITS[FOLD_IDX]
+    """HPO split (kfold7 protocol): 20 train users, validated on the 4 dev users only."""
+    from ablation_config import get_hpo_split
+    split = get_hpo_split()
     config["train_PIDs"] = split["train"]
     config["val_PIDs"]   = split["val"]
     config["test_PIDs"]  = split["test"]
@@ -817,11 +818,10 @@ def _objective_supervised(trial: optuna.Trial, config: dict) -> float:
                                     config.get("target_trial_indices")),
         n_way                  = config["n_way"],
         k_shot                 = config["k_shot"],
-        q_query                = config.get("q_query", None),
+        q_query                = config["q_query"],
         num_eval_episodes      = config["num_eval_episodes"],
         is_train               = False,
         seed                   = FIXED_SEED,
-        use_label_shuf_meta_aug = False,
     )
     val_dl_epi = DataLoader(val_ds, batch_size=1, shuffle=False,
                             num_workers=4, collate_fn=maml_mm_collate)
@@ -930,11 +930,10 @@ def _objective_a11(trial: optuna.Trial) -> float:
                                     config.get("target_trial_indices")),
         n_way                  = config["n_way"],
         k_shot                 = config["k_shot"],
-        q_query                = config.get("q_query", None),
+        q_query                = config["q_query"],
         num_eval_episodes      = config["num_eval_episodes"],
         is_train               = False,
         seed                   = FIXED_SEED,
-        use_label_shuf_meta_aug = False,
     )
     val_dl_epi = DataLoader(val_ds, batch_size=1, shuffle=False,
                             num_workers=4, collate_fn=maml_mm_collate)

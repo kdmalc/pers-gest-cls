@@ -326,7 +326,8 @@ STUDY_NAME = "ablation_A11_eval_hpo_v2"
 PAPER_STEPS_GRID = [1, 3, 5, 10, 15, 25, 50, 100, 150, 200]
 
 NUM_VAL_EPISODES = 200
-DEFAULT_VAL_PIDS = ["P011", "P006", "P105", "P109"]
+# No default val PIDs: pass --val-pids with the 4 dev users P005 P131 P116 P109
+# (kfold28_hpo4_split.json["hpo_val"]); never test users.
 
 # =============================================================================
 # Data split loading
@@ -408,11 +409,10 @@ def _eval_a11(config: dict) -> tuple[float, list[float]]:
                                     config.get("target_trial_indices")),
         n_way                   = config["n_way"],
         k_shot                  = config["k_shot"],
-        q_query                 = config.get("q_query", None),
+        q_query                 = config["q_query"],
         num_eval_episodes       = config["num_eval_episodes"],
         is_train                = False,
         seed                    = FIXED_SEED,
-        use_label_shuf_meta_aug = False,
     )
     val_dl = DataLoader(val_ds, batch_size=1, shuffle=False,
                         num_workers=4, collate_fn=maml_mm_collate)
@@ -617,7 +617,7 @@ if __name__ == "__main__":
     parser.add_argument("--hpo-db-dir",  type=str, default=None,     dest="hpo_db_dir")
     parser.add_argument("--out-dir",     type=str, default=None,     dest="out_dir")
     parser.add_argument("--val-pids",    type=str, nargs="+",
-                        default=DEFAULT_VAL_PIDS, dest="val_pids")
+                        required=True, dest="val_pids")
     parser.add_argument("--num-val-episodes", type=int,
                         default=NUM_VAL_EPISODES, dest="num_val_episodes")
 

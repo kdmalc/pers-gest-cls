@@ -109,6 +109,92 @@ TEST_PIDS  = ALL_SPLITS[FOLD_IDX]["test"]
 print(f"Using fold {FOLD_IDX}: {len(TRAIN_PIDS)} train | "
       f"{len(VAL_PIDS)} val | {len(TEST_PIDS)} test PIDs")
 
+# ── Evaluation protocol (decided 2026-10-21): 28/4 outer split + 7 folds of 20/4/4 ──
+# 4 HPO-val users are never tested; each of the other 28 is a test user in exactly
+# one fold. The legacy names above (TRAIN_PIDS/VAL_PIDS/TEST_PIDS = old kapanji
+# 24/4/4 split, ALL_SPLITS) are kept only for the HPO scripts and the legacy
+# 'hpo_test_split' / 'L2SO' test procedures.
+import importlib.util as _ilu
+_ks_spec = _ilu.spec_from_file_location(
+    "kfold_split", CODE_DIR / "system" / "fixed_user_splits" / "kfold_split.py")
+kfold_split = _ilu.module_from_spec(_ks_spec)
+_ks_spec.loader.exec_module(kfold_split)
+
+KFOLD_N_FOLDS = kfold_split.N_FOLDS            # 7
+KFOLD_ALL_TEST_PIDS = kfold_split.all_test_pids()  # the 28 evaluated users
+KFOLD_HPO_VAL_PIDS = kfold_split.hpo_val_pids()    # the 4 HPO-only users
+
+
+def build_kfold_folds() -> list:
+    """The 7 folds as dicts: {fold_idx, train_pids, val_pids, test_pids}."""
+    out = []
+    for k in range(KFOLD_N_FOLDS):
+        f = kfold_split.get_fold(k)
+        out.append({"fold_idx": k, "train_pids": f["train"],
+                    "val_pids": f["val"], "test_pids": f["test"]})
+    return out
+
+
+def apply_kfold_fold(config: dict, fold_idx: int) -> dict:
+    """Return a copy of config with train/val/test PIDs set to fold `fold_idx`."""
+    import copy as _copy
+    c = _copy.deepcopy(config)
+    f = kfold_split.get_fold(fold_idx)
+    kfold_split.assert_fold_disjoint(f["train"], f["val"], f["test"], KFOLD_HPO_VAL_PIDS)
+    c["train_PIDs"], c["val_PIDs"], c["test_PIDs"] = f["train"], f["val"], f["test"]
+    c["fold_idx"] = fold_idx
+    c["test_procedure"] = "kfold7"
+    return c
+
+
+def add_fold_arg(parser, required: bool = False):
+    """Standard --fold-idx CLI arg (0..6). Single-fold scripts pass required=True."""
+    parser.add_argument(
+        "--fold-idx", type=int, default=None, required=required,
+        choices=range(KFOLD_N_FOLDS),
+        help="kfold7 fold to run (0..6). Omitted: all 7 sequentially (local dev only; "
+             "on the cluster the launcher submits one job per fold).")
+
+
+def resolve_fold_ids(fold_idx) -> list:
+    """None -> all folds; int -> [that fold]. Raises on anything out of range."""
+    if fold_idx is None:
+        return list(range(KFOLD_N_FOLDS))
+    if not 0 <= fold_idx < KFOLD_N_FOLDS:
+        raise ValueError(f"fold_idx {fold_idx} not in [0, {KFOLD_N_FOLDS})")
+    return [fold_idx]
+
+
+def run_kfold(config: dict, fold_idx, run_one_fold_fn, seed: int = None) -> list:
+    """
+    Run `run_one_fold_fn(fold_id=, seed=, config=)` for the requested kfold7 fold(s).
+    Scripts needing extra args (e.g. tensor_dict) bind them with functools.partial.
+    """
+    seed = FIXED_SEED if seed is None else seed
+    results = []
+    for i in resolve_fold_ids(fold_idx):
+        fold_config = apply_kfold_fold(config, i)
+        print(f"\n{'='*70}\n[kfold7] fold {i}  test={fold_config['test_PIDs']}  "
+              f"val={fold_config['val_PIDs']}\n{'='*70}")
+        results.append(run_one_fold_fn(fold_id=f"kfold7_fold{i}", seed=seed, config=fold_config))
+    return results
+
+
+def kfold_tag(fold_idx) -> str:
+    """results-JSON tag: per-fold file name for single-fold jobs, 'summary' for all."""
+    return "summary" if fold_idx is None else f"fold{fold_idx:02d}_summary"
+
+
+def get_hpo_split() -> dict:
+    """
+    HPO split on the kfold7 protocol: train on fold 0's 20 train users (so the training-set
+    size matches every evaluation fold), validate ONLY on the 4 HPO-val ("dev") users.
+    No test users are touched: test = [].
+    """
+    return {"train": list(kfold_split.get_fold(0)["train"]),
+            "val":   list(KFOLD_HPO_VAL_PIDS),
+            "test":  []}
+
 
 # =============================================================================
 # BASE CONFIG  (shared across all ablations; override in each script)
@@ -150,15 +236,20 @@ def make_base_config(ablation_id: str) -> dict:
     config["NOTS"] = True   # cluster run flag (keeps old local-path logic from triggering)
 
     # ── User splits ───────────────────────────────────────────────────────────
-    # TODO: Confirm that this is getting overwritten during L2SO
-    config["train_PIDs"] = TRAIN_PIDS
-    config["val_PIDs"]   = VAL_PIDS
-    config["test_PIDs"]  = TEST_PIDS
-    config["all_PIDs"]   = TRAIN_PIDS + VAL_PIDS + TEST_PIDS
+    # Default PIDs = kfold7 fold 0; scripts overwrite per fold via apply_kfold_fold().
+    # all_PIDs = the 28 evaluated users (legacy L2SO/hpo_test_split paths must set
+    # their own PIDs from the old split constants above).
+    _f0 = kfold_split.get_fold(0)
+    config["train_PIDs"] = _f0["train"]
+    config["val_PIDs"]   = _f0["val"]
+    config["test_PIDs"]  = _f0["test"]
+    config["all_PIDs"]   = list(KFOLD_ALL_TEST_PIDS)
+    config["fold_idx"]   = 0
+    config["hpo_val_PIDs"] = list(KFOLD_HPO_VAL_PIDS)
 
-    # DEFAULT is L2SO for all final ablation results.
-    # 'hpo_test_split' is only for development/debugging — HPO was run on that
-    # split, so using it for ablation comparison conflates HPO with ablation effects.
+    # DEFAULT is 'kfold7' (28/4 outer split, 7 folds of 20/4/4; one fold per job).
+    # 'hpo_test_split' (old 24/4/4) and 'L2SO' (32-fold) are LEGACY: kept only so old
+    # results can be reproduced; they do not run on the new split.
     #
     # WARNING FOR ANYONE AUDITING A RESULTS JSON: this field records the config
     # DEFAULT, not necessarily what the script executed. fewshot_grid.py and
@@ -166,7 +257,7 @@ def make_base_config(ablation_id: str) -> dict:
     # while evaluating the fixed 4-user split (test_PIDs = P004, P104, P105,
     # P121). Establish protocol from test_PIDs / fold count, never from this key.
     # `assert_protocol_consistent()` below makes the mismatch loud.
-    config["test_procedure"] = "L2SO"
+    config["test_procedure"] = "kfold7"
 
     # ── Input dimensions (FIXED per spec) ─────────────────────────────────────
     config["sequence_length"] = 64
@@ -207,7 +298,7 @@ def make_base_config(ablation_id: str) -> dict:
     config["pretrain_num_classes"] = 10
 
     # ── Episode-sampler semantics ─────────────────────────────────────────────
-    # These four are consumed by MetaGestureDataset / get_maml_dataloaders via
+    # These are consumed by MetaGestureDataset / get_maml_dataloaders via
     # .get(key, default). They were previously UNDECLARED here, so the sampler's
     # fallback was the only source of truth and a caller had to know the key
     # name to change one. Declared explicitly, with values identical to those
@@ -215,15 +306,11 @@ def make_base_config(ablation_id: str) -> dict:
     #
     #   modality_mask       "both" | "emg_only" | "imu_only"  (A13; zero-masked,
     #                       parameter count unchanged)
-    #   q_query_eval_mode   "all_remaining" (current behaviour: realised Q is
-    #                       n_reps - k_shot, i.e. 9/7/5 at K=1/3/5, NOT q_query)
-    #                       | "fixed" (cap at q_query)
     #   strict_n_way        False -> RuntimeWarning and drop a class with too few
     #                       trials; True -> raise
     #   subject_specific_model  True disables the cross-subject leakage checks
     #                       (A7/A8 train within a single subject)
     config["modality_mask"]          = "both"
-    config["q_query_eval_mode"]      = "all_remaining"
     config["strict_n_way"]           = False
     config["subject_specific_model"] = False
 
@@ -334,7 +421,6 @@ def make_base_config(ablation_id: str) -> dict:
     config["ft_query_reps"]   = [2, 3, 4, 5, 6, 7, 8, 9, 10]
 
     # ── Augmentation ─────────────────────────────────────────────────────────
-    config["use_label_shuf_meta_aug"] = True
 
     # ── Debug flags ───────────────────────────────────────────────────────────
     config["track_gradient_alignment"] = False
@@ -808,7 +894,10 @@ def assert_protocol_consistent(config: dict, n_test_pids: int = None,
     if n_test_pids is None:
         n_test_pids = len(test_pids)
 
-    if declared == "L2SO":
+    if declared == "kfold7":
+        expected = "4 test subjects per fold, 7 folds over the 28 evaluated users"
+        looks_right = n_test_pids == 4 and (n_folds is None or n_folds == KFOLD_N_FOLDS)
+    elif declared == "L2SO":
         expected = "one test subject per fold, 32 folds over all subjects"
         looks_right = (n_test_pids == 1) or (n_folds is not None and n_folds >= 32)
     elif declared == "hpo_test_split":
@@ -860,6 +949,13 @@ def seed_worker(worker_id: int):
 # Episodic test evaluation
 # =============================================================================
 
+def _assert_test_users_unseen(config: dict, test_pids: list):
+    """Test users must not be in this run's train or val users (no silent leakage)."""
+    seen = set(config["train_PIDs"]) | set(config["val_PIDs"])
+    overlap = set(test_pids) & seen
+    assert not overlap, f"test users also in train/val: {sorted(overlap)}"
+
+
 def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
                             test_pids: list, num_episodes: int = NUM_TEST_EPISODES) -> dict:
     """
@@ -872,6 +968,7 @@ def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
     from torch.utils.data import DataLoader
     from collections import defaultdict
 
+    _assert_test_users_unseen(config, test_pids)
     with open(tensor_dict_path, "rb") as f:
         full_dict   = pickle.load(f)
     tensor_dict = reorient_tensor_dict(full_dict, config)
@@ -883,11 +980,10 @@ def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
         target_trial_reps   = config["target_trial_reps"],
         n_way                  = config["n_way"],
         k_shot                 = config["k_shot"],
-        q_query                = config.get("q_query", None),
+        q_query                = config["q_query"],
         num_eval_episodes      = num_episodes,
         is_train               = False,
         seed                   = FIXED_SEED,
-        use_label_shuf_meta_aug = False,
     )
     test_dl = DataLoader(test_ds, batch_size=1, shuffle=False, num_workers=4,
                          collate_fn=maml_mm_collate)
@@ -924,10 +1020,12 @@ def run_supervised_test_eval(model, config: dict, tensor_dict_path: str,
     """
     from MAML.maml_data_pipeline import MetaGestureDataset, maml_mm_collate, reorient_tensor_dict
     from pretraining.pretrain_finetune import finetune_and_eval_user
+    from MAML.mamlpp import assert_support_query_rep_disjoint
     import pickle
     from torch.utils.data import DataLoader
     from collections import defaultdict
 
+    _assert_test_users_unseen(config, test_pids)
     with open(tensor_dict_path, "rb") as f:
         full_dict   = pickle.load(f)
     # Reorient tensors from disk layout (trials, T, C) → (trials, C, T) so that
@@ -944,11 +1042,10 @@ def run_supervised_test_eval(model, config: dict, tensor_dict_path: str,
         target_trial_reps   = config["target_trial_reps"],
         n_way                  = config["n_way"],
         k_shot                 = config["k_shot"],
-        q_query                = config.get("q_query", None),
+        q_query                = config["q_query"],
         num_eval_episodes      = num_episodes,
         is_train               = False,
         seed                   = FIXED_SEED,
-        use_label_shuf_meta_aug = False,
     )
     test_dl = DataLoader(test_ds, batch_size=1, shuffle=False, num_workers=4,
                          collate_fn=maml_mm_collate)
@@ -959,6 +1056,7 @@ def run_supervised_test_eval(model, config: dict, tensor_dict_path: str,
         uid     = batch["user_id"]
         support = batch["support"]
         query   = batch["query"]
+        assert_support_query_rep_disjoint(support, query)
         metrics = finetune_and_eval_user(
             model, config,
             support_emg=support["emg"], support_imu=support.get("imu"),

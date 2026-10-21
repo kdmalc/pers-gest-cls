@@ -87,6 +87,7 @@ from ablation_config import (
     set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
     make_periodic_checkpoint_fn, make_periodic_test_eval_fn,
+    apply_kfold_fold, add_fold_arg,
 )
 from MAML.maml_data_pipeline import get_maml_dataloaders
 
@@ -97,7 +98,7 @@ if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
 
-def build_config(condition: str, n_way: int = None, k_shot: int = None) -> dict:
+def build_config(condition: str, fold_idx: int, n_way: int = None, k_shot: int = None) -> dict:
     assert condition in CONDITIONS, f"--condition must be one of {CONDITIONS}"
 
     ablation_id = f"A13_{condition}"
@@ -133,8 +134,8 @@ def build_config(condition: str, n_way: int = None, k_shot: int = None) -> dict:
     n_reps = len(config["target_trial_reps"])
     config["realised_q_per_class"] = n_reps - int(config["k_shot"])
 
-    # Fixed split only. L2SO is 16 runs per condition; see docstring.
-    config["test_procedure"] = "hpo_test_split"
+    # One kfold7 fold per run (cluster: 7 jobs per condition).
+    config = apply_kfold_fold(config, fold_idx)
 
     # use_imu stays True in ALL conditions. This is deliberate: it keeps the
     # 88-channel input and the parameter count identical across conditions.
@@ -188,7 +189,6 @@ def verify_masking(config: dict, tensor_dict_path: str) -> dict:
         num_eval_episodes       = 2,
         is_train                = False,
         seed                    = FIXED_SEED,
-        use_label_shuf_meta_aug = False,
         modality_mask           = config["modality_mask"],
     )
     dl = DataLoader(ds, batch_size=1, shuffle=False, num_workers=0,
@@ -228,8 +228,8 @@ def verify_masking(config: dict, tensor_dict_path: str) -> dict:
     return {"emg_energy": emg_energy, "imu_energy": imu_energy}
 
 
-def run(condition: str, n_way: int = None, k_shot: int = None) -> dict:
-    config = build_config(condition, n_way=n_way, k_shot=k_shot)
+def run(condition: str, fold_idx: int, n_way: int = None, k_shot: int = None) -> dict:
+    config = build_config(condition, fold_idx, n_way=n_way, k_shot=k_shot)
     set_seeds(FIXED_SEED)
 
     tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
@@ -279,7 +279,8 @@ def run(condition: str, n_way: int = None, k_shot: int = None) -> dict:
                             f"{config['k_shot']}-shot"),
         "condition":       condition,
         "modality_mask":   condition,
-        "test_procedure":  "hpo_test_split",
+        "test_procedure":  "kfold7",
+        "fold_idx":        int(fold_idx),
         "n_way":           int(config["n_way"]),
         "k_shot":          int(config["k_shot"]),
         "q_query_nominal": int(config["q_query"]),
@@ -308,7 +309,7 @@ def run(condition: str, n_way: int = None, k_shot: int = None) -> dict:
         ],
         "config_snapshot": {k: str(v) for k, v in config.items()},
     }
-    save_results(result, config, tag=f"{config['ablation_id']}_final")
+    save_results(result, config, tag=f"{config['ablation_id']}_fold{fold_idx:02d}_final")
 
     print(f"\n{'='*70}")
     print(f"[A13] FINAL {condition}: {test_results['mean_acc']*100:.2f}% "
@@ -344,6 +345,7 @@ def _n_way_arg(value: str) -> int:
 def main():
     ap = argparse.ArgumentParser(description="A13: modality ablation for M0.")
     ap.add_argument("--condition", choices=list(CONDITIONS), required=True)
+    add_fold_arg(ap, required=True)
     ap.add_argument("--n-way", type=_n_way_arg, default=None,
                     help="Vocabulary size. Default: config value (3). "
                          "Sweep 3 5 10 -- 3-way alone is near ceiling and "
@@ -353,7 +355,7 @@ def main():
     args = ap.parse_args()
     if args.k_shot is not None and args.k_shot < 1:
         ap.error(f"--k-shot must be >= 1, got {args.k_shot}")
-    run(args.condition, n_way=args.n_way, k_shot=args.k_shot)
+    run(args.condition, args.fold_idx, n_way=args.n_way, k_shot=args.k_shot)
 
 
 if __name__ == "__main__":

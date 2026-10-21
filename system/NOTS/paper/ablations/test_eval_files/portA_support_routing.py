@@ -72,6 +72,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
+    apply_kfold_fold, add_fold_arg,
     make_base_config, build_maml_moe_model, set_seeds, FIXED_SEED,
     save_results, count_parameters, NUM_TEST_EPISODES,
 )
@@ -249,8 +250,7 @@ def load_state_dict_shape_safe(model, state: dict, verbose: bool = True) -> dict
 
 
 def run(args) -> dict:
-    config = make_base_config(ablation_id="portA")
-    config["test_procedure"] = "hpo_test_split"
+    config = apply_kfold_fold(make_base_config(ablation_id="portA"), args.fold_idx)
 
     # With only 4 test users a paired test has almost no power, so allow the val
     # users in as well. Legitimate here BECAUSE this is a paired within-episode
@@ -306,7 +306,6 @@ def run(args) -> dict:
         num_eval_episodes       = args.num_episodes,
         is_train                = False,
         seed                    = FIXED_SEED,
-        use_label_shuf_meta_aug = False,
     )
     test_dl = DataLoader(test_ds, batch_size=1, shuffle=False,
                          num_workers=4, collate_fn=maml_mm_collate)
@@ -436,7 +435,7 @@ def run(args) -> dict:
         ],
         "config_snapshot": {k: str(v) for k, v in config.items()},
     }
-    save_results(result, config, tag=f"portA_k{config['k_shot']}_n{config['n_way']}")
+    save_results(result, config, tag=f"portA_k{config['k_shot']}_n{config['n_way']}_fold{args.fold_idx:02d}")
 
     print(f"\n{'='*70}")
     print(f"[portA] query-conditioned routing (ours) : "
@@ -462,6 +461,7 @@ def main():
     ap.add_argument("--include-val-users", action="store_true",
                     help="Evaluate on val+test users (8) instead of test only (4). "
                          "Valid for this paired diagnostic; not for a headline number.")
+    add_fold_arg(ap, required=True)
     args = ap.parse_args()
 
     if not Path(args.checkpoint).exists():

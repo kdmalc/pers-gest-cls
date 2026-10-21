@@ -36,7 +36,6 @@ def _eval_dataset(td, cfg, **kw):
         is_train=False,
         seed=cfg["seed"],
         num_eval_episodes=cfg["num_eval_episodes"],
-        use_label_shuf_meta_aug=False,
     )
     params.update(kw)
     return MetaGestureDataset(td, **params)
@@ -148,8 +147,7 @@ def test_realised_q_is_ten_minus_k_not_configured_q(
     """
     THE DISCLOSURE IN LIMITATIONS.md B2.
 
-    The eval path ignores ``q_query`` (default ``q_query_eval_mode="all_remaining"``)
-    and assigns every non-support rep to the query set. With 10 reps that is
+    The eval path ignores ``q_query`` (a training-only cap) and assigns every non-support rep to the query set. With 10 reps that is
     Q = 9 / 7 / 5 at K = 1 / 3 / 5, NOT the configured 9. The paper must state
     realised Q measured per episode, not taken from the config.
 
@@ -170,37 +168,45 @@ def test_realised_q_is_ten_minus_k_not_configured_q(
 
 
 @pytest.mark.parametrize("k_shot,expected_q", [(1, 4), (3, 4), (5, 4)])
-def test_q_query_eval_mode_fixed_caps_at_configured_q(
+def test_training_q_query_is_a_cap_and_eval_ignores_it(
     reoriented_tensor_dict, tiny_config, k_shot, expected_q
 ):
-    """``q_query_eval_mode="fixed"`` honours the configured Q (a non-default path)."""
-    ds = _eval_dataset(
-        reoriented_tensor_dict, tiny_config, k_shot=k_shot, q_query_eval_mode="fixed"
+    """q_query caps the query set during TRAINING only (here 4 < 10-K); eval ignores it."""
+    cfg = tiny_config
+    params = dict(
+        target_pids=cfg["train_PIDs"], target_gesture_classes=cfg["maml_gesture_classes"],
+        target_trial_reps=cfg["target_trial_reps"], n_way=cfg["n_way"], k_shot=k_shot,
+        q_query=cfg["q_query"], episodes_per_epoch=5, is_train=True, seed=cfg["seed"],
     )
-    _ = [ds[i] for i in range(len(ds))]
+    ds = MetaGestureDataset(reoriented_tensor_dict, **params)
+    _ = [ds[i] for i in range(5)]
     for rec in ds.episode_shape_log:
-        assert rec["q_per_class"] == pytest.approx(expected_q)
+        assert rec["q_per_class"] == pytest.approx(min(expected_q, 10 - k_shot))
+
+
+def test_q_query_eval_mode_switch_is_gone():
+    """The old 'fixed' eval switch was removed (one eval behaviour, no flag to forget)."""
+    import inspect
+    assert "q_query_eval_mode" not in inspect.signature(MetaGestureDataset.__init__).parameters
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # N-way degeneracy  (LIMITATIONS B3)
 # ─────────────────────────────────────────────────────────────────────────────
-def test_n10_has_exactly_one_class_set_and_label_map(reoriented_tensor_dict, tiny_config):
+def test_n10_has_one_class_set_but_labels_are_permuted_per_episode(
+    reoriented_tensor_dict, tiny_config
+):
     """
-    IRREDUCIBLE: with exactly 10 gestures, N=10 admits C(10,10) = 1 class set,
-    and with label-shuffle off at eval, one identity label map. Only the
-    support/query rep assignment varies between episodes.
-
-    Anyone proposing "sample more classes" for the 10-way condition has not
-    counted. The fix space is the rep axis (exhaustible) and the label→head-unit
-    permutation axis (samplable).
+    With exactly 10 gestures, N=10 admits C(10,10) = 1 class SET (irreducible, B3), but the
+    label->class assignment is now a fresh random permutation per episode (no shuffle flag
+    exists any more), so no cross-user "slot k" prior can be exploited at test time.
     """
     ds = _eval_dataset(reoriented_tensor_dict, tiny_config, n_way=10, num_eval_episodes=8)
-    maps = {tuple(sorted(ds[i]["label_map"].items())) for i in range(len(ds))}
-    assert len(maps) == 1, f"N=10 should give exactly one label map, got {len(maps)}"
-    assert set(next(iter(maps))) == {(c, c) for c in range(10)}, (
-        "with label-shuffle off, the N=10 map should be the identity"
-    )
+    maps = [tuple(sorted(ds[i]["label_map"].items())) for i in range(len(ds))]
+    assert all({c for c, _ in m} == set(range(10)) for m in maps), "class set must be all 10"
+    assert len(set(maps)) > 1, "label maps must differ between episodes (random permutation)"
+    identity = tuple((c, c) for c in range(10))
+    assert not all(m == identity for m in maps), "label map must not be the identity at eval"
 
 
 def test_n3_has_many_distinct_label_maps(reoriented_tensor_dict, tiny_config):

@@ -931,7 +931,8 @@ def run_one_shot_condition(
     shared_pca     = bool(config.get("shared_pca",  False))
     pca_level      = config.get("pca_level", "global") 
     
-    eval_pids      = config.get("eval_PIDs", config.get("val_PIDs", []))
+    eval_pids      = config["eval_PIDs"]
+    assert eval_pids, "config['eval_PIDs'] must be set explicitly (a kfold7 fold's test users)."
     available_gesture_classes = config["available_gesture_classes"]
 
     # ── Support / query rep split ─────────────────────────────────────────────
@@ -1119,7 +1120,7 @@ BASE_CONFIG = {
     "n_way": 10,
     "seed": 42,
     "device":              "cuda" if torch.cuda.is_available() else "cpu",
-    "eval_PIDs":           ["P011","P006","P105","P109"],
+    "eval_PIDs":           None,   # REQUIRED: set explicitly, e.g. a kfold7 fold's test users
     "use_fixed_rep_split": True,  # I dont think False is even implemented yet
     "all_rep_indices":            list(range(1, 11)),   # 1-indexed rep pool
     "available_gesture_classes":  list(range(0, 10)),   # 0-indexed class labels

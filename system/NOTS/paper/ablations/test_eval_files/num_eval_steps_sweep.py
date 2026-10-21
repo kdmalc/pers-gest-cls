@@ -593,7 +593,6 @@ def eval_maml_one_config(
         num_eval_episodes       = num_val_episodes,
         is_train                = False,
         seed                    = FIXED_SEED,
-        use_label_shuf_meta_aug = False,
     )
     val_dl = DataLoader(val_ds, batch_size=1, shuffle=False,
                         num_workers=4, collate_fn=maml_mm_collate)
@@ -678,7 +677,6 @@ def eval_supervised_one_config(
         num_eval_episodes       = num_val_episodes,
         is_train                = False,
         seed                    = FIXED_SEED,
-        use_label_shuf_meta_aug = False,
     )
     val_dl = DataLoader(val_ds, batch_size=1, shuffle=False,
                         num_workers=4, collate_fn=maml_mm_collate)
@@ -767,7 +765,6 @@ def eval_a11_one_config(
         num_eval_episodes       = num_val_episodes,
         is_train                = False,
         seed                    = FIXED_SEED,
-        use_label_shuf_meta_aug = False,
     )
     val_dl = DataLoader(val_ds, batch_size=1, shuffle=False,
                         num_workers=4, collate_fn=maml_mm_collate)
@@ -1222,13 +1219,18 @@ if __name__ == "__main__":
     if args.model_type == "A7":
         assert args.checkpoint is not None, "--checkpoint is required for --model-type A7."
 
-    # ── Resolve eval PIDs: CLI > VAL_PIDS + TEST_PIDS default ────────────────
-    if args.eval_pids:
-        eval_pids = args.eval_pids
-    else:
-        from ablation_config import VAL_PIDS, TEST_PIDS
-        eval_pids = VAL_PIDS + TEST_PIDS
-        print(f"[eval_pids] Defaulting to VAL_PIDS + TEST_PIDS ({len(eval_pids)} subjects): {eval_pids}")
+    # ── Eval PIDs: must be passed explicitly (no silent default). Hyperparameters such as
+    #    the number of eval steps must be chosen on the 4 HPO-val ("dev") users only,
+    #    never on test users: P005 P131 P116 P109 (kfold28_hpo4_split.json["hpo_val"]).
+    if not args.eval_pids:
+        raise SystemExit("--eval-pids is required. Select eval steps on the dev users: "
+                         "--eval-pids P005 P131 P116 P109")
+    from ablation_config import KFOLD_HPO_VAL_PIDS
+    test_overlap = set(args.eval_pids) - set(KFOLD_HPO_VAL_PIDS)
+    if test_overlap:
+        raise SystemExit(f"--eval-pids contains non-dev users {sorted(test_overlap)}; "
+                         f"selection sweeps may only use {KFOLD_HPO_VAL_PIDS}")
+    eval_pids = args.eval_pids
 
     # ── Resolve ft_lr default from ablation_config ────────────────────────────
     # Default to maml_alpha_init_eval so the sweep's fixed-LR paper curve uses

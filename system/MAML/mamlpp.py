@@ -1111,7 +1111,26 @@ def assert_no_support_query_leakage(support_batch, query_batch, config,
             "blocks_skipped": blocks_skipped, "n_pairs_flagged": 0}
 
 
+def assert_support_query_rep_disjoint(support_batch, query_batch):
+    """
+    Assert that no (gesture, repetition) appears in both support and query.
+
+    Uses the rep ids that maml_mm_collate carries with every sample. Unlike
+    assert_no_support_query_leakage (tensor comparison, debug-only, blind to masked
+    modalities) this runs on EVERY adapt-and-eval call, so it guards the path that
+    produces reported numbers. Raises KeyError if the batch carries no rep ids.
+    """
+    def pairs(batch):
+        return set(zip(batch["global_labels"].tolist(), batch["rep_idx"].tolist()))
+
+    overlap = pairs(support_batch) & pairs(query_batch)
+    assert not overlap, (
+        f"Support/query share repetitions (gesture, rep_idx): {sorted(overlap)[:10]}"
+    )
+
+
 def mamlpp_adapt_and_eval(model, config, support_batch, query_batch, debug=False):
+    assert_support_query_rep_disjoint(support_batch, query_batch)
     pre_adapt_acc = None
 
     if debug:

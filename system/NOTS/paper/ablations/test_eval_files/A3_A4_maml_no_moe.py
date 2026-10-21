@@ -15,12 +15,10 @@ A4: Single encoder matched to ALL M0 experts combined (CRITICAL capacity ablatio
 LSTM and head are identical to M0 and are NOT part of the matching equation.
 Only the CNN encoder (what M0 implements as an expert pool) is scaled.
 
-test_procedure:
-  'hpo_test_split' : Fixed split, single seed run (FIXED_SEED).
-  'L2SO'           : Leave-2-Subjects-Out over all_PIDs. One run per fold.
+test_procedure: 'kfold7' only (28/4 outer split, 7 folds of 20/4/4; --fold-idx 0..6).
 """
 
-import os, sys, copy, json, argparse
+import os, sys, copy, json, argparse, functools
 import numpy as np
 import torch
 
@@ -39,6 +37,7 @@ from ablation_config import (
     make_periodic_checkpoint_fn, make_periodic_test_eval_fn,
     compute_matched_filters_for_ablation,
     RUN_DIR,
+    run_kfold, add_fold_arg, kfold_tag, resolve_fold_ids,
 )
 from MAML.maml_data_pipeline import get_maml_dataloaders
 from MAML.mamlpp import mamlpp_pretrain
@@ -178,134 +177,47 @@ def run_one_fold(ablation_id: str, fold_id: str, seed: int, config: dict) -> dic
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Test procedures
+# Orchestration  (protocol: kfold7 only; legacy protocols removed 2026-10-21)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_hpo_test_split(ablation_id: str, config: dict) -> list:
-    print(f"\n{'='*70}")
-    print(f"[{ablation_id}] hpo_test_split: single run (seed={FIXED_SEED})")
-    print(f"{'='*70}")
-    result = run_one_fold(
-        ablation_id=ablation_id,
-        fold_id=f"fixed_seed{FIXED_SEED}",
-        seed=FIXED_SEED,
-        config=copy.deepcopy(config),
-    )
-    return [result]
-
-
-def build_l2so_folds(all_pids: list) -> list:
-    n = len(all_pids)
-    folds = []
-    for i in range(n):
-        test_pid   = all_pids[i]
-        val_pid    = all_pids[(i + 1) % n]
-        train_pids = [p for p in all_pids if p != test_pid and p != val_pid]
-        folds.append({
-            "fold_idx":   i,
-            "test_pid":   test_pid,
-            "val_pid":    val_pid,
-            "train_pids": train_pids,
-        })
-    return folds
-
-
-def run_l2so(ablation_id: str, config: dict) -> list:
-    all_pids = config["all_PIDs"]
-    assert len(all_pids) >= 3, "Need at least 3 subjects for L2SO."
-
-    folds = build_l2so_folds(all_pids)
-    results = []
-
-    for fold in folds:
-        fold_idx = fold["fold_idx"]
-        print(f"\n{'='*70}")
-        print(f"[{ablation_id}] L2SO fold {fold_idx+1}/{len(folds)}  "
-              f"test={fold['test_pid']}  val={fold['val_pid']}")
-        print(f"{'='*70}")
-
-        fold_config = copy.deepcopy(config)
-        fold_config["train_PIDs"] = fold["train_pids"]
-        fold_config["val_PIDs"]   = [fold["val_pid"]]
-        fold_config["test_PIDs"]  = [fold["test_pid"]]
-
-        result = run_one_fold(
-            ablation_id=ablation_id,
-            fold_id=f"l2so_fold{fold_idx:02d}_test{fold['test_pid']}",
-            seed=FIXED_SEED,
-            config=fold_config,
-        )
-        results.append(result)
-
-    return results
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Orchestration
-# ─────────────────────────────────────────────────────────────────────────────
-
-def run_ablation(ablation_id: str, config: dict, description: str):
-    test_procedure = config["test_procedure"]
+def run_ablation(ablation_id: str, config: dict, description: str, fold_idx=None):
+    assert config["test_procedure"] == "kfold7", config["test_procedure"]
 
     print(f"\n{ablation_id} CONFIG:")
     print(json.dumps({k: str(v) for k, v in config.items()}, indent=2))
-    print(f"\nTest procedure: {test_procedure}")
-
-    assert test_procedure in ("hpo_test_split", "L2SO"), (
-        f"Unknown test_procedure '{test_procedure}'."
-    )
 
     param_ratio_key = f"_{ablation_id.lower()}_param_ratio"
     matched_cnn_key = f"_{ablation_id.lower()}_matched_cnn_params"
 
-    if test_procedure == "hpo_test_split":
-        all_results = run_hpo_test_split(ablation_id, config)
-        test_accs = [r["test_results"]["mean_acc"] for r in all_results]
-        summary = {
-            "ablation_id":        ablation_id,
-            "description":        description,
-            "test_procedure":     "hpo_test_split",
-            "n_params":           all_results[0]["n_params"],
-            "fold_results":       all_results,
-            "mean_test_acc":      float(np.mean(test_accs)),
-            "std_test_acc":       float(np.std(test_accs)),
-            "seed":               FIXED_SEED,
-            "cnn_base_filters":   config["cnn_base_filters"],
-            "param_match_target": config["_param_match_target"],
-            "matched_cnn_params": config[matched_cnn_key],
-            "param_ratio":        config[param_ratio_key],
-            "config_snapshot":    {k: str(v) for k, v in config.items()},
-        }
-    else:  # L2SO
-        all_results = run_l2so(ablation_id, config)
-        test_accs = [r["test_results"]["mean_acc"] for r in all_results]
-        summary = {
-            "ablation_id":        ablation_id,
-            "description":        description,
-            "test_procedure":     "L2SO",
-            "n_params":           all_results[0]["n_params"],
-            "fold_results":       all_results,
-            "mean_test_acc":      float(np.mean(test_accs)),
-            "std_test_acc":       float(np.std(test_accs)),
-            "num_folds":          len(all_results),
-            "cnn_base_filters":   config["cnn_base_filters"],
-            "param_match_target": config["_param_match_target"],
-            "matched_cnn_params": config[matched_cnn_key],
-            "param_ratio":        config[param_ratio_key],
-            "config_snapshot":    {k: str(v) for k, v in config.items()},
-        }
-
-    save_results(summary, config, tag="summary")
+    all_results = run_kfold(
+        config, fold_idx,
+        functools.partial(run_one_fold, ablation_id),
+    )
+    test_accs = [r["test_results"]["mean_acc"] for r in all_results]
+    summary = {
+        "ablation_id":        ablation_id,
+        "description":        description,
+        "test_procedure":     "kfold7",
+        "fold_idxs":          resolve_fold_ids(fold_idx),
+        "n_params":           all_results[0]["n_params"],
+        "fold_results":       all_results,
+        "mean_test_acc":      float(np.mean(test_accs)),
+        "std_test_acc":       float(np.std(test_accs)),
+        "num_folds":          len(all_results),
+        "seed":               FIXED_SEED,
+        "cnn_base_filters":   config["cnn_base_filters"],
+        "param_match_target": config["_param_match_target"],
+        "matched_cnn_params": config[matched_cnn_key],
+        "param_ratio":        config[param_ratio_key],
+        "config_snapshot":    {k: str(v) for k, v in config.items()},
+    }
+    save_results(summary, config, tag=kfold_tag(fold_idx))
 
     param_ratio = config[param_ratio_key]
     print(f"\n{'='*70}")
-    print(f"[{ablation_id}] FINAL ({test_procedure}): "
-          f"{summary['mean_test_acc']*100:.2f}%")
-    if test_procedure == "L2SO":
-        print(f"     ± {summary['std_test_acc']*100:.2f}%  "
-              f"over {summary['num_folds']} L2SO folds")
-    else:
-        print(f"     single run, seed={FIXED_SEED}")
+    print(f"[{ablation_id}] FINAL (kfold7 {summary['fold_idxs']}): "
+          f"{summary['mean_test_acc']*100:.2f}% ± {summary['std_test_acc']*100:.2f}%  "
+          f"over {summary['num_folds']} fold(s)")
     print(f"     cnn_base_filters={config['cnn_base_filters']}  "
           f"(match_target={config['_param_match_target']}, ratio={param_ratio:.4f})")
     print(f"     {config['n_way']}-way {config['k_shot']}-shot")
@@ -325,17 +237,17 @@ def main():
             "A4: MAML, single encoder matched to ALL M0 experts combined (critical ablation)."
         ),
     )
+    add_fold_arg(parser)
     args = parser.parse_args()
 
     if args.ablation == "A3":
-        config_a3 = build_config_a3()
-        run_ablation("A3", config_a3,
-                     "MAML + No-MoE (single encoder matched to ONE M0 expert)")
-
-    elif args.ablation == "A4":
-        config_a4 = build_config_a4()
-        run_ablation("A4", config_a4,
-                     "MAML + No-MoE (single encoder matched to ALL M0 experts) ← CRITICAL")
+        run_ablation("A3", build_config_a3(),
+                     "MAML + No-MoE (single encoder matched to ONE M0 expert)",
+                     fold_idx=args.fold_idx)
+    else:
+        run_ablation("A4", build_config_a4(),
+                     "MAML + No-MoE (single encoder matched to ALL M0 experts) ← CRITICAL",
+                     fold_idx=args.fold_idx)
 
 
 if __name__ == "__main__":

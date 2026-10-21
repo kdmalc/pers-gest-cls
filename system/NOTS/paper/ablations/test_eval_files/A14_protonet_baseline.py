@@ -64,6 +64,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 sys.path.insert(0, str(CODE_DIR / "system" / "nonparametric"))
 
 from ablation_config import (
+    apply_kfold_fold, add_fold_arg,
     make_base_config, build_maml_moe_model, set_seeds, FIXED_SEED,
     save_results, count_parameters,
 )
@@ -129,12 +130,13 @@ def main():
     ap.add_argument("--knn-metric", default="l1")
     ap.add_argument("--pca-level", default="per_sample",
                     choices=["global", "per_class", "per_sample"])
+    add_fold_arg(ap, required=True)
     args = ap.parse_args()
 
     if not args.no_encoder and args.checkpoint is None:
         ap.error("--checkpoint is required unless --no-encoder is passed.")
 
-    base = make_base_config(ablation_id=f"A14_protonet_n{args.n_way}")
+    base = apply_kfold_fold(make_base_config(ablation_id=f"A14_protonet_n{args.n_way}"), args.fold_idx)
     set_seeds(FIXED_SEED)
 
     from eval_knn_proto import BASE_CONFIG, run_all_conditions
@@ -154,7 +156,7 @@ def main():
     cfg["all_rep_indices"] = list(base["target_trial_reps"])
 
     print(f"[A14] n_way={cfg['n_way']}  shots={cfg['shots']}")
-    print(f"[A14] eval_PIDs={cfg['eval_PIDs']}  (matched to ablation test split)")
+    print(f"[A14] eval_PIDs={cfg['eval_PIDs']}  (kfold7 fold test users)")
     print(f"[A14] knn_metric={cfg['knn_metric']}  pca_level={cfg['pca_level']}")
 
     tensor_dict_path = os.path.join(base["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
@@ -207,7 +209,7 @@ def main():
         ],
         "config_snapshot": {k: str(v) for k, v in cfg.items()},
     }
-    save_results(out, base, tag=f"A14_protonet_n{args.n_way}")
+    save_results(out, base, tag=f"A14_protonet_n{args.n_way}_fold{args.fold_idx:02d}")
 
     print(f"\n{'='*70}")
     if headline:

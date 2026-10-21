@@ -80,6 +80,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
+    apply_kfold_fold, add_fold_arg,
     make_base_config, build_maml_no_moe_model,
     set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
@@ -98,12 +99,14 @@ if torch.cuda.is_available():
 GRID_K_SHOTS = [1, 3, 5]
 GRID_N_WAYS  = [3, 5, 10]
 
-# q_query is held fixed across all grid cells (standard practice; mirrors M0 grid).
+# q_query is a TRAINING-ONLY cap (never binds here: 9 >= 10 - k_shot). Eval scores all
+# non-support reps, so realised Q = 10 - k_shot (9/7/5) and varies across grid cells.
 Q_QUERY_FIXED = 9
 
 
-def build_config(k_shot: int, n_way: int) -> dict:
+def build_config(k_shot: int, n_way: int, fold_idx: int) -> dict:
     config = make_base_config(ablation_id=f"grid_A4_k{k_shot}_n{n_way}")
+    config = apply_kfold_fold(config, fold_idx)   # one kfold7 fold per job
 
     # A4 flags — MAML, no MoE. Mirrors standalone A4 exactly.
     config["meta_learning"] = True
@@ -128,7 +131,6 @@ def build_config(k_shot: int, n_way: int) -> dict:
 
     # Fix test procedure to hpo_test_split — L2SO is not feasible for the full
     # 9-cell MAML grid (see module docstring for reasoning).
-    config["test_procedure"] = "hpo_test_split"
 
     # Grid cell-specific task dimensions — these drive the MAML episodic
     # dataloader AND the episodic eval sampler, so they must match.
@@ -142,8 +144,8 @@ def build_config(k_shot: int, n_way: int) -> dict:
     return config
 
 
-def run(k_shot: int, n_way: int) -> dict:
-    config = build_config(k_shot, n_way)
+def run(k_shot: int, n_way: int, fold_idx: int) -> dict:
+    config = build_config(k_shot, n_way, fold_idx)
     set_seeds(FIXED_SEED)
     config["seed"] = FIXED_SEED
 
@@ -216,7 +218,7 @@ def run(k_shot: int, n_way: int) -> dict:
         "param_ratio":        config["_a4_param_ratio"],
         "config_snapshot":    {k: str(v) for k, v in config.items()},
     }
-    save_results(result, config, tag=f"k{k_shot}_n{n_way}_final")
+    save_results(result, config, tag=f"k{k_shot}_n{n_way}_fold{fold_idx:02d}_final")
 
     print(f"\n{'='*70}")
     print(f"[grid_A4] FINAL k={k_shot} n={n_way}:")
@@ -241,6 +243,7 @@ def main():
                         help=f"Number of support shots. Must be one of {GRID_K_SHOTS}.")
     parser.add_argument("--n-way", type=int, required=True,
                         help=f"Number of classes. Must be one of {GRID_N_WAYS}.")
+    add_fold_arg(parser, required=True)
     args = parser.parse_args()
 
     assert args.k_shot in GRID_K_SHOTS, (
@@ -254,7 +257,7 @@ def main():
         f"if you want to add a new value."
     )
 
-    run(args.k_shot, args.n_way)
+    run(args.k_shot, args.n_way, args.fold_idx)
 
 
 if __name__ == "__main__":

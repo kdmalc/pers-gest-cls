@@ -136,8 +136,8 @@ def check_lpft():
 def check_qcount():
     hdr("QCOUNT -- realised query samples per class (R2 W1)")
     print("""
-  MetaGestureDataset._build_episode, is_train=False, q_query_eval_mode=
-  "all_remaining" (the default and what every published number used):
+  MetaGestureDataset._build_episode, is_train=False (the only eval behaviour;
+  the old q_query_eval_mode switch was removed 2026-10-21):
 
       support = shuffled_reps[:K]        query = shuffled_reps[K:]
 

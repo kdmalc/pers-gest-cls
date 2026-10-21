@@ -260,7 +260,6 @@ def prototypical_zeroshot_eval(model, config, tensor_dict_path, test_pids, num_e
         num_eval_episodes      = num_episodes,
         is_train               = False,
         seed                   = FIXED_SEED,
-        use_label_shuf_meta_aug = False,
     )
     test_dl = DataLoader(
         test_ds, batch_size=1, shuffle=False, num_workers=4,

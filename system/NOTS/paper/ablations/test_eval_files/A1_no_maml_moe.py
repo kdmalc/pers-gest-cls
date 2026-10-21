@@ -29,15 +29,11 @@ Training : Flat dataloader (get_pretrain_dataloaders)
 Evaluation: Episodic (1-shot 3-way), finetune before eval
             → reported as (head_only, full_ft)
 
-test_procedure:
-  'hpo_test_split' : Fixed split, single run at FIXED_SEED. Dev/debug only —
-                     HPO was run on this split.
-  'L2SO'           : Leave-2-Subjects-Out over all_PIDs. One run per fold.
-                     test=subjects[i], val=subjects[(i+1)%N], train=rest.
-                     DEFAULT — use this for all reported results.
+test_procedure: 'kfold7' only (28/4 outer split, 7 folds of 20/4/4; --fold-idx 0..6,
+                omitted = all 7 sequentially). Legacy protocols removed 2026-10-21.
 """
 
-import os, sys, copy, json
+import os, sys, copy, json, argparse, functools
 import numpy as np
 import torch
 import pickle
@@ -56,6 +52,7 @@ from ablation_config import (
     run_supervised_test_eval, save_results, save_model_checkpoint, count_parameters,
     replace_head_for_eval,
     RUN_DIR,
+    run_kfold, add_fold_arg, kfold_tag, resolve_fold_ids,
 )
 from pretraining.pretrain_data_pipeline import get_pretrain_dataloaders
 from pretraining.pretrain_trainer import pretrain
@@ -175,147 +172,60 @@ def run_one_fold(fold_id: str, seed: int, config: dict, tensor_dict: dict) -> di
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Test procedures
-# ─────────────────────────────────────────────────────────────────────────────
-
-def run_hpo_test_split(config: dict, tensor_dict: dict) -> dict:
-    print(f"\n{'='*70}")
-    print(f"[A1] hpo_test_split: single run (seed={FIXED_SEED})")
-    print(f"[A1] WARNING: hpo_test_split uses the split HPO was run on.")
-    print(f"     Use L2SO for reported ablation results.")
-    print(f"{'='*70}")
-    return run_one_fold(
-        fold_id=f"fixed_seed{FIXED_SEED}",
-        seed=FIXED_SEED,
-        config=copy.deepcopy(config),
-        tensor_dict=tensor_dict,
-    )
-
-
-def build_l2so_folds(all_pids: list) -> list:
-    n = len(all_pids)
-    folds = []
-    for i in range(n):
-        test_pid   = all_pids[i]
-        val_pid    = all_pids[(i + 1) % n]
-        train_pids = [p for p in all_pids if p != test_pid and p != val_pid]
-        folds.append({
-            "fold_idx":   i,
-            "test_pid":   test_pid,
-            "val_pid":    val_pid,
-            "train_pids": train_pids,
-        })
-    return folds
-
-
-def run_l2so(config: dict, tensor_dict: dict) -> list:
-    all_pids = config["all_PIDs"]
-    assert len(all_pids) >= 3, "Need at least 3 subjects for L2SO."
-
-    folds = build_l2so_folds(all_pids)
-    results = []
-
-    for fold in folds:
-        fold_idx = fold["fold_idx"]
-        print(f"\n{'='*70}")
-        print(f"[A1] L2SO fold {fold_idx+1}/{len(folds)}  "
-              f"test={fold['test_pid']}  val={fold['val_pid']}")
-        print(f"{'='*70}")
-
-        fold_config = copy.deepcopy(config)
-        fold_config["train_PIDs"] = fold["train_pids"]
-        fold_config["val_PIDs"]   = [fold["val_pid"]]
-        fold_config["test_PIDs"]  = [fold["test_pid"]]
-
-        result = run_one_fold(
-            fold_id=f"l2so_fold{fold_idx:02d}_test{fold['test_pid']}",
-            seed=FIXED_SEED,
-            config=fold_config,
-            tensor_dict=tensor_dict,
-        )
-        results.append(result)
-
-    return results
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Main
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Main  (protocol: kfold7 only -- 28/4 outer split, 7 folds of 20/4/4)
+# Legacy 'hpo_test_split' / 'L2SO' were removed from this script on 2026-10-21;
+# see git history to reproduce old numbers.
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def main():
+    parser = argparse.ArgumentParser(description="A1: No-MAML + MoE")
+    add_fold_arg(parser)
+    args = parser.parse_args()
+
     config = build_config()
-    test_procedure = config["test_procedure"]
+    assert config["test_procedure"] == "kfold7", config["test_procedure"]
 
     print("\nA1 CONFIG:")
     print(json.dumps({k: str(v) for k, v in config.items()}, indent=2))
-    print(f"\nTest procedure: {test_procedure}")
-
-    assert test_procedure in ("hpo_test_split", "L2SO"), (
-        f"Unknown test_procedure '{test_procedure}'. Must be 'hpo_test_split' or 'L2SO'."
-    )
 
     tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
     with open(tensor_dict_path, "rb") as f:
         full_dict = pickle.load(f)
     tensor_dict = reorient_tensor_dict(full_dict, config)
 
-    if test_procedure == "hpo_test_split":
-        result = run_hpo_test_split(config, tensor_dict)
-        summary = {
-            "ablation_id":        "A1",
-            "description":        "No-MAML + MoE (Supervised MoE)",
-            "test_procedure":     "hpo_test_split",
-            "seed":               FIXED_SEED,
-            "n_params":           result["n_params"],
-            "result":             result,
-            "test_head_only_acc": result["test_head_only"]["mean_acc"],
-            "test_full_ft_acc":   result["test_full_ft"]["mean_acc"],
-            "ft_steps":           config["ft_steps"],
-            "ft_lr":              config["ft_lr"],
-            "ft_optimizer":       config["ft_optimizer"],
-            "ft_weight_decay":    config["ft_weight_decay"],
-            "config_snapshot":    {k: str(v) for k, v in config.items()},
-        }
-    else:  # L2SO
-        all_results = run_l2so(config, tensor_dict)
-        # One value per test subject — the distribution for your paired t-test
-        head_accs = [r["test_head_only"]["mean_acc"] for r in all_results]
-        full_accs = [r["test_full_ft"]["mean_acc"]   for r in all_results]
-        summary = {
-            "ablation_id":         "A1",
-            "description":         "No-MAML + MoE (Supervised MoE)",
-            "test_procedure":      "L2SO",
-            "seed":                FIXED_SEED,
-            "n_params":            all_results[0]["n_params"],
-            "fold_results":        all_results,
-            "mean_test_head_only": float(np.mean(head_accs)),
-            "std_test_head_only":  float(np.std(head_accs)),
-            "mean_test_full_ft":   float(np.mean(full_accs)),
-            "std_test_full_ft":    float(np.std(full_accs)),
-            "ft_steps":            config["ft_steps"],
-            "ft_lr":               config["ft_lr"],
-            "ft_optimizer":        config["ft_optimizer"],
-            "ft_weight_decay":     config["ft_weight_decay"],
-            "num_folds":           len(all_results),
-            "config_snapshot":     {k: str(v) for k, v in config.items()},
-        }
-
-    save_results(summary, config, tag="summary")
+    all_results = run_kfold(
+        config, args.fold_idx,
+        functools.partial(run_one_fold, tensor_dict=tensor_dict),
+    )
+    head_accs = [r["test_head_only"]["mean_acc"] for r in all_results]
+    full_accs = [r["test_full_ft"]["mean_acc"]   for r in all_results]
+    summary = {
+        "ablation_id":         "A1",
+        "description":         "No-MAML + MoE (Supervised MoE)",
+        "test_procedure":      "kfold7",
+        "fold_idxs":           resolve_fold_ids(args.fold_idx),
+        "seed":                FIXED_SEED,
+        "n_params":            all_results[0]["n_params"],
+        "fold_results":        all_results,
+        "mean_test_head_only": float(np.mean(head_accs)),
+        "std_test_head_only":  float(np.std(head_accs)),
+        "mean_test_full_ft":   float(np.mean(full_accs)),
+        "std_test_full_ft":    float(np.std(full_accs)),
+        "ft_steps":            config["ft_steps"],
+        "ft_lr":               config["ft_lr"],
+        "ft_optimizer":        config["ft_optimizer"],
+        "ft_weight_decay":     config["ft_weight_decay"],
+        "num_folds":           len(all_results),
+        "config_snapshot":     {k: str(v) for k, v in config.items()},
+    }
+    save_results(summary, config, tag=kfold_tag(args.fold_idx))
 
     print(f"\n{'='*70}")
-    if test_procedure == "hpo_test_split":
-        print(f"[A1] FINAL head-only (hpo_test_split): "
-              f"{summary['test_head_only_acc']*100:.2f}%")
-        print(f"[A1] FINAL full-ft   (hpo_test_split): "
-              f"{summary['test_full_ft_acc']*100:.2f}%")
-        print(f"     single run, seed={FIXED_SEED}")
-    else:
-        print(f"[A1] FINAL head-only (L2SO): "
-              f"{summary['mean_test_head_only']*100:.2f}% ± {summary['std_test_head_only']*100:.2f}%")
-        print(f"[A1] FINAL full-ft   (L2SO): "
-              f"{summary['mean_test_full_ft']*100:.2f}% ± {summary['std_test_full_ft']*100:.2f}%")
-        print(f"     over {summary['num_folds']} L2SO folds (one per test subject)")
+    print(f"[A1] FINAL head-only (kfold7 {summary['fold_idxs']}): "
+          f"{summary['mean_test_head_only']*100:.2f}% Â± {summary['std_test_head_only']*100:.2f}%")
+    print(f"[A1] FINAL full-ft   (kfold7 {summary['fold_idxs']}): "
+          f"{summary['mean_test_full_ft']*100:.2f}% Â± {summary['std_test_full_ft']*100:.2f}%")
     print(f"     ft_steps={config['ft_steps']}  ft_lr={config['ft_lr']:.4e}"
           f"  ft_optimizer={config['ft_optimizer']}")
     print(f"     {config['n_way']}-way {config['k_shot']}-shot")

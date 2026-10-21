@@ -43,6 +43,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
+    apply_kfold_fold, add_fold_arg,
     make_base_config, build_maml_moe_model,
     set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
@@ -59,21 +60,18 @@ if torch.cuda.is_available():
 GRID_K_SHOTS = [1, 3, 5]
 GRID_N_WAYS  = [3, 5, 10]
 
-# q_query as CONFIGURED. Note this is not the query count actually realised at
-# eval time: MetaGestureDataset._build_episode ignores q_query when
-# is_train=False and assigns every non-support trial to the query set. With 10
-# reps per class the realised per-class Q is therefore 10 - k_shot:
+# q_query is a TRAINING-ONLY cap and is NOT held fixed across k_shot at eval time:
+# MetaGestureDataset scores every non-support rep, so with 10 reps per class the
+# realised per-class Q is 10 - k_shot:
 #     k_shot=1 -> Q=9    k_shot=3 -> Q=7    k_shot=5 -> Q=5
-# This is why the reported std grows with k_shot at 10-way (a K=5 10-way episode
-# carries 50 query samples, not 90). It is disclosed rather than "fixed" because
-# changing it would move already-published numbers; set
-# config["q_query_eval_mode"]="fixed" if you deliberately want a capped Q.
-# Report the realised counts from MetaGestureDataset.episode_shape_log.
-Q_QUERY_FIXED = 9
+# (a K=5 10-way episode carries 50 query samples, not 90, so estimates at larger K are
+# noisier; state the realised Q in captions, read from MetaGestureDataset.episode_shape_log).
+Q_QUERY_FIXED = 9   # training cap only; >= 10 - k_shot for every K here, so it never binds
 
 
-def build_config(k_shot: int, n_way: int) -> dict:
+def build_config(k_shot: int, n_way: int, fold_idx: int) -> dict:
     config = make_base_config(ablation_id=f"grid_k{k_shot}_n{n_way}")
+    config = apply_kfold_fold(config, fold_idx)   # one kfold7 fold per job
 
     config["k_shot"]  = k_shot
     config["n_way"]   = n_way
@@ -87,8 +85,8 @@ def build_config(k_shot: int, n_way: int) -> dict:
     return config
 
 
-def run(k_shot: int, n_way: int) -> dict:
-    config = build_config(k_shot, n_way)
+def run(k_shot: int, n_way: int, fold_idx: int) -> dict:
+    config = build_config(k_shot, n_way, fold_idx)
     set_seeds(FIXED_SEED)
     config["seed"] = FIXED_SEED
 
@@ -143,7 +141,7 @@ def run(k_shot: int, n_way: int) -> dict:
         "n_params":        n_params,
         "config_snapshot": {k: str(v) for k, v in config.items()},
     }
-    save_results(result, config, tag=f"k{k_shot}_n{n_way}_final")
+    save_results(result, config, tag=f"k{k_shot}_n{n_way}_fold{fold_idx:02d}_final")
 
     print(f"\n{'='*70}")
     print(f"[grid] FINAL k={k_shot} n={n_way}: {test_results['mean_acc']*100:.2f}%")
@@ -161,6 +159,7 @@ def main():
                         help=f"Number of support shots. Must be one of {GRID_K_SHOTS}.")
     parser.add_argument("--n-way", type=int, required=True,
                         help=f"Number of classes. Must be one of {GRID_N_WAYS}.")
+    add_fold_arg(parser, required=True)
     args = parser.parse_args()
 
     assert args.k_shot in GRID_K_SHOTS, (
@@ -174,7 +173,7 @@ def main():
         f"if you want to add a new value."
     )
 
-    run(args.k_shot, args.n_way)
+    run(args.k_shot, args.n_way, args.fold_idx)
 
 
 if __name__ == "__main__":

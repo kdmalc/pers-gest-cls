@@ -4,12 +4,9 @@ A7_A8_subject_specific.py
 ==========================
 Ablations A7 and A8: Subject-Specific Models
 
-test_procedure:
-  'hpo_test_split' : Evaluate only on the fixed TEST_PIDS (development).
-  'L2SO'           : Evaluate on ALL all_PIDs so subject coverage matches
-                     the L2SO cross-subject ablations (M0, A1–A4).
-                     Rep-level logic is unchanged — this only controls
-                     which subjects are included in the outer loop.
+test_procedure: 'kfold7' only. Evaluation subjects = the 4 test users of the requested
+fold(s) (--fold-idx 0..6; omitted = all 28 evaluated users), so results line up with the
+cross-subject ablations' folds. Rep-level logic is unchanged.
 
 NOTE: Subject-specific models have no cross-subject training phase.
 The subject-level loop here is over evaluation subjects only.
@@ -59,6 +56,7 @@ from ablation_config import (
     set_seeds, FIXED_SEED, NUM_TEST_EPISODES,
     save_results, save_model_checkpoint, count_parameters, RUN_DIR,
     compute_matched_filters_for_ablation,
+    apply_kfold_fold, resolve_fold_ids, add_fold_arg, kfold_tag,
 )
 from pretraining.pretrain_data_pipeline import get_pretrain_dataloaders
 from pretraining.pretrain_trainer import pretrain
@@ -538,18 +536,15 @@ def run_a8_one_subject(pid, config, tensor_dict):
 # Orchestration
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_a7_ablation(config, tensor_dict):
+def run_a7_ablation(config, tensor_dict, fold_idx=None):
     """
     A7-specific orchestrator. Aggregates both head_only and full_ft across
     subjects and saves a summary with both metrics (matching A1/A2 structure).
     """
     test_procedure = config["test_procedure"]
-    assert test_procedure in ("hpo_test_split", "L2SO"), (
-        f"Unknown test_procedure '{test_procedure}'."
-    )
-
-    eval_pids = config["test_PIDs"] if test_procedure == "hpo_test_split" \
-                else config["all_PIDs"]
+    assert test_procedure == "kfold7", test_procedure
+    eval_pids = [p for i in resolve_fold_ids(fold_idx)
+                 for p in apply_kfold_fold(config, i)["test_PIDs"]]
 
     print(f"\nA7 CONFIG (test_procedure={test_procedure}):")
     print(json.dumps({k: str(v) for k, v in config.items()}, indent=2))
@@ -595,7 +590,8 @@ def run_a7_ablation(config, tensor_dict):
         "n_subjects":           len(all_results),
         "config_snapshot":      {k: str(v) for k, v in config.items()},
     }
-    save_results(summary, config, tag="summary")
+    summary["fold_idxs"] = resolve_fold_ids(fold_idx)
+    save_results(summary, config, tag=kfold_tag(fold_idx))
 
     print(f"\n{'='*70}")
     print(f"[A7] FINAL head-only ({test_procedure}) across {len(all_results)} subjects: "
@@ -609,7 +605,7 @@ def run_a7_ablation(config, tensor_dict):
 
 
 def run_subject_specific_ablation(ablation_id, subject_runner, config,
-                                   description, tensor_dict):
+                                   description, tensor_dict, fold_idx=None):
     """
     Generic orchestrator for A8 (single mean_acc per subject).
     A7 uses run_a7_ablation instead.
@@ -617,16 +613,12 @@ def run_subject_specific_ablation(ablation_id, subject_runner, config,
     Outer loop: iterate over eval subjects. Single run per subject (FIXED_SEED).
 
     Which subjects are evaluated depends on test_procedure:
-      'hpo_test_split' → config['test_PIDs']  (fixed small set)
-      'L2SO'           → config['all_PIDs']   (all subjects, matches cross-subject coverage)
+      'kfold7' -> the 4 test users of each requested fold (--fold-idx), or all 28 if omitted.
     """
     test_procedure = config["test_procedure"]
-    assert test_procedure in ("hpo_test_split", "L2SO"), (
-        f"Unknown test_procedure '{test_procedure}'."
-    )
-
-    eval_pids = config["test_PIDs"] if test_procedure == "hpo_test_split" \
-                else config["all_PIDs"]
+    assert test_procedure == "kfold7", test_procedure
+    eval_pids = [p for i in resolve_fold_ids(fold_idx)
+                 for p in apply_kfold_fold(config, i)["test_PIDs"]]
 
     print(f"\n{ablation_id} CONFIG (test_procedure={test_procedure}):")
     print(json.dumps({k: str(v) for k, v in config.items()}, indent=2))
@@ -658,7 +650,8 @@ def run_subject_specific_ablation(ablation_id, subject_runner, config,
         "n_subjects":       len(per_subject_mean),
         "config_snapshot":  {k: str(v) for k, v in config.items()},
     }
-    save_results(summary, config, tag="summary")
+    summary["fold_idxs"] = resolve_fold_ids(fold_idx)
+    save_results(summary, config, tag=kfold_tag(fold_idx))
 
     print(f"\n{'='*70}")
     print(f"[{ablation_id}] FINAL ({test_procedure}) across {len(per_subject_mean)} subjects: "
@@ -672,6 +665,7 @@ def run_subject_specific_ablation(ablation_id, subject_runner, config,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ablation", choices=["A7", "A8", "both"], required=True)
+    add_fold_arg(parser)
     args = parser.parse_args()
 
     config_for_path = make_base_config(ablation_id="path_resolve")
@@ -684,7 +678,7 @@ def main():
 
     if args.ablation in ("A7", "both"):
         config_a7 = build_config_a7()
-        run_a7_ablation(config_a7, tensor_dict)
+        run_a7_ablation(config_a7, tensor_dict, fold_idx=args.fold_idx)
 
     if args.ablation in ("A8", "both"):
         config_a8 = build_config_a8()
@@ -692,6 +686,7 @@ def main():
             "A8", run_a8_one_subject, config_a8,
             description="Subject-Specific MoE (Supervised Pretrain + MAML Test-Time Eval)",
             tensor_dict=tensor_dict,
+            fold_idx=args.fold_idx,
         )
 
 

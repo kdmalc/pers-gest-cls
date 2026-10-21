@@ -144,9 +144,7 @@ def make_tiny_config(pids: list[str], **overrides) -> dict:
         "subject_specific_model": False,
 
         # ── episode sampler behaviour ───────────────────────────────────────
-        "use_label_shuf_meta_aug": True,
         "modality_mask": "both",
-        "q_query_eval_mode": "all_remaining",
         "strict_n_way": False,
         "augment": False,
 

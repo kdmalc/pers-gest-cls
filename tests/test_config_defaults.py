@@ -198,7 +198,7 @@ def test_tiny_config_covers_every_key_the_sampler_reads(tiny_config):
     required = [
         "train_PIDs", "val_PIDs", "maml_gesture_classes", "target_trial_reps",
         "n_way", "k_shot", "q_query", "episodes_per_epoch_train",
-        "num_eval_episodes", "seed", "num_workers", "use_label_shuf_meta_aug",
+        "num_eval_episodes", "seed", "num_workers",
         "debug_one_episode", "debug_five_episodes", "debug_one_user_only",
     ]
     missing = [k for k in required if k not in tiny_config]

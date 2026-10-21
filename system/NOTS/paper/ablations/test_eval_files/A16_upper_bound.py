@@ -101,6 +101,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
+    apply_kfold_fold, add_fold_arg,
     make_base_config,
     build_supervised_no_moe_model, build_maml_moe_model,
     compute_matched_filters_for_ablation,
@@ -456,7 +457,7 @@ def build_config(base: str, args) -> dict:
     Reproduces the architecture flags each base was pretrained under, so the
     checkpoint loads into an identical model.
     """
-    config = make_base_config(ablation_id=f"A16_{base}")
+    config = apply_kfold_fold(make_base_config(ablation_id=f"A16_{base}"), args.fold_idx)
     config["n_way"]             = args.n_way
     config["k_shot"]            = 1        # unused; episodes built directly
     config["ft_label_smooth"]   = 0.0
@@ -496,14 +497,9 @@ def run_base(base, args, manifest, tensor_dict_cache):
     config["test_PIDs"] = list(test_pids)
     config["val_PIDs"]  = list(val_pids)
 
-    # make_base_config defaults test_procedure to "L2SO", but A16 evaluates a
-    # fixed set of test subjects using per-subject fold checkpoints -- the
-    # effective protocol is the fixed split. Left unset, assert_protocol_consistent
-    # fires and the saved JSON claims "L2SO" while reporting 4 subjects, which is
-    # exactly the mismatch that already contaminated the fewshot_grid JSONs.
-    config["test_procedure"] = (
-        "L2SO" if len(test_pids) == len(config["all_PIDs"]) else "hpo_test_split"
-    )
+    # A16 evaluates this kfold7 fold's test users using the checkpoint of the fold that
+    # held them out. test_procedure stays "kfold7" (set by apply_kfold_fold).
+    assert config["test_procedure"] == "kfold7", config["test_procedure"]
 
     held_out_reps = ALL_REPS if not args.smoke else ALL_REPS[:2]
 
@@ -544,7 +540,7 @@ def run_base(base, args, manifest, tensor_dict_cache):
                       "base": base, "grid_results": grid,
                       "selected_ft_lr": ft_lr, "selected_ft_steps": ft_steps,
                       "val_PIDs": val_pids},
-                     config, tag=f"{base}_tune")
+                     config, tag=f"{base}_fold{args.fold_idx:02d}_tune")
         return None
 
     # ── Stage 2: the upper bound on test subjects ────────────────────────────
@@ -596,7 +592,7 @@ def run_base(base, args, manifest, tensor_dict_cache):
             "1 shot instead of the user's whole training set."
         ),
     }
-    save_results(summary, config, tag=f"{base}_summary")
+    save_results(summary, config, tag=f"{base}_fold{args.fold_idx:02d}_summary")
 
     print(f"\n{'='*74}")
     print(f"[A16/{base}] FINAL -- leave-one-rep-out ({len(held_out_reps)} folds)")
@@ -617,6 +613,7 @@ def main():
                     "test user's own data (reviewer ARaC)."
     )
     ap.add_argument("--base", choices=["A2", "M0", "both"], default="both")
+    add_fold_arg(ap, required=True)
     ap.add_argument("--manifest", default=DEFAULT_MANIFEST,
                     help="Checkpoint manifest from find_a16_checkpoints.py.")
     ap.add_argument("--stage", choices=["tune", "run", "both"], default="both")
@@ -647,7 +644,7 @@ def main():
     bases = ["A2", "M0"] if args.base == "both" else [args.base]
 
     # Fail fast on coverage before spending GPU time.
-    probe_cfg = make_base_config(ablation_id="A16_probe")
+    probe_cfg = apply_kfold_fold(make_base_config(ablation_id="A16_probe"), args.fold_idx)
     want_test = args.test_pids or probe_cfg["test_PIDs"]
     want_val  = args.val_pids  or probe_cfg["val_PIDs"]
     for base in bases:

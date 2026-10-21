@@ -79,7 +79,8 @@ print(f"OUT_DIR : {OUT_DIR}")
 # Config — exactly as trial 64 ran, verified against the SLURM log
 # =============================================================================
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'test_eval_files'))
-from ablation_config import make_base_config, VAL_PIDS, FIXED_SEED, build_maml_moe_model, count_parameters
+from ablation_config import make_base_config, KFOLD_HPO_VAL_PIDS, FIXED_SEED, build_maml_moe_model, count_parameters
+VAL_PIDS = list(KFOLD_HPO_VAL_PIDS)   # select eval hyperparameters on the 4 dev users only
 
 def build_config() -> dict:
     config = make_base_config(ablation_id="M0")
@@ -208,7 +209,6 @@ val_ds = MetaGestureDataset(
     num_eval_episodes       = NUM_VAL_EPISODES,
     is_train                = False,
     seed                    = FIXED_SEED,
-    use_label_shuf_meta_aug = False,
 )
 val_dl = DataLoader(
     val_ds, batch_size=1, shuffle=False, num_workers=4, collate_fn=maml_mm_collate

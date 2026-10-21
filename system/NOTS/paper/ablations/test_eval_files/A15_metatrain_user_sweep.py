@@ -56,6 +56,7 @@ sys.path.insert(0, str(CODE_DIR / "system" / "MOE"))
 sys.path.insert(0, str(CODE_DIR / "system" / "pretraining"))
 
 from ablation_config import (
+    apply_kfold_fold, add_fold_arg,
     make_base_config, build_maml_moe_model, set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
     make_periodic_checkpoint_fn, make_periodic_test_eval_fn,
@@ -107,17 +108,15 @@ def draw_is_degenerate(all_train_pids: list, n_users: int) -> bool:
     return n_users >= len(all_train_pids)
 
 
-def run_one(n_users: int, subsample_seed: int,
+def run_one(n_users: int, subsample_seed: int, fold_idx: int,
             vary_training_seed: bool = False) -> dict:
-    config = make_base_config(ablation_id=f"A15_N{n_users}_s{subsample_seed}")
+    config = apply_kfold_fold(make_base_config(ablation_id=f"A15_N{n_users}_s{subsample_seed}"), fold_idx)
 
     # REQUIRED: get_maml_dataloaders reads config["seed"] directly and
     # make_base_config does not set it (M0_full_model.py sets it explicitly at
     # line 89). Omitting this raises KeyError: 'seed' at the dataloader build,
     # i.e. AFTER model construction and any pre-flight checks have printed --
     # which is why the mask verification passed and the job still died.
-    config["test_procedure"] = "hpo_test_split"
-
     full_train = list(config["train_PIDs"])
     chosen = subsample_train_users(full_train, n_users, subsample_seed)
     degenerate = draw_is_degenerate(full_train, n_users)
@@ -222,7 +221,7 @@ def run_one(n_users: int, subsample_seed: int,
         ],
         "config_snapshot": {k: str(v) for k, v in config.items()},
     }
-    save_results(result, config, tag=f"A15_N{n_users}_s{subsample_seed}_final")
+    save_results(result, config, tag=f"A15_N{n_users}_s{subsample_seed}_fold{fold_idx:02d}_final")
 
     print(f"[A15] N={n_users} s={subsample_seed}: "
           f"{test_results['mean_acc']*100:.2f}% ± {test_results['std_acc']*100:.2f}%")
@@ -240,9 +239,11 @@ def main():
                          "user-draw replicates. Required to get any spread at "
                          "N == pool size, and the way to measure the "
                          "same-config reproducibility band.")
+    add_fold_arg(ap, required=True)
     args = ap.parse_args()
 
-    from ablation_config import TRAIN_PIDS
+    from ablation_config import kfold_split
+    TRAIN_PIDS = kfold_split.get_fold(args.fold_idx)["train"]   # the fold's 20 train users
     degenerate = draw_is_degenerate(list(TRAIN_PIDS), args.n_users)
 
     if degenerate and len(args.subsample_seeds) > 1 and not args.vary_training_seed:
@@ -256,7 +257,7 @@ def main():
               f"--subsample-seeds {' '.join(map(str, args.subsample_seeds))} --vary-training-seed")
         raise SystemExit(2)
 
-    results = [run_one(args.n_users, s, vary_training_seed=args.vary_training_seed)
+    results = [run_one(args.n_users, s, args.fold_idx, vary_training_seed=args.vary_training_seed)
                for s in args.subsample_seeds]
     accs = [r["test_acc"] for r in results]
 
@@ -274,9 +275,9 @@ def main():
               "--subsample-seeds 0 1 2 before reporting this point.")
     print(f"      Endpoints already in the paper: N=1 -> 64.6% "
           f"(A8 Subject-Specific EncoderMoE; A7 Subject-Specific Supervised is "
-          f"72.2% -- do not swap these), N=24 -> 86.7% (L2SO).")
-    print(f"      This sweep is fixed-split. Compare its N=24 point to the "
-          f"fixed-split number, and note the same-config band is ~3 points.")
+          f"72.2% -- do not swap these), N=20 = full pool of this protocol (no previous-protocol number is comparable).")
+    print(f"      This sweep runs one kfold7 fold per job. Compare its N=20 point to M0 on the "
+          f"same fold.")
     print(f"{'='*70}")
 
 

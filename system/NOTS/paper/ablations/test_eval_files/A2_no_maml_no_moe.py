@@ -16,15 +16,13 @@ The only difference is training regime: A2 uses supervised pretraining, A4 uses 
 Comparing A2 vs A4 isolates the contribution of MAML at equal model capacity.
 Comparing A4 vs M0 isolates the contribution of MoE at equal total expert capacity.
 
-test_procedure:
-  'hpo_test_split' : Fixed split, single run at FIXED_SEED.  [DEFAULT]
-  'L2SO'           : Leave-2-Subjects-Out over all_PIDs. One run per fold.
+test_procedure: 'kfold7' only (28/4 outer split, 7 folds of 20/4/4).
 
 CLI args:
-  --test-procedure  {hpo_test_split, L2SO}   overrides config default (L2SO)
+  --fold-idx {0..6}   run one fold (cluster: one job per fold); omitted = all 7 sequentially
 """
 
-import os, sys, copy, json
+import os, sys, copy, json, argparse, functools
 import numpy as np
 import torch
 import pickle
@@ -43,6 +41,7 @@ from ablation_config import (
     run_supervised_test_eval, save_results, save_model_checkpoint, count_parameters,
     compute_matched_filters_for_ablation,
     RUN_DIR,
+    run_kfold, add_fold_arg, kfold_tag, resolve_fold_ids,
 )
 from pretraining.pretrain_data_pipeline import get_pretrain_dataloaders
 from pretraining.pretrain_trainer import pretrain
@@ -165,155 +164,61 @@ def run_one_fold(fold_id: str, seed: int, config: dict, tensor_dict: dict) -> di
     }
 
 
-def run_hpo_test_split(config: dict, tensor_dict: dict) -> dict:
-    print(f"\n{'='*70}")
-    print(f"[A2] hpo_test_split: single run (seed={FIXED_SEED})")
-    print(f"{'='*70}")
-    return run_one_fold(
-        fold_id=f"fixed_seed{FIXED_SEED}",
-        seed=FIXED_SEED,
-        config=copy.deepcopy(config),
-        tensor_dict=tensor_dict,
-    )
-
-
-def build_l2so_folds(all_pids: list) -> list:
-    n = len(all_pids)
-    folds = []
-    for i in range(n):
-        test_pid   = all_pids[i]
-        val_pid    = all_pids[(i + 1) % n]
-        train_pids = [p for p in all_pids if p != test_pid and p != val_pid]
-        folds.append({
-            "fold_idx":   i,
-            "test_pid":   test_pid,
-            "val_pid":    val_pid,
-            "train_pids": train_pids,
-        })
-    return folds
-
-
-def run_l2so(config: dict, tensor_dict: dict) -> list:
-    all_pids = config["all_PIDs"]
-    assert len(all_pids) >= 3, "Need at least 3 subjects for L2SO."
-
-    folds = build_l2so_folds(all_pids)
-    results = []
-
-    for fold in folds:
-        fold_idx = fold["fold_idx"]
-        print(f"\n{'='*70}")
-        print(f"[A2] L2SO fold {fold_idx+1}/{len(folds)}  "
-              f"test={fold['test_pid']}  val={fold['val_pid']}")
-        print(f"{'='*70}")
-
-        fold_config = copy.deepcopy(config)
-        fold_config["train_PIDs"] = fold["train_pids"]
-        fold_config["val_PIDs"]   = [fold["val_pid"]]
-        fold_config["test_PIDs"]  = [fold["test_pid"]]
-
-        result = run_one_fold(
-            fold_id=f"l2so_fold{fold_idx:02d}_test{fold['test_pid']}",
-            seed=FIXED_SEED,
-            config=fold_config,
-            tensor_dict=tensor_dict,
-        )
-        results.append(result)
-
-    return results
+# Protocol: kfold7 only (28/4 outer split, 7 folds of 20/4/4). Legacy protocols removed 2026-10-21.
 
 
 def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--test-procedure",
-        choices=["hpo_test_split", "L2SO"],
-        default=None,
-        help="Overrides config['test_procedure'] default (L2SO) when provided.",
-    )
+    parser = argparse.ArgumentParser(description="A2: No-MAML + No-MoE")
+    add_fold_arg(parser)
     args = parser.parse_args()
 
     config = build_config()
+    assert config["test_procedure"] == "kfold7", config["test_procedure"]
     print(f"[A2] ft_lr={config['ft_lr']:.4e}  ft_steps={config['ft_steps']}  "
           f"ft_optimizer={config['ft_optimizer']}  (mirroring M0 MAML inner-loop eval)")
-
-    if args.test_procedure is not None:
-        config["test_procedure"] = args.test_procedure
-    test_procedure = config["test_procedure"]
-
-    assert test_procedure in ("hpo_test_split", "L2SO"), (
-        f"Unknown test_procedure '{test_procedure}'."
-    )
 
     tensor_dict_path = os.path.join(config["dfs_load_path"], "segfilt_rts_tensor_dict.pkl")
     with open(tensor_dict_path, "rb") as f:
         full_dict = pickle.load(f)
     tensor_dict = reorient_tensor_dict(full_dict, config)
 
-    if test_procedure == "hpo_test_split":
-        result = run_hpo_test_split(config, tensor_dict)
-        summary = {
-            "ablation_id":             "A2",
-            "description":             "No-MAML + No-MoE (CNN matched to ALL M0 experts combined)",
-            "test_procedure":          "hpo_test_split",
-            "seed":                    FIXED_SEED,
-            "n_params":                result["n_params"],
-            "result":                  result,
-            "test_head_only_acc":      result["test_head_only"]["mean_acc"],
-            "test_full_ft_acc":        result["test_full_ft"]["mean_acc"],
-            "ft_steps":                config["ft_steps"],
-            "ft_lr":                config["ft_lr"],
-            "ft_optimizer":         config["ft_optimizer"],
-            "ft_weight_decay":      config["ft_weight_decay"],
-            "cnn_base_filters":        config["cnn_base_filters"],
-            "param_match_target":      "all_experts_cnn",
-            "m0_all_expert_params":    config["_m0_all_expert_params"],
-            "matched_cnn_params":      config["_a2_matched_cnn_params"],
-            "param_ratio":             config["_a2_param_ratio"],
-            "config_snapshot":         {k: str(v) for k, v in config.items()},
-        }
-    else:  # L2SO
-        all_results = run_l2so(config, tensor_dict)
-        head_accs = [r["test_head_only"]["mean_acc"] for r in all_results]
-        full_accs = [r["test_full_ft"]["mean_acc"]   for r in all_results]
-        summary = {
-            "ablation_id":             "A2",
-            "description":             "No-MAML + No-MoE (CNN matched to ALL M0 experts combined)",
-            "test_procedure":          "L2SO",
-            "seed":                    FIXED_SEED,
-            "n_params":                all_results[0]["n_params"],
-            "fold_results":            all_results,
-            "mean_test_head_only":     float(np.mean(head_accs)),
-            "std_test_head_only":      float(np.std(head_accs)),
-            "mean_test_full_ft":       float(np.mean(full_accs)),
-            "std_test_full_ft":        float(np.std(full_accs)),
-            "ft_steps":                config["ft_steps"],
-            "ft_lr":                config["ft_lr"],
-            "ft_optimizer":         config["ft_optimizer"],
-            "ft_weight_decay":      config["ft_weight_decay"],
-            "num_folds":               len(all_results),
-            "cnn_base_filters":        config["cnn_base_filters"],
-            "param_match_target":      "all_experts_cnn",
-            "m0_all_expert_params":    config["_m0_all_expert_params"],
-            "matched_cnn_params":      config["_a2_matched_cnn_params"],
-            "param_ratio":             config["_a2_param_ratio"],
-            "config_snapshot":         {k: str(v) for k, v in config.items()},
-        }
-
-    save_results(summary, config, tag="summary")
+    all_results = run_kfold(
+        config, args.fold_idx,
+        functools.partial(run_one_fold, tensor_dict=tensor_dict),
+    )
+    head_accs = [r["test_head_only"]["mean_acc"] for r in all_results]
+    full_accs = [r["test_full_ft"]["mean_acc"]   for r in all_results]
+    summary = {
+        "ablation_id":             "A2",
+        "description":             "No-MAML + No-MoE (CNN matched to ALL M0 experts combined)",
+        "test_procedure":          "kfold7",
+        "fold_idxs":               resolve_fold_ids(args.fold_idx),
+        "seed":                    FIXED_SEED,
+        "n_params":                all_results[0]["n_params"],
+        "fold_results":            all_results,
+        "mean_test_head_only":     float(np.mean(head_accs)),
+        "std_test_head_only":      float(np.std(head_accs)),
+        "mean_test_full_ft":       float(np.mean(full_accs)),
+        "std_test_full_ft":        float(np.std(full_accs)),
+        "ft_steps":                config["ft_steps"],
+        "ft_lr":                   config["ft_lr"],
+        "ft_optimizer":            config["ft_optimizer"],
+        "ft_weight_decay":         config["ft_weight_decay"],
+        "num_folds":               len(all_results),
+        "cnn_base_filters":        config["cnn_base_filters"],
+        "param_match_target":      "all_experts_cnn",
+        "m0_all_expert_params":    config["_m0_all_expert_params"],
+        "matched_cnn_params":      config["_a2_matched_cnn_params"],
+        "param_ratio":             config["_a2_param_ratio"],
+        "config_snapshot":         {k: str(v) for k, v in config.items()},
+    }
+    save_results(summary, config, tag=kfold_tag(args.fold_idx))
 
     print(f"\n{'='*70}")
-    if test_procedure == "hpo_test_split":
-        print(f"[A2] FINAL head-only : {summary['test_head_only_acc']*100:.2f}%")
-        print(f"[A2] FINAL full-ft   : {summary['test_full_ft_acc']*100:.2f}%")
-        print(f"     single run, seed={FIXED_SEED}")
-    else:
-        print(f"[A2] FINAL head-only (L2SO): "
-              f"{summary['mean_test_head_only']*100:.2f}% ± {summary['std_test_head_only']*100:.2f}%")
-        print(f"[A2] FINAL full-ft   (L2SO): "
-              f"{summary['mean_test_full_ft']*100:.2f}% ± {summary['std_test_full_ft']*100:.2f}%")
-        print(f"     over {summary['num_folds']} L2SO folds")
+    print(f"[A2] FINAL head-only (kfold7 {summary['fold_idxs']}): "
+          f"{summary['mean_test_head_only']*100:.2f}% ± {summary['std_test_head_only']*100:.2f}%")
+    print(f"[A2] FINAL full-ft   (kfold7 {summary['fold_idxs']}): "
+          f"{summary['mean_test_full_ft']*100:.2f}% ± {summary['std_test_full_ft']*100:.2f}%")
     print(f"     ft_lr={config['ft_lr']:.4e}  ft_steps={config['ft_steps']}  ft_optimizer={config['ft_optimizer']}")
     print(f"     cnn_base_filters={config['cnn_base_filters']}  "
           f"(matched to ALL M0 experts, ratio={config['_a2_param_ratio']:.4f})")

@@ -3,10 +3,12 @@ M0_full_model.py
 ================
 Ablation M0: Full Model — MAML + MoE  [PRIMARY RESULT]
 
-Supports two test procedures via --test-procedure CLI arg (or config default):
-  'hpo_test_split' : Fixed 24/4/4 split, single run at FIXED_SEED.
-                     Used during HPO / early development.
-  'L2SO'           : Leave-2-Subjects-Out over all N subjects.
+Test procedures via --test-procedure CLI arg (or config default):
+  'kfold7' (DEFAULT): 28/4 outer split (4 HPO-val users never tested), then 7 folds of
+                     20 train / 4 val / 4 test over the 28. One SLURM job per fold
+                     (--fold-idx 0..6); no --fold-idx runs all 7 sequentially.
+  'hpo_test_split' : LEGACY. Old fixed 24/4/4 split, single run at FIXED_SEED.
+  'L2SO'           : LEGACY. Leave-2-Subjects-Out over all N subjects.
                      For fold i: test=subjects[i], val=subjects[(i+1) % N].
                      One run per fold, paired t-test across folds for stats.
 
@@ -38,6 +40,7 @@ from ablation_config import (
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
     make_periodic_checkpoint_fn, make_periodic_test_eval_fn,
     RUN_DIR,
+    apply_kfold_fold, KFOLD_N_FOLDS, TRAIN_PIDS, VAL_PIDS, TEST_PIDS,
 )
 from MAML.maml_data_pipeline import get_maml_dataloaders
 
@@ -50,12 +53,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="M0: Full Model (MAML + MoE)")
     parser.add_argument(
         "--test-procedure",
-        choices=["hpo_test_split", "L2SO"],
+        choices=["kfold7", "hpo_test_split", "L2SO"],
         default=None,
         help=(
             "Override config['test_procedure']. "
-            "'hpo_test_split' = fixed 24/4/4 split, single run (debugging/HPO). "
-            "'L2SO' = Leave-2-Subjects-Out, one fold per subject (default for final results)."
+            "'kfold7' = 28/4 outer split, 7 folds of 20/4/4 (default; use --fold-idx 0..6). "
+            "'hpo_test_split' / 'L2SO' = LEGACY protocols, kept for reproducing old numbers."
         ),
     )
     parser.add_argument(
@@ -235,13 +238,43 @@ def main():
     if args.fold_idx is not None:
         print(f"Fold index     : {args.fold_idx}  (single-fold SLURM job)")
 
-    assert test_procedure in ("hpo_test_split", "L2SO"), (
+    assert test_procedure in ("kfold7", "hpo_test_split", "L2SO"), (
         f"Unknown test_procedure '{test_procedure}'. "
-        f"Must be 'hpo_test_split' or 'L2SO'."
+        f"Must be 'kfold7', 'hpo_test_split' or 'L2SO'."
     )
 
-    # ── hpo_test_split: single run, ignore --fold-idx ─────────────────────────
-    if test_procedure == "hpo_test_split":
+    # ── kfold7: one fold per SLURM job (--fold-idx) or all 7 sequentially ─────
+    if test_procedure == "kfold7":
+        fold_ids = [args.fold_idx] if args.fold_idx is not None else list(range(KFOLD_N_FOLDS))
+        assert all(0 <= i < KFOLD_N_FOLDS for i in fold_ids), (
+            f"--fold-idx must be in [0, {KFOLD_N_FOLDS - 1}]")
+        results = []
+        for i in fold_ids:
+            fold_config = apply_kfold_fold(config, i)
+            print(f"\n[M0] kfold7 fold {i}  test={fold_config['test_PIDs']}  val={fold_config['val_PIDs']}")
+            results.append(run_one_fold(fold_id=f"kfold7_fold{i}", seed=FIXED_SEED, config=fold_config))
+        accs = [r["test_results"]["mean_acc"] for r in results]
+        summary = {
+            "ablation_id":     "M0",
+            "description":     "Full Model: MAML + MoE",
+            "test_procedure":  "kfold7",
+            "fold_idxs":       fold_ids,
+            "seed":            FIXED_SEED,
+            "n_params":        results[0]["n_params"],
+            "fold_results":    results,
+            "mean_test_acc":   float(np.mean(accs)),
+            "std_test_acc":    float(np.std(accs)),
+            "num_folds":       len(results),
+            "config_snapshot": {k: str(v) for k, v in config.items()},
+        }
+        tag = f"fold{fold_ids[0]:02d}_summary" if len(fold_ids) == 1 else "summary"
+        save_results(summary, config, tag=tag)
+        print(f"[M0] kfold7 {fold_ids}: {summary['mean_test_acc']*100:.2f}% over {len(results)} fold(s)")
+
+    # ── hpo_test_split (LEGACY): single run, ignore --fold-idx ────────────────
+    elif test_procedure == "hpo_test_split":
+        # legacy path: restore the old 24/4/4 PIDs, which are no longer the config default
+        config["train_PIDs"], config["val_PIDs"], config["test_PIDs"] = TRAIN_PIDS, VAL_PIDS, TEST_PIDS
         if args.fold_idx is not None:
             print(f"[M0] WARNING: --fold-idx {args.fold_idx} is ignored for hpo_test_split.")
         result = run_hpo_test_split(config)
@@ -265,6 +298,8 @@ def main():
 
     # ── L2SO: one fold per SLURM job (preferred) or all sequential (fallback) ──
     else:
+        # LEGACY: L2SO ran over all 32 users (old split); all_PIDs is now the 28 kfold7 users
+        config["all_PIDs"] = TRAIN_PIDS + VAL_PIDS + TEST_PIDS
         all_pids = config["all_PIDs"]
         assert len(all_pids) >= 3, "Need at least 3 subjects for L2SO."
         folds = build_l2so_folds(all_pids)

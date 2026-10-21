@@ -112,7 +112,8 @@ PAPER_STEPS_GRID = [1, 3, 5, 10, 15, 25, 50, 100, 150, 200]
 ALPHA_EVAL_GRID = [0.001, 0.002, 0.003, 0.005, 0.007, 0.010, 0.015, 0.020, 0.030]
 
 NUM_VAL_EPISODES = 200
-DEFAULT_VAL_PIDS = ["P011", "P006", "P105", "P109"]
+# No default val PIDs: they must be passed (--val-pids) and must be the 4 dev users
+# P005 P131 P116 P109 (kfold28_hpo4_split.json["hpo_val"]); never test users.
 
 
 # =============================================================================
@@ -206,11 +207,10 @@ def eval_one_config(
                                     eval_config.get("target_trial_indices")),
         n_way                   = eval_config["n_way"],
         k_shot                  = eval_config["k_shot"],
-        q_query                 = eval_config.get("q_query", None),
+        q_query                 = eval_config["q_query"],
         num_eval_episodes       = num_val_episodes,
         is_train                = False,
         seed                    = fixed_seed,
-        use_label_shuf_meta_aug = False,
     )
     val_dl = DataLoader(val_ds, batch_size=1, shuffle=False,
                         num_workers=4, collate_fn=maml_mm_collate)
@@ -399,7 +399,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--out-dir",  type=str, default=None, dest="out_dir")
     parser.add_argument("--val-pids", type=str, nargs="+",
-                        default=DEFAULT_VAL_PIDS, dest="val_pids")
+                        required=True, dest="val_pids")
     parser.add_argument("--num-val-episodes", type=int,
                         default=NUM_VAL_EPISODES, dest="num_val_episodes")
     parser.add_argument("--fixed-seed", type=int, default=42, dest="fixed_seed")

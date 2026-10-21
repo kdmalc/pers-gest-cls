@@ -47,12 +47,16 @@ Config keys consumed here:
                              honoured if maml_gesture_classes is absent
   n_way                   : int  — number of classes per episode
   k_shot                  : int  — support shots per class
-  q_query                 : int or None  — query shots per class (None = all remaining)
+  q_query                 : int or None  — TRAINING-ONLY cap on query reps per class
+                             (None = all non-support reps). IGNORED when is_train=False:
+                             evaluation always scores EVERY non-support rep, so realised
+                             Q = n_reps - k_shot (9/7/5 at K=1/3/5 with 10 reps).
   episodes_per_epoch_train: int
   num_eval_episodes       : int  — episodes per val user (pre-computed)
   seed                    : int
   num_workers             : int
-  use_label_shuf_meta_aug : bool — shuffle label assignment order (augmentation)
+  (labels are ALWAYS randomly permuted per episode, in training, validation and test.
+   There is no flag: gestures are user-defined, so label slot k carries no cross-user meaning.)
   target_trial_reps    : list[int] | None — 1-INDEXED rep numbers to restrict to
                              (e.g. [1,2,...,10] for all reps).  None → use all.
                              NOTE: these are rep NUMBERS (1-indexed), not tensor
@@ -108,14 +112,16 @@ def maml_mm_collate(batch):
         labels = torch.as_tensor([s["label"] for s in sample_list], dtype=torch.long)
         # global_class: the dataset-level gesture ID (0…N_classes-1), invariant to
         # within-episode label shuffling.  Used by routing analysis to report which
-        # real gestures each expert handles.  Falls back to local label if absent
-        # (e.g. legacy episode dicts built before this field was added).
+        # real gestures each expert handles.
         global_labels = torch.as_tensor(
-            [s.get("global_class", s["label"]) for s in sample_list], dtype=torch.long
+            [s["global_class"] for s in sample_list], dtype=torch.long
         )
+        # rep_idx: 0-indexed tensor row (= rep number - 1) of the repetition this sample came
+        # from. Lets the eval path assert support/query come from DISJOINT repetitions.
+        rep_idx = torch.as_tensor([s["rep_idx"] for s in sample_list], dtype=torch.long)
 
         return {"emg": emg, "imu": imu, "demo": demo, "labels": labels,
-                "global_labels": global_labels}
+                "global_labels": global_labels, "rep_idx": rep_idx}
 
     return {
         "support":   stack_samples(episode["support"]),
@@ -137,7 +143,9 @@ class MetaGestureDataset(Dataset):
       - Samples one participant at random from `target_pids`.
       - Samples `n_way` gesture classes from that participant's available classes.
       - For each class, randomly splits available trials into support (k_shot)
-        and query (q_query, or all remaining if q_query is None).
+        and query. Query = every non-support trial at eval time; during training it
+        is capped at q_query if given. Support/query are disjoint slices of one
+        shuffled list, so they can never overlap.
 
     Args:
         tensor_dict          : the loaded data dict (already extracted from
@@ -151,7 +159,12 @@ class MetaGestureDataset(Dataset):
                                IMPORTANT: these are rep numbers (1-indexed), NOT tensor
                                positions.  Conversion to 0-indexed tensor positions is
                                done internally in _available_trial_indices_for_class().
-        n_way, k_shot, q_query : standard few-shot episode dimensions.
+        n_way, k_shot : episode dimensions.
+        q_query      : TRAINING-ONLY cap on query reps per class (see module docstring).
+                       Not used at eval: the query set is always all non-support reps,
+                       so Q depends on k_shot (n_reps - k_shot). It is deliberately NOT held
+                       fixed across k_shot: that would discard data and no result depends
+                       on it. Report the realised Q from `episode_shape_log`.
         episodes_per_epoch   : number of episodes constituting one training epoch.
         is_train             : if True → episodes generated on-the-fly each __getitem__;
                                if False → episodes pre-computed once and cached.
@@ -160,7 +173,8 @@ class MetaGestureDataset(Dataset):
         debug_one_episode    : repeat a single fixed episode (overfit sanity check).
         debug_five_episodes  : repeat five fixed episodes.
         debug_one_user_only  : when debug is active, use the same user for all episodes.
-        use_label_shuf_meta_aug : randomise label→class assignment (data augmentation).
+        (no label-shuffle flag: the episode's classes are drawn in random order, so the local
+         label of a gesture is a fresh random permutation in every episode, train and eval.)
     """
 
     def __init__(
@@ -179,12 +193,16 @@ class MetaGestureDataset(Dataset):
         debug_one_episode=False,
         debug_five_episodes=False,
         debug_one_user_only=False,
-        use_label_shuf_meta_aug=True,
         modality_mask="both",
-        q_query_eval_mode="all_remaining",
         strict_n_way=False,
     ):
-        self.data = {pid: tensor_dict[pid] for pid in target_pids if pid in tensor_dict}
+        missing_pids = [pid for pid in target_pids if pid not in tensor_dict]
+        if missing_pids:
+            raise KeyError(
+                f"[MetaGestureDataset] target_pids not in tensor_dict: {missing_pids}. "
+                f"Refusing to silently drop users."
+            )
+        self.data = {pid: tensor_dict[pid] for pid in target_pids}
         self.pids = list(self.data.keys())
 
         # Gesture classes to sample from (0-indexed class labels).
@@ -205,7 +223,6 @@ class MetaGestureDataset(Dataset):
         self.debug_one_episode   = debug_one_episode
         self.debug_five_episodes = debug_five_episodes
         self.debug_one_user_only = debug_one_user_only
-        self.use_label_shuf_meta_aug = use_label_shuf_meta_aug
 
         # ── Modality ablation ────────────────────────────────────────────────
         # "both"      : unmodified (default; identical to pre-ablation behaviour)
@@ -221,20 +238,6 @@ class MetaGestureDataset(Dataset):
             f"modality_mask must be 'both' | 'emg_only' | 'imu_only', got {modality_mask!r}"
         )
         self.modality_mask = modality_mask
-
-        # ── Query-count semantics at eval time ───────────────────────────────
-        # "all_remaining" : query = every trial not used as support  → Q = 10 - K
-        #                   (this is the historical behaviour: _build_episode
-        #                    ignores q_query entirely when is_train=False)
-        # "fixed"         : query = min(q_query, trials remaining)   → Q = 9 only
-        #                   when K=1; caps at the configured q_query otherwise
-        #
-        # These differ for every K > 1. The default preserves existing numbers;
-        # set "fixed" only if you intend to change what past results measured.
-        assert q_query_eval_mode in ("all_remaining", "fixed"), (
-            f"q_query_eval_mode must be 'all_remaining' | 'fixed', got {q_query_eval_mode!r}"
-        )
-        self.q_query_eval_mode = q_query_eval_mode
 
         # If True, raise instead of silently dropping a class that has too few
         # trials for k_shot + 1. Silent drops yield episodes with fewer than
@@ -270,9 +273,6 @@ class MetaGestureDataset(Dataset):
             for i, user_id in enumerate(target_user_ids):
                 available = self._available_classes_for_user(user_id)
                 classes   = debug_rng.sample(available, min(self.n_way, len(available)))
-                if not self.use_label_shuf_meta_aug:
-                    classes = sorted(classes)
-
                 label_map = {c: idx for idx, c in enumerate(classes)}
                 ep        = self._build_episode(
                     user_id, classes, label_map, debug_rng, is_train=True
@@ -354,8 +354,6 @@ class MetaGestureDataset(Dataset):
             available = self._available_classes_for_user(user_id)
             for _ in range(self.num_eval_episodes):
                 classes = val_rng.sample(available, min(self.n_way, len(available)))
-                if not self.use_label_shuf_meta_aug:
-                    classes = sorted(classes)
                 label_map = {c: i for i, c in enumerate(classes)}
                 episode   = self._build_episode(
                     user_id, classes, label_map, val_rng, is_train=False
@@ -442,16 +440,12 @@ class MetaGestureDataset(Dataset):
 
             sup_idx = trial_indices[: self.k_shot]
             if is_train and self.q_query is not None:
-                qry_idx = trial_indices[self.k_shot : self.k_shot + self.q_query]
-            elif self.q_query is not None and self.q_query_eval_mode == "fixed":
-                # Cap the query set at q_query even at eval time.
+                # Training: cap the query set (with 10 reps and q_query>=9 the cap never binds
+                # for K>=1; it only matters for deliberately small caps, e.g. q_query=3 in HPO).
                 qry_idx = trial_indices[self.k_shot : self.k_shot + self.q_query]
             else:
-                # Eval with "all_remaining" (default), or q_query=None:
-                # every trial not used as support becomes a query.
-                # NOTE: this makes the realised Q equal to (num_trials - k_shot),
-                # NOT the configured q_query. With 10 reps per class:
-                #   K=1 -> Q=9,  K=3 -> Q=7,  K=5 -> Q=5.
+                # Eval (or q_query=None): every non-support trial is a query. The realised Q is
+                # (num_trials - k_shot) = 9/7/5 at K=1/3/5 with 10 reps, regardless of q_query.
                 qry_idx = trial_indices[self.k_shot :]
 
             for idx in sup_idx:
@@ -464,6 +458,7 @@ class MetaGestureDataset(Dataset):
                     "demo":         demo,
                     "label":        local_label,
                     "global_class": class_label,
+                    "rep_idx":      idx,
                 })
             for idx in qry_idx:
                 emg_q, imu_q = self._apply_modality_mask(
@@ -475,6 +470,7 @@ class MetaGestureDataset(Dataset):
                     "demo":         demo,
                     "label":        local_label,
                     "global_class": class_label,
+                    "rep_idx":      idx,
                 })
 
         # Shuffle so the model sees a random label order, not class-sequential
@@ -527,9 +523,6 @@ class MetaGestureDataset(Dataset):
         user_id   = random.choice(self.pids)
         available = self._available_classes_for_user(user_id)
         classes   = random.sample(available, min(self.n_way, len(available)))
-        if not self.use_label_shuf_meta_aug:
-            classes = sorted(classes)
-
         label_map = {c: i for i, c in enumerate(classes)}
         return self._build_episode(user_id, classes, label_map, random, is_train=True)
 
@@ -582,7 +575,6 @@ def get_maml_dataloaders(config, tensor_dict_path):
     tensor_dict = reorient_tensor_dict(full_dict, config)
 
     num_workers    = int(config["num_workers"])
-    use_label_shuf = config["use_label_shuf_meta_aug"]
 
     # ── Resolve gesture class list ────────────────────────────────────────────
     # 'maml_gesture_classes' is the canonical key.
@@ -601,35 +593,36 @@ def get_maml_dataloaders(config, tensor_dict_path):
     # 0-indexed tensor positions internally.
     target_trial_reps = config["target_trial_reps"]
 
-    # ── Modality ablation / query-count semantics (both default to no-ops) ────
-    modality_mask     = config.get("modality_mask", "both")
-    q_query_eval_mode = config.get("q_query_eval_mode", "all_remaining")
-    strict_n_way      = config.get("strict_n_way", False)
+    # ── Modality ablation / strict class count (both default to no-ops) ───────
+    modality_mask     = config["modality_mask"]
+    strict_n_way      = config["strict_n_way"]
     if modality_mask != "both":
         print(f"[get_maml_dataloaders] MODALITY ABLATION: modality_mask={modality_mask} "
               f"(channels are zero-masked, not removed; parameter count unchanged)")
 
     # ── Leakage check: train and val PIDs must be disjoint ────────────────────
-    if config.get("subject_specific_model", False) is False:
+    if config["subject_specific_model"] is False:
         num_eval_episodes = config["num_eval_episodes"]
         train_pids = config["train_PIDs"]
         val_pids   = (
             config["train_PIDs"]
-            if (config.get("debug_one_episode") or config.get("debug_five_episodes"))
+            if (config["debug_one_episode"] or config["debug_five_episodes"])
             else config["val_PIDs"]
         )
-        train_pid_set = set(train_pids)
-        val_pid_set   = set(val_pids)
-        overlap = train_pid_set & val_pid_set
-        assert len(overlap) == 0, (
-            f"[get_maml_dataloaders] TRAIN/VAL PID LEAKAGE DETECTED! "
-            f"Overlapping PIDs: {sorted(overlap)}"
-        )
+        # Disjointness is checked on the CONFIGURED splits (debug mode swaps val for train
+        # users on purpose, which must not trip the check).
+        tr, va, te = (set(config["train_PIDs"]), set(config["val_PIDs"]),
+                      set(config["test_PIDs"]))
+        for name, overlap in (("train/val", tr & va), ("train/test", tr & te),
+                              ("val/test", va & te)):
+            assert not overlap, (
+                f"[get_maml_dataloaders] {name} PID LEAKAGE DETECTED! "
+                f"Overlapping PIDs: {sorted(overlap)}"
+            )
         print(f"[get_maml_dataloaders] Train PIDs ({len(train_pids)}): {sorted(train_pids)}")
         print(f"[get_maml_dataloaders] Val   PIDs ({len(val_pids)}):   {sorted(val_pids)}")
         print(f"[get_maml_dataloaders] num_eval_episodes per val user: {num_eval_episodes}")
         print(f"[get_maml_dataloaders] Total val episodes in cache: {len(val_pids) * num_eval_episodes}")
-        print(f"[get_maml_dataloaders] use_label_shuf_meta_aug: {use_label_shuf}")
 
     train_ds = MetaGestureDataset(
         tensor_dict,
@@ -644,9 +637,7 @@ def get_maml_dataloaders(config, tensor_dict_path):
         debug_one_episode       = config["debug_one_episode"],
         debug_five_episodes     = config["debug_five_episodes"],
         debug_one_user_only     = config["debug_one_user_only"],
-        use_label_shuf_meta_aug = use_label_shuf,
         modality_mask           = modality_mask,
-        q_query_eval_mode       = q_query_eval_mode,
         strict_n_way            = strict_n_way,
     )
 
@@ -671,9 +662,7 @@ def get_maml_dataloaders(config, tensor_dict_path):
         debug_one_episode       = config["debug_one_episode"],
         debug_five_episodes     = config["debug_five_episodes"],
         debug_one_user_only     = config["debug_one_user_only"],
-        use_label_shuf_meta_aug = use_label_shuf,
         modality_mask           = modality_mask,
-        q_query_eval_mode       = q_query_eval_mode,
         strict_n_way            = strict_n_way,
     )
 
