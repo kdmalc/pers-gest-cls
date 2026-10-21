@@ -22,7 +22,7 @@ EncoderMoE was rejected at NeurIPS'26 (low originality/significance). Goal: resu
 | 3d | `q_query` cleanup: training-only cap, `q_query_eval_mode` flag removed, comments fixed, tests (110 pass locally in `fl_torch` env) | Sonnet | **done** |
 | 3b | Redo all HPO on new split (+ transformers, + ablations tiers) | Kai runs; Sonnet prepares | HPO split wired; HPO-result plumbing + transformer HPO space pending |
 | 4 | S4: running-sum expert mixing + peak-memory script | Sonnet | **done** (only ~14% saving; checkpointing unsafe under MAML; see log) |
-| 4a | Shared episode cache + cache-backed eval + stats/aggregator | Sonnet | **done** (15 committed episode files, manifest hashes, 176 tests) |
+| 4a | Shared episode cache + cache-backed eval + stats/aggregator | Sonnet | **done** (15 committed episode files, manifest hashes, 193 tests) |
 | 5 | S2: `$B`, kNN, ProtoNet-raw, Riemannian, MiniRocket on the cache (`A6_*`) | Sonnet | **done**, unrun on cluster; A14/A7/A8/portA/A16 still to port; ANIL/ProtoNet-trained/ADANN/FS-HGR/EMG-CrossFormer not started |
 | 6 | O3/P6: SOTA lit review (`SOTA_COMPARISONS.md`) | **Opus** | **done** |
 | 7 | O1/P4: 2 kHz EMG design (`SPEC_2khz_emg.md`) | **Opus** | **done**; Sonnet implements; E1 diagnostics need Kai |
