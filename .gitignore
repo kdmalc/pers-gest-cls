@@ -2,6 +2,9 @@
 *.xlsx
 *.h5
 
+2026_NeurIPS_EncoderMoE.pdf
+OpenReview_downloaded.pdf
+
 system/universal_preprocessing/gesture_encoding.ipynb
 
 *.pyc
