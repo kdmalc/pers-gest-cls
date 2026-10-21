@@ -372,6 +372,30 @@ class DemographicsEmbedder(nn.Module):
 # Gating Network
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _weighted_expert_sum(calls, w_hard):
+    """
+    sum_e w_hard[:, e] * calls[e]()  -- accumulated as a running sum so the (B, E, ...) stack of
+    expert outputs and its weighted copy are never materialised (peak memory O(B*C*T) in the
+    outputs instead of O(B*E*C*T)). Same math as stack -> multiply -> sum(dim=1); only the
+    floating-point summation order differs (sequential over experts).
+
+    calls: list of zero-argument callables, one per expert (lazy: each expert's activations
+    can be freed as soon as it is folded into the sum when gradients are not needed).
+
+    NOTE: torch.utils.checkpoint around each expert is NOT used. Under MAML the experts run through
+    torch.func.functional_call with substituted parameters, and the backward-time recompute runs
+    outside that context, i.e. with the ORIGINAL parameters: gradients are wrong (verified
+    2026-10-21: 12 of 57 parameter gradients differed once parameters were substituted).
+    """
+    total = None
+    for e, call in enumerate(calls):
+        out = call()
+        w = w_hard[:, e].reshape(-1, *([1] * (out.dim() - 1)))
+        term = out * w
+        total = term if total is None else total + term
+    return total
+
+
 class MOEGate(nn.Module):
     """
     Produces per-sample soft weights over E experts from routing vector r.
@@ -704,12 +728,8 @@ class MetaCNNLSTM_EncoderMOE(nn.Module):
         w_hard, w_soft = self.gate(r)                       # each (B, E)
 
         # 3. Expert CNN forward passes
-        expert_feats = [exp(x) for exp in self.expert_cnns] # each (B, cnn_out_ch, T)
-
-        # 4. Weighted combination: Σ wᵢ · feat_i  (use w_hard for mixing)
-        stacked = torch.stack(expert_feats, dim=1)           # (B, E, C, T)
-        w_bcw   = w_hard.unsqueeze(-1).unsqueeze(-1)         # (B, E, 1, 1)
-        h       = (stacked * w_bcw).sum(dim=1)               # (B, C, T)
+        # 4. Weighted combination: Σ wᵢ · feat_i  (use w_hard for mixing), as a running sum
+        h = _weighted_expert_sum([lambda exp=exp: exp(x) for exp in self.expert_cnns], w_hard)
 
         # 5. Add shared expert output if enabled
         if self.shared_expert is not None:
@@ -945,10 +965,7 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
             w_soft = w_hard
 
         # 2. Expert CNNs
-        expert_feats = [exp(x) for exp in self.expert_cnns]       # each (B, C, T')
-        stacked = torch.stack(expert_feats, dim=1)                 # (B, E, C, T')
-        w_4d    = w_hard.unsqueeze(-1).unsqueeze(-1)               # (B, E, 1, 1)
-        h       = (stacked * w_4d).sum(dim=1)                      # (B, C, T')
+        h = _weighted_expert_sum([lambda exp=exp: exp(x) for exp in self.expert_cnns], w_hard)
 
         # 3. Add shared expert if enabled
         if self.shared_expert is not None:
@@ -1141,10 +1158,7 @@ class MetaCNNLSTM_MiddleMOE(nn.Module):
 
         # MLP experts: operate on (B, T, n_filt)
         h_t = h.permute(0, 2, 1)
-        expert_outs = [exp(h_t) for exp in self.expert_mlps]  # each (B, T, n_filt)
-        stacked = torch.stack(expert_outs, dim=1)              # (B, E, T, n_filt)
-        w_4d    = w_hard.unsqueeze(-1).unsqueeze(-1)           # (B, E, 1, 1)
-        h_mix   = (stacked * w_4d).sum(dim=1)                  # (B, T, n_filt)
+        h_mix = _weighted_expert_sum([lambda exp=exp: exp(h_t) for exp in self.expert_mlps], w_hard)
 
         # Add shared expert if enabled
         if self.shared_expert is not None:
@@ -1333,10 +1347,7 @@ class DeepCNNLSTM_MiddleMOE(nn.Module):
         w_hard, w_soft = self.gate(r)           # each (B, E)
 
         h_t = h.permute(0, 2, 1)               # (B, T', cnn_out_ch)
-        expert_outs = [exp(h_t) for exp in self.expert_mlps]
-        stacked = torch.stack(expert_outs, dim=1)   # (B, E, T', cnn_out_ch)
-        w_4d    = w_hard.unsqueeze(-1).unsqueeze(-1)
-        h_mix   = (stacked * w_4d).sum(dim=1)       # (B, T', cnn_out_ch)
+        h_mix = _weighted_expert_sum([lambda exp=exp: exp(h_t) for exp in self.expert_mlps], w_hard)
 
         # Add shared expert if enabled
         if self.shared_expert is not None:
@@ -1607,17 +1618,12 @@ class ContrastiveEncoderMOE(nn.Module):
             r = self._get_routing_vector(raw, demographics)
             w_hard, w_soft = self.gate(r)
 
-            emg_feats = [exp(x_emg) for exp in self.emg_experts]
             if self.use_imu and x_imu is not None and self.imu_experts is not None:
-                imu_feats = [exp(x_imu) for exp in self.imu_experts]
-                expert_combined = [torch.cat([e, i], dim=1)
-                                   for e, i in zip(emg_feats, imu_feats)]
+                calls = [lambda e=e, i=i: torch.cat([e(x_emg), i(x_imu)], dim=1)
+                         for e, i in zip(self.emg_experts, self.imu_experts)]
             else:
-                expert_combined = emg_feats
-
-            stacked  = torch.stack(expert_combined, dim=1)   # (B, E, C, T')
-            w_4d     = w_hard.unsqueeze(-1).unsqueeze(-1)
-            combined = (stacked * w_4d).sum(dim=1)           # (B, C, T')
+                calls = [lambda e=e: e(x_emg) for e in self.emg_experts]
+            combined = _weighted_expert_sum(calls, w_hard)   # (B, C, T')
 
             # Shared expert for encoder placement (split EMG/IMU case)
             if self.use_shared:
@@ -1639,10 +1645,7 @@ class ContrastiveEncoderMOE(nn.Module):
             w_hard, w_soft = self.gate(r)
 
             h_t = combined.permute(0, 2, 1)
-            expert_outs = [exp(h_t) for exp in self.expert_mlps]
-            stacked  = torch.stack(expert_outs, dim=1)
-            w_4d     = w_hard.unsqueeze(-1).unsqueeze(-1)
-            h_mix    = (stacked * w_4d).sum(dim=1)
+            h_mix = _weighted_expert_sum([lambda exp=exp: exp(h_t) for exp in self.expert_mlps], w_hard)
 
             if self.shared_expert is not None:
                 h_mix = h_mix + self.shared_expert(h_t)

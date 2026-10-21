@@ -69,3 +69,9 @@ All variants:
 - Param-budget assertion: each matched preset is within ±10% of M0.
 - Shape and routing-dict contract for T1/T2/T3.
 - X2's frozen uniform gate: gradients to gate parameters are `None` or zero, and the outputs equal the mean of the experts.
+
+## 5. Implementation findings (Sonnet, 2026-10-21)
+- **Running-sum done** at all six sites (`_weighted_expert_sum`); forward and gradients match the dense stack to 1e-10 in float64 for DeepCNNLSTM and MetaCNNLSTM, encoder and middle placement (`tests/test_moe_running_sum.py`). Not covered: `ContrastiveEncoderMOE`.
+- **Measured saving is small: about 14% peak memory** (RTX 4070 laptop, M0 config E=22, B=100, `system/MOE/debug_peak_memory.py`: T=64 1110->975 MB, T=256 4404->3816 MB, T=1024 17156->14747 MB). Autograd keeps every expert's conv/GroupNorm/GELU activations for backward, which dominates; the stack copy was minor. Memory is linear in both T and E.
+- **Checkpointing is unsafe here and was removed.** `torch.utils.checkpoint` per expert gives WRONG gradients under `functional_call` parameter substitution (the recompute runs outside the substitution context): with substituted parameters 12 of 57 gradients differed from the non-checkpointed path. Do not reintroduce it without passing parameters explicitly into the checkpointed function.
+- **Consequence:** the 2 kHz fix really is the representation change in `SPEC_2khz_emg.md` (experts at T=64), not expert-side memory tricks. At T=64 the full M0 forward+backward at B=100 uses about 1 GB.
