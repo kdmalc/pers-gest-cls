@@ -24,6 +24,11 @@ dependencies:
   - numba
   - sympy
   - h5py
+
+  # Baselines added 2026-10-21 (Riemannian tangent-space, MiniRocket) and test runner
+  - pyriemann
+  - aeon
+  - pytest
   
   # Visualization & Dimensionality Reduction
   - matplotlib>=3.7
