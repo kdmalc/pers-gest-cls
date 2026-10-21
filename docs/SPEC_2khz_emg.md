@@ -7,6 +7,8 @@ EncoderMoE ran out of memory at 2 kHz because every expert (22 of them) was appl
 
 If the EMG is compressed **before** the expert bank, to the same ~64-step axis the IMU already uses, the experts never see long sequences. Memory then stays where it is today. So **the 2 kHz question does not require restructuring the experts.** `SPEC_moe_compute.md` treats expert efficiency separately, as an optional research question.
 
+> **Implementation notes (Sonnet, 2026-10-21).** Built as `EMG_preprocessing/emg_fs64.py` + `build_fs64_tensor_dict.py` (local, from the raw CSVs on Box). Deviations from the text below: (1) NO 60 Hz notch by default, because the diagnostics found no mains line in the data; (2) feature standardisation uses the 4 DEV users (no fold information) instead of each fold's train users; (3) measured segment lengths (median 3.2 s, tightly cut, no rest margins) make the "trim to the active gesture" ablation unnecessary; (4) `emg_repr` config key (`env20` | `fs64`) and launcher `--emg-repr` select the representation.
+
 ## 1. Facts this spec builds on
 - **EMG:** 16 channels, recorded at **2048 Hz** (Kai). The code assumes 2000 Hz (`FS=2000`), which mis-scales the filter cut-offs and spectral features by 2.4%. All new code uses `FS_EMG = 2048`, defined once in `system/universal_preprocessing/EMG_preprocessing/shared_processing.py`.
 - **IMU:** 72 channels (12 sensors x 6 axes), 148 Hz.

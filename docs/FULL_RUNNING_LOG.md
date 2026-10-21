@@ -174,3 +174,47 @@ Kai agreed 10-way 1-shot is the ideal primary task (he only moved to 3-way becau
 - **Launcher:** `A7`, `A8`, `A14` tokens REMOVED from `kfold_launcher.sh` because they still use their own samplers (their results would be rejected by the aggregator); `portA` and `A16` likewise. TODO: port them to the cache (A14 = ProtoNet on the M0 encoder; A7/A8 per `SPEC_episode_cache.md` item 4).
 - **Env incident (my fault, repaired):** `pip install pyriemann aeon` into the laptop `fl_torch` env broke numpy (conda-installed numpy cannot be cleanly replaced by pip; numba/llvmlite also changed). Repaired by removing the leftover numpy/numba/llvmlite folders from site-packages and reinstalling `numpy==1.26.4`, `numba==0.61.2`, `llvmlite==0.44.0`, `pyriemann==0.9` (0.10+ needs numpy>=2 and fails here), `aeon 1.3`. torch 2.7.1+cu128 (CUDA True), scipy 1.10.1, sklearn 1.7.2, pandas 2.3.3 unchanged; full suite passes. `fl_torch_NOTS.yaml` now pins `pyriemann=0.9`. **The cluster install needs the dry run first (KAI_TODO): the solver may want to change numpy/numba; do not let it touch torch.**
 - Not done yet: A14/A7/A8/portA/A16 on the cache; zero-shot script (`SPEC_zeroshot.md`); EMG-FS64 builder (`SPEC_2khz_emg.md`); HPO objective on dev episodes + export (`SPEC_hpo.md`); transformers/MoE-matrix (`SPEC_moe_compute.md`); `--hpo-config` plumbing.
+
+### 2026-10-21 (Sonnet, after the first cluster smoke results)
+**Cluster smoke results (old code, fold 0, debug partition; Kai's logs).** A1 and A2 finished; M0 and A4 started, trained, and hit the 15-min cap as expected (M0 reached epoch 2, A4 epoch 8), so the test-eval path of the MAML scripts was NOT exercised. Observations:
+- `git: command not found` on compute nodes -> GIT_REV empty (fixed: the launcher resolves it at submit time and exports it; results now carry `git_rev`).
+- The stale "Using fold 0: 24 train | 4 val | 4 test PIDs" line was a leftover print of the legacy constants (relabelled).
+- 3-way 1-shot, fold 0, 4 test users: A1 head-only 62.1% / full-ft 76.1%, A2 head-only 48.4% / full-ft 79.2% (one fold, 4 users, one seed: not a result).
+- M0 epoch = 422 s (train 229 + val 193) vs A4 108 s at 3-way; the 800-episode val pass was half of M0's epoch time (now 100 cached episodes).
+- A flat 10-way classifier scores only ~15-25% on the val users (A1 best epoch 25.0%, A2 22.8%, chance 10%). This is a PREVIEW of the zero-shot question, not the pre-registered test (4 users, best-epoch selection biases it up, no 28-user CI), but it sits in or near the "soften the framing" band of `SPEC_zeroshot.md`.
+- The untrained A4 already gets 66% 3-way after 10 inner steps at epoch 0 while untrained M0 is exactly chance (33.33% +/- 0): check that M0's inner loop adapts at all at initialisation.
+
+**Kai's decisions.** Train and HPO at **10-way 1-shot** (not both 3- and 10-way; a 10-way model should generalise down to 3-way). Logs/outputs go to `/scratch/my13/kai/runs/paper/sub2/eval/...`, HPO to `.../sub2/hpo/`. The debug partition cap is actually 30 min; keep requesting 15 and use `--smoke` instead.
+
+**Implemented (all tested locally)**
+- **10-way default** (`n_way=10`, k=1). A larger head serves smaller-n episodes at eval via its first n outputs (`mamlpp.episode_n_way`, applied in `mamlpp_adapt`, `mamlpp_predict_with_params` and pre-adapt): ONE checkpoint gives the whole 3/5/10-way x 1/3/5-shot grid, no per-cell retraining. Supervised eval was already n-agnostic.
+- **`--smoke`** (M0, A3/A4; auto-added by `--debug`): 1 epoch x 48 episodes, 20 val / 40 test episodes; result JSON labelled `smoke` and rejected by the aggregator. Should take ~5 min on an L40S. (A local 10-way M0 run was too heavy for the 8 GB laptop GPU and was killed; the plumbing is covered by unit tests instead.)
+- **Launcher:** logs/outputs to `sub2/eval`; git revision resolved at submit time (`-dirty` suffix if tracked files differ); `--hpo-config {legacy|frozen|tuned}` REQUIRED (exported as `HPO_CONFIG`, read by `apply_kfold_fold`, raises if unset); `--emg-repr {env20|fs64}`; A14 tokens (`A14_M0`, `A14_A4`) are back, now on the cache and reading the same fold's checkpoint.
+- **Hyperparameter modes** (`ablation_config.apply_hpo_config`): `legacy` = Trial 89 (smoke/regression only, labelled), `tuned` = the ablation's own exported HPO result, `frozen` = M0's applied to the ablation (structural keys protected; supervised ablations re-mirror the MAML eval budget). Reads `models/hpo_best_models/best_hpo_configs.json` (written by `hpo_export_best.py finalize`).
+- **HPO ready for the cluster:** `ablation_hpo.py` trains on 20 users and validates on the 4 dev users via the cached dev episodes (first 25/user per epoch, 100/user for the final re-evaluation), 10-way 1-shot objective on the per-user mean, MedianPruner (`mamlpp_pretrain(epoch_callback=...)` added), widened expert/top-k spaces (E in {4,8,16,22,28,36}, top_k in {1,2,4,6,9,12} clipped to E), tuned fine-tune budget for supervised ablations, study name `ablation_<ID>_10w1s_kfold7_v1`, `--replay-trial T --seed S` for the top-3 x 3-seed re-evaluation, `hpo_export_best.py candidates|finalize`. `hpo_ablation_launcher.sh` points at `sub2/hpo`, 60 trials, 12 h per MAML trial. NOT yet exercised on the cluster; the pruning callback and replay mode are untested beyond import/lint.
+- **EMG-FS64 (docs/SPEC_2khz_emg.md):** `emg_fs64.py` (filter -> 64 windowed spectral/TD features x 16 channels aligned to the IMU's normalised time), `raw_emg_io.py`, `build_fs64_tensor_dict.py`, `diagnose_2khz.py`; `emg_repr` config (`env20` 16 ch / `fs64` 112 ch) switches the tensor-dict file and `emg_in_ch`. Standardisation constants come from the 4 DEV users only (no fold information; the spec had said the fold's train users).
+- **A14** ported to the cache (`A14_protonet_encoder.py`).
+
+**The raw EMG IS on this laptop** (Box: `Yamagami Lab/Data/2024_UIST_dataset/upload/segmented_raw_data/<PID>/*.csv`, plus older preprocessing files in `Meta_Gesture_Project/`), so the 2 kHz preprocessing needs no cluster; only training does.
+
+**Facts measured from the raw files (3,200 trials)**
+- **Recording structure** (file-name timestamps, `inspect_rep_timing.py`): every gesture was recorded as ONE contiguous block of 10 repetitions, repetition numbers increase with time, median gap between consecutive reps 5 s (4-7 s); the first-to-last span of one gesture's reps is at most median 90 s (range 43-204 s); a participant's whole 10-gesture session takes a median 19.5 min (13.4-53.5). This replaces the earlier "1-5 minutes" estimate.
+- **Segments** (`diagnose_2khz.py`, `docs/diag_2khz_all.json`): length median 3.18 s, p10 2.06 s, p90 4.82 s, range 0.77-12.2 s at 2048 Hz. Segments are tightly cut around the gesture (median active fraction 97%, median lead/trail rest 0.03 s). My earlier guess that long segments include rest margins was WRONG: they are long gestures. The old 4300-sample resample (2.1 s) therefore time-warps the median trial by ~1.5x.
+- **No mains line** in the data (59-61 Hz power 1.4x its neighbourhood): the recording rate (2048 vs 2000 Hz) cannot be verified from the signal. Keep 2048 (lab spec); the 60 Hz notch is off by default (`NOTCH_HZ = ()`).
+- Power above 450 Hz is 0.15% (hardware band-limited).
+
+**EMG-FS64 first look (dev users only, NOT a result; `compare_emg_repr_dev.py`).** `segfilt_fs64_tensor_dict.pkl` (151 MB, git-ignored like all `.pkl`) was built locally from the 3,200 raw trials; finite, non-dev features have mean ~0.03 / std ~1.0 under the dev-user standardisation. Nearest-prototype (Euclidean) accuracy on the 4 dev users, 40 cached dev episodes per user, per-user mean:
+
+| representation | 10-way 1-shot | 10-way 5-shot |
+|---|---|---|
+| EMG env20 only | 48.9% | 62.6% |
+| **EMG FS64 only** | **77.8%** | **92.1%** |
+| IMU only | 48.9% | 66.6% |
+| env20 + IMU | 52.4% | 70.2% |
+| FS64 + IMU | 70.3% | 87.2% |
+
+A trivial classifier on spectral features of the native-rate EMG beats the 20 Hz envelope by ~29 points at 10-way 1-shot and beats IMU-only by ~29, i.e. EMG was being starved by its representation (archived LIMITATIONS A1 finding that "EMG collapses at 10-way" is plausibly an artefact of the 20 Hz envelope). FS64+IMU is below FS64 alone only because raw concatenation lets the 72 IMU channels dominate the Euclidean distance (a learned model handles this; the A13 modality ablation on FS64 is the real test, `SPEC_2khz_emg.md` E4). Caveats: 4 users, one trivial classifier, features standardised with the dev users' own constants (7 means/stds, negligible but non-zero advantage on exactly these users). Next: 28-user evaluation of the classical baselines on both representations, then M0/A4 on FS64.
+
+**Data anomaly to confirm with Kai:** raw folder `P005/` contains 560 files all NAMED `P105` (different timestamps/bytes from the real `P105/` folder; none named P005). The original loader used the folder, so P005's tensors come from them; `raw_emg_io.KNOWN_NAME_MISMATCH` accepts exactly this pair. Asked in KAI_TODO.
+
+**Why the previous turn did not start the porting/baselines/2 kHz/HPO work:** the cache + eval wiring had to land first (every later item consumes it); the HPO work needed Kai's 10-way decision; and I did not know the raw EMG was on this laptop, which is what made the 2 kHz work doable without a cluster round trip. All of these are now done or unblocked (see this entry).

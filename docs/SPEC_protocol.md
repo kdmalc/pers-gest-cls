@@ -22,7 +22,7 @@ Consequence for training: the n-way used during meta-training becomes a hyperpar
 
 **Not supported. State these as limitations; do not imply them anywhere:**
 1. *Cross-session or cross-day robustness.* There is one session per participant and sensors were never removed, so electrode shift, re-donning, sweat and fatigue across sessions are untested.
-2. *Temporal generalisation.* The repetitions of a gesture were recorded within a few minutes, so support and query come from essentially the same conditions. Reported accuracies are within-session calibration accuracies, and should be read as an upper bound on what a user would see after recalibrating on a later day.
+2. *Temporal generalisation.* The 10 repetitions of a gesture were recorded back-to-back in one block (median 5 s apart; the whole block spans a median 90 s, at most 204 s; a participant's full 10-gesture session takes a median 19.5 min), so support and query come from essentially the same conditions. Reported accuracies are within-session calibration accuracies, and should be read as an upper bound on what a user would see after recalibrating on a later day.
 3. *Online or streaming recognition.* Every sample is an experimenter-segmented, whole repetition. Gesture onset detection and continuous rejection of non-gestures are not addressed.
 4. *Other devices or montages.* There is one sensor layout. The Kaifosh topology mismatch (archived LIMITATIONS D5) shows this is a first-order factor.
 
