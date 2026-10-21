@@ -23,10 +23,11 @@ EncoderMoE was rejected at NeurIPS'26 (low originality/significance). Goal: resu
 | 3b | Redo all HPO on new split (+ transformers, + ablations tiers) | Kai runs; Sonnet prepares | HPO split wired; HPO-result plumbing + transformer HPO space pending |
 | 4 | S4: running-sum expert mixing (memory), equivalence test, peak-memory debug script | Sonnet | queued |
 | 5 | S2: `$B`/A6, Riemannian, MiniRocket, other few-shot baselines | Sonnet | queued |
-| 6 | O3: SOTA EMG-IMU / few-shot / transformer lit review | **Opus** | queued |
-| 7 | O1: 2 kHz EMG representation design (+ A10-12/A11b redesign) | **Opus** | queued |
-| 8 | O2: expert restructuring + transformer expert specs | **Opus** | queued |
-| 9 | O4: go/no-go on a better method than EncoderMoE | **Opus** | after rerun numbers |
+| 6 | O3/P6: SOTA lit review (`SOTA_COMPARISONS.md`) | **Opus** | **done** |
+| 7 | O1/P4: 2 kHz EMG design (`SPEC_2khz_emg.md`) | **Opus** | **done**; Sonnet implements; E1 diagnostics need Kai |
+| 8 | O2/P5: MoE compute + transformer variants (`SPEC_moe_compute.md`) | **Opus** | **done**; Sonnet implements |
+| 9 | P9: go/no-go (`DECISION_method.md`) | **Opus** | criteria pre-registered; verdict after Tier 1 numbers |
+| 9a | P1 episode cache, P2 protocol, P3 zero-shot, P7 HPO, P8 stats specs | **Opus** | **done**; Sonnet implements (start with P1 episode cache) |
 | 10 | S3: transformer baselines (param-matched) | Sonnet (after O2) | queued |
 | 11 | Cluster rerun on new protocol | **Kai** | waiting on #3 |
 
