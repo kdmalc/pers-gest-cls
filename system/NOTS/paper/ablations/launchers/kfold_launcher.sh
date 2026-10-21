@@ -101,10 +101,17 @@ module load Mamba/23.11.0-0
 source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/conda.sh
 source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/mamba.sh'
 
-# Compute nodes have no git: resolve the revision HERE (login node) and export it into the job.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GIT_REV="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD)" || { echo "ERROR: cannot read git revision"; exit 1; }
-if ! git -C "$SCRIPT_DIR" diff --quiet HEAD; then GIT_REV="${GIT_REV}-dirty"; fi
+# Launchers are COPIED to scratch and run from there, but the repo lives under projects ($CODE_DIR).
+# Provenance (git revision) is read from the repo at $CODE_DIR, at submit time, and exported into
+# the job (compute nodes have no git). A stale scratch copy of this script is refused.
+REPO_LAUNCHER="$CODE_DIR/system/NOTS/paper/ablations/launchers/$(basename "${BASH_SOURCE[0]}")"
+if ! cmp -s "${BASH_SOURCE[0]}" "$REPO_LAUNCHER"; then
+    echo "ERROR: this launcher differs from the repo copy (stale?). Refresh it with:"
+    echo "  cp $REPO_LAUNCHER $(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/"
+    exit 1
+fi
+GIT_REV="$(git -C "$CODE_DIR" rev-parse --short HEAD)" || { echo "ERROR: cannot read git revision of $CODE_DIR"; exit 1; }
+if ! git -C "$CODE_DIR" diff --quiet HEAD; then GIT_REV="${GIT_REV}-dirty"; fi
 echo "Submitting revision: $GIT_REV"
 
 ABL_DIR=$CODE_DIR/system/NOTS/paper/ablations/test_eval_files

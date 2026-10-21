@@ -16,11 +16,9 @@ GESTURE_TO_CLASS = {
     "pan": 5, "rotate": 6, "select-single": 7, "zoom-in": 8, "zoom-out": 9,
 }
 N_REPS = 10
-# DATA ANOMALY (found 2026-10-21): the raw folder P005 contains 560 files whose NAMES say P105 (a
-# different cohort: timestamps 2306/2307 vs P105's own folder 2309, different bytes, no file named
-# P005). The original preprocessing keyed on the FOLDER (load_segraw_data), so P005's tensors come
-# from these files. We keep that, explicitly and only for this pair; any other mismatch raises.
-# Needs Kai's confirmation that the P005 folder really is P005 (see docs/KAI_TODO.md).
+# SOURCE QUIRK (confirmed by Kai 2026-10-21): every file in the raw folder P005 is NAMED P105 (the
+# official manifest lists the same names). The folder is authoritative: the tensor dict's P005
+# matches this folder (cosine 1.00) and not P105's. Only this pair is accepted; anything else raises.
 KNOWN_NAME_MISMATCH = {"P005": "P105"}
 _EMG_NAME = re.compile(r"^(?P<ts>\d+)_(?P<pid>P\d+)_experimenter-defined_EMG_(?P<gesture>.+)_(?P<rep>\d+)\.csv$")
 

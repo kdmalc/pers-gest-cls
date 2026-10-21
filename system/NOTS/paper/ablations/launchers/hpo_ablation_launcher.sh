@@ -41,6 +41,14 @@ LOG_DIR=$HPO_OUT_BASE/logs
 
 ENV_PATH=/projects/my13/kai/meta-pers-gest/envs/fl-torch
 
+# This launcher is copied to scratch and run from there: refuse a stale copy.
+REPO_LAUNCHER="$CODE_DIR/system/NOTS/paper/ablations/launchers/$(basename "${BASH_SOURCE[0]}")"
+if ! cmp -s "${BASH_SOURCE[0]}" "$REPO_LAUNCHER"; then
+    echo "ERROR: this launcher differs from the repo copy (stale?). Refresh it with:"
+    echo "  cp $REPO_LAUNCHER $(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/"
+    exit 1
+fi
+
 mkdir -p "$HPO_DB_DIR" "$HPO_OUT_BASE" "$LOG_DIR"
 
 # =============================================================================
