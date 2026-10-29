@@ -96,3 +96,14 @@ def test_pid_mismatch_raises_except_for_the_known_p005_p105_case(tmp_path):
     (d5 / "230104110125_P105_experimenter-defined_EMG_pan_1.csv").write_text(",EMG1\n0,1\n")
     with pytest.raises(ValueError, match="reps"):      # PID accepted, then the missing reps are caught
         R.list_emg_files(tmp_path, "P005")
+
+
+def test_td64_build_shape_and_repr_name(tmp_path):
+    import build_td64_tensor_dict as BT
+    _make_raw(tmp_path / "raw")
+    _make_fused(tmp_path / "fused.pkl")
+    out = BT.build(tmp_path / "raw", tmp_path / "fused.pkl", tmp_path / "out.pkl",
+                   dev_pids=["P005"], log=lambda *_: None)
+    e = out["data"]["P004"][3]["emg"]
+    assert e.shape == (10, 64, 64) and torch.isfinite(e).all()
+    assert out["emg_repr"] == "td64" and len(out["feature_norm"]["mean"]) == 4

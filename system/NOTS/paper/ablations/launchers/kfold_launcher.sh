@@ -20,6 +20,7 @@
 #   M0 A1 A2 A3 A4
 #   A13_both A13_emg_only A13_imu_only          (modality ablation, 3-way default)
 #   A6_dollar_b A6_dollar_b_user A6_knn_l1 A6_proto_euclid A6_minirocket A6_riemann_mdm A6_riemann_ts
+#   A6_td_knn A6_td_lda A6_td_lda_pool          (Hudgins time-domain features; use the td64 EMG dict)
 #                                               (classical baselines on the cached episodes, CPU only,
 #                                                all 9 cells; need pyriemann=0.9 and aeon in the env)
 #   A15_N4 A15_N8 A15_N12 A15_N16 A15_N20       (meta-training-user sweep; N=20 = full pool)
@@ -141,6 +142,10 @@ done
 SPEC[A6_minirocket]="A6_classical_baselines.py|--method minirocket --cells all|06:00:00|16G|cpu"
 SPEC[A6_riemann_mdm]="A6_classical_baselines.py|--method riemann_mdm --cells all|23:00:00|16G|cpu"
 SPEC[A6_riemann_ts]="A6_classical_baselines.py|--method riemann_ts --cells all|23:00:00|16G|cpu"
+# Reviewer-requested classical baselines on Hudgins time-domain features (needs segfilt_td64_tensor_dict.pkl).
+for m in td_knn td_lda td_lda_pool; do
+    SPEC[A6_$m]="A6_classical_baselines.py|--method $m --emg-repr td64 --cells all|03:00:00|16G|cpu"
+done
 SPEC[grid_M0]="fewshot_grid.py|@GRID|12:00:00|32G"
 SPEC[grid_A2]="fewshot_grid_A2.py|@GRID|02:00:00|16G"
 SPEC[grid_A4]="fewshot_grid_A4.py|@GRID|12:00:00|32G"

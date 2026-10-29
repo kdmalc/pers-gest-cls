@@ -29,7 +29,12 @@ import kfold_split  # noqa: E402
 from raw_emg_io import GESTURE_TO_CLASS, N_REPS, list_emg_files, read_emg_csv  # noqa: E402
 
 
-def build(root, fused_path, out_path, dev_pids=None, fs=F.FS_EMG, log=print):
+def build(root, fused_path, out_path, dev_pids=None, fs=F.FS_EMG, log=print, trial_fn=None,
+          n_features=None, feature_names=None, repr_name="fs64"):
+    """Defaults build EMG-FS64; emg_td passes its own trial_fn / n_features / feature_names."""
+    trial_fn = F.trial_to_fs64 if trial_fn is None else trial_fn
+    n_features = F.N_FEATURES if n_features is None else n_features
+    feature_names = F.FEATURE_NAMES if feature_names is None else feature_names
     dev_pids = list(kfold_split.hpo_val_pids()) if dev_pids is None else list(dev_pids)
     with open(fused_path, "rb") as f:
         fused = pickle.load(f)
@@ -45,21 +50,21 @@ def build(root, fused_path, out_path, dev_pids=None, fs=F.FS_EMG, log=print):
             if list(entry["rep_indices"]) != list(range(1, N_REPS + 1)):
                 raise ValueError(f"{pid}/{name}: fused rep_indices {entry['rep_indices']}")
             feats[(pid, cls)] = np.stack(
-                [F.trial_to_fs64(read_emg_csv(path), fs) for _, path, _ in files[name]])
+                [trial_fn(read_emg_csv(path), fs) for _, path, _ in files[name]])
         log(f"{pid}: features built")
 
     # per feature-type standardisation from the dev users only
-    dev = np.concatenate([feats[(p, c)].reshape(-1, 16, F.N_FEATURES)
+    dev = np.concatenate([feats[(p, c)].reshape(-1, 16, n_features)
                           for p in dev_pids for c in range(10)], axis=0)    # (n, 16, F)
     mean, std = dev.mean(axis=(0, 1)), dev.std(axis=(0, 1))
     if not (std > 0).all():
         raise ValueError("a feature type has zero variance on the dev users")
     for (pid, cls), x in feats.items():
-        z = (x.reshape(N_REPS, F.N_STEPS, 16, F.N_FEATURES) - mean) / std
+        z = (x.reshape(N_REPS, F.N_STEPS, 16, n_features) - mean) / std
         data[pid][cls]["emg"] = torch.from_numpy(z.reshape(N_REPS, F.N_STEPS, -1).astype(np.float32))
-    fused["emg_repr"] = "fs64"
+    fused["emg_repr"] = repr_name
     fused["fs_emg"] = fs
-    fused["feature_names"] = list(F.FEATURE_NAMES)
+    fused["feature_names"] = list(feature_names)
     fused["feature_norm"] = {"mean": mean.tolist(), "std": std.tolist(),
                              "computed_from_dev_pids": dev_pids}
     with open(out_path, "wb") as f:

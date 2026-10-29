@@ -31,7 +31,7 @@ def setup(tmp_path_factory):
     return es, _td(cfg, es)
 
 
-@pytest.mark.parametrize("method", classical.METHODS)
+@pytest.mark.parametrize("method", classical.STATELESS)
 def test_method_beats_chance_on_separable_data_and_is_deterministic(setup, method):
     es, td = setup
     eps = es.select(3, 3)[:6]
@@ -46,7 +46,7 @@ def test_method_beats_chance_on_separable_data_and_is_deterministic(setup, metho
     assert np.mean(accs) > 0.55, f"{method}: {np.mean(accs):.2f} (chance 0.33)"
 
 
-@pytest.mark.parametrize("method", classical.METHODS)
+@pytest.mark.parametrize("method", classical.STATELESS)
 def test_predictions_do_not_depend_on_query_labels_or_ids(setup, method):
     es, td = setup
     mep = materialize(es.select(3, 1)[0], td)
@@ -90,3 +90,54 @@ def test_dollar_b_matches_torch_reference_from_notebook(setup):
             dist[q, i] = ((U.t() @ (qry[q] - mean_c)).flatten() - pt).abs().sum()
     ref = torch.from_numpy(mep.y_support)[dist.argmin(dim=1)].numpy()
     assert np.array_equal(classical.predict("dollar_b", mep), ref)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Time-domain-feature baselines (td_knn / td_lda / td_lda_pool)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_td_lda_pool_requires_whitener_and_beats_chance(setup):
+    es, td = setup
+    mep = materialize(es.select(3, 3)[0], td)
+    with pytest.raises(ValueError, match="whitener"):
+        classical.predict("td_lda_pool", mep)
+    train = [u for u in td if u not in es.users[:1]] or list(td)[:3]
+    W = classical.fit_whitener(td, list(td)[:3])
+    assert W.shape[0] == W.shape[1] and np.isfinite(W).all()
+    accs = []
+    for ep in es.select(3, 3)[:6]:
+        m = materialize(ep, td)
+        p = classical.predict("td_lda_pool", m, whitener=W)
+        assert np.array_equal(p, classical.predict("td_lda_pool", m, whitener=W))
+        accs.append((p == m.y_query).mean())
+    assert np.mean(accs) > 0.55
+
+
+def test_td_lda_handles_k1_and_uses_support_means(setup):
+    es, td = setup
+    mep = materialize(es.select(3, 1)[0], td)
+    p = classical.predict("td_lda", mep)
+    assert p.shape == mep.y_query.shape and set(p.tolist()) <= {0, 1, 2}
+    # K=1 shrinkage=1 => equals nearest class mean on the summary features
+    xs = classical.summary_features(mep.emg_support, mep.imu_support)
+    xq = classical.summary_features(mep.emg_query, mep.imu_query)
+    d = ((xq[:, None] - xs[None]) ** 2).sum(-1)
+    assert np.array_equal(p, mep.y_support[d.argmin(1)])
+
+
+def test_hudgins_features_match_hand_computed_values():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "system" / "universal_preprocessing"
+                           / "EMG_preprocessing"))
+    import emg_td
+    # one channel, one window: x = [1, -1, 1, -1, 1]: 4 sign changes (|dx| = 2 >= thr), 3 slope sign
+    # changes at the interior points, mean |dx| = 2, MAV = 1; W = 5 samples
+    win = np.array([[[1.0, -1.0, 1.0, -1.0, 1.0]]])                 # (C=1, n_steps=1, W=5)
+    f = emg_td.td_features(win)
+    assert f.shape == (1, 4)
+    assert f[0, 0] == pytest.approx(np.log(1.0)) and f[0, 1] == pytest.approx(np.log(2.0))
+    assert f[0, 2] == pytest.approx(4 / 5) and f[0, 3] == pytest.approx(3 / 5)
+    # sub-threshold noise around zero produces no ZC / SSC counts
+    quiet = np.array([[[0.01, -0.01, 0.01, -0.01, 0.01]]])
+    g = emg_td.td_features(quiet)
+    assert g[0, 2] == 0 and g[0, 3] == 0

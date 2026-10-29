@@ -138,7 +138,9 @@ def build_kfold_folds() -> list:
 # EMG representation of the tensor dict a run reads (docs/SPEC_2khz_emg.md):
 #   env20 : 20 Hz MAV envelope, 16 channels   (the original input)
 #   fs64  : windowed spectral features of the native-rate EMG, 112 channels (16 x 7)
-EMG_REPRS = {"env20": ("segfilt_rts_tensor_dict.pkl", 16), "fs64": ("segfilt_fs64_tensor_dict.pkl", 112)}
+#   td64  : classical Hudgins time-domain features (MAV, WL, ZC, SSC), 64 channels (16 x 4); for the A6 LDA/kNN baselines
+EMG_REPRS = {"env20": ("segfilt_rts_tensor_dict.pkl", 16), "fs64": ("segfilt_fs64_tensor_dict.pkl", 112),
+             "td64": ("segfilt_td64_tensor_dict.pkl", 64)}
 
 
 def apply_emg_repr(config: dict, emg_repr: str) -> dict:

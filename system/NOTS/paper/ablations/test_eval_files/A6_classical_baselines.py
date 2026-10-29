@@ -22,7 +22,7 @@ for rel in ("", "system", "system/MAML", "system/MOE", "system/pretraining",
     sys.path.insert(0, str(CODE_DIR / rel) if rel else str(CODE_DIR))
 
 from ablation_config import (  # noqa: E402
-    tensor_dict_file,
+    tensor_dict_file, EMG_REPRS, apply_emg_repr,
     _summarise_eval, _print_eval, apply_kfold_fold, add_fold_arg, make_base_config,
     save_results,
 )
@@ -52,11 +52,15 @@ def main():
     ap = argparse.ArgumentParser(description="A6: classical baselines on cached episodes")
     ap.add_argument("--method", required=True, choices=classical.METHODS)
     ap.add_argument("--cells", nargs="+", default=["10x1"])
+    ap.add_argument("--emg-repr", default=None, choices=sorted(EMG_REPRS),
+                    help="override the EMG representation (td_* baselines use td64)")
     add_fold_arg(ap, required=True)
     args = ap.parse_args()
     cells = parse_cells(args.cells)
 
     config = apply_kfold_fold(make_base_config(f"A6_{args.method}"), args.fold_idx)
+    if args.emg_repr:
+        apply_emg_repr(config, args.emg_repr)
     test_pids = config["test_PIDs"]
     es = ec.load("test", args.fold_idx)
     assert set(test_pids) == set(es.users)
@@ -64,13 +68,19 @@ def main():
     with open(tensor_dict_file(config), "rb") as f:
         tensor_dict = reorient_tensor_dict(pickle.load(f), config)
 
+    kwargs = {}
+    if args.method in classical.NEEDS_FIT:
+        train_pids = config["train_PIDs"]            # the fold's TRAIN users only
+        assert not set(train_pids) & set(es.users)
+        kwargs["whitener"] = classical.fit_whitener(tensor_dict, train_pids)
+
     rows_by_cell = {}
     for n, k in cells:
         eps = es.select(n, k)
         correct = []
         for ep in eps:
             mep = materialize(ep, tensor_dict)
-            pred = classical.predict(args.method, mep)
+            pred = classical.predict(args.method, mep, **kwargs)
             correct.append(int((pred == mep.y_query).sum()))
         rows_by_cell[(n, k)] = outcomes_to_per_episode(eps, correct)
         print(f"[A6/{args.method}] fold {args.fold_idx} cell {n}x{k}: {len(eps)} episodes")

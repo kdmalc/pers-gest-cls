@@ -2,7 +2,8 @@
 Classical / non-parametric few-shot baselines on cached episodes (docs/SOTA_COMPARISONS.md, Tier 1).
 
 Every method maps a MaterializedEpisode (support + query arrays, local labels) to predicted local
-labels for the query samples. They use ONLY the support set (no query labels, no other users);
+labels for the query samples. They use ONLY the support set (no query labels, no other users; the one
+exception is td_lda_pool, which also uses the fold's TRAIN users, never val/test);
 they are deterministic given the episode. Inputs are the per-trial `$B`-normalised tensors
 (reps, C, T) from the shared tensor dict, EMG and IMU kept separate so each method can fuse them
 the way it was designed to.
@@ -20,11 +21,20 @@ Methods
   riemann_ts      per-modality covariance (OAS) -> tangent space at the support mean -> concat ->
                   standardise -> logistic regression.
   minirocket      MiniRocket features (aeon) fitted on the support set, RidgeClassifierCV (LOO alpha).
+  td_knn          1-NN (Euclidean) on trial-level summary features (mean and std over time of every
+                  EMG and IMU channel). With the `td64` EMG dict these are Hudgins MAV/WL/ZC/SSC.
+  td_lda          shrinkage LDA on the same features; support-only, so at K=1 (zero within-class
+                  scatter) it reduces to nearest class mean (shrinkage = 1).
+  td_lda_pool     LDA whose pooled within-class covariance is estimated from the fold's TRAIN users
+                  (`fit_whitener`), then nearest class mean in the whitened space; the strongest
+                  fair LDA at K=1. Needs `whitener=` (A6 runner builds it per fold).
 """
 import numpy as np
 
 METHODS = ("dollar_b", "dollar_b_user", "knn_l1", "proto_euclid", "riemann_mdm", "riemann_ts",
-           "minirocket")
+           "minirocket", "td_knn", "td_lda", "td_lda_pool")
+NEEDS_FIT = ("td_lda_pool",)                         # extra fitted state beyond the episode
+STATELESS = tuple(m for m in METHODS if m not in NEEDS_FIT)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -123,9 +133,68 @@ def minirocket(ep, n_kernels: int = 5000, seed: int = 0):
     return clf.predict(fq)
 
 
+def summary_features(emg, imu):
+    """(n, Ce, T), (n, Ci, T) -> (n, 2 * (Ce + Ci)): mean and std over time of every channel."""
+    x = np.concatenate([emg, imu], axis=1).astype(np.float64)
+    return np.concatenate([x.mean(axis=2), x.std(axis=2)], axis=1)
+
+
+def td_knn(ep):
+    s = summary_features(ep.emg_support, ep.imu_support) if ep.imu_support is not None else None
+    if s is None:
+        raise ValueError("these baselines expect EMG+IMU; imu is None")
+    q = summary_features(ep.emg_query, ep.imu_query)
+    d = ((q[:, None, :] - s[None, :, :]) ** 2).sum(axis=2)
+    return ep.y_support[d.argmin(axis=1)]
+
+
+def td_lda(ep):
+    from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+    if ep.imu_support is None:
+        raise ValueError("these baselines expect EMG+IMU; imu is None")
+    xs = summary_features(ep.emg_support, ep.imu_support)
+    xq = summary_features(ep.emg_query, ep.imu_query)
+    if ep.k_shot == 1:
+        # within-class scatter is exactly zero, so full shrinkage (identity covariance, equal priors)
+        # is a nearest class mean; sklearn's LDA refuses n_samples == n_classes
+        d = ((xq[:, None, :] - xs[None, :, :]) ** 2).sum(axis=2)
+        return ep.y_support[d.argmin(axis=1)]
+    clf = LinearDiscriminantAnalysis(solver="lsqr", shrinkage="auto",
+                                     priors=np.full(ep.n_way, 1.0 / ep.n_way))
+    return clf.fit(xs, ep.y_support).predict(xq)
+
+
+def fit_whitener(tensor_dict, train_pids):
+    """Pooled within-(user, class) covariance of the summary features over TRAIN users only, as a
+    whitening matrix W (features @ W has ~identity within-class covariance). Ledoit-Wolf shrinkage.
+    tensor_dict must be reoriented to (reps, C, T)."""
+    from sklearn.covariance import LedoitWolf
+    centred = []
+    for pid in sorted(train_pids):
+        for slot in tensor_dict[pid].values():
+            f = summary_features(slot["emg"].numpy(), slot["imu"].numpy())
+            centred.append(f - f.mean(axis=0, keepdims=True))
+    cov = LedoitWolf().fit(np.concatenate(centred)).covariance_
+    w, v = np.linalg.eigh(cov)
+    return (v / np.sqrt(np.maximum(w, 1e-12))) @ v.T
+
+
+def td_lda_pool(ep, whitener=None):
+    if whitener is None:
+        raise ValueError("td_lda_pool needs whitener= (classical.fit_whitener on the fold's train users)")
+    if ep.imu_support is None:
+        raise ValueError("these baselines expect EMG+IMU; imu is None")
+    xs = summary_features(ep.emg_support, ep.imu_support) @ whitener
+    xq = summary_features(ep.emg_query, ep.imu_query) @ whitener
+    labels = np.arange(ep.n_way)
+    protos = np.stack([xs[ep.y_support == c].mean(axis=0) for c in labels])
+    d = ((xq[:, None, :] - protos[None]) ** 2).sum(axis=2)
+    return labels[d.argmin(axis=1)]
+
+
 _IMPL = {"dollar_b": dollar_b, "dollar_b_user": dollar_b_user, "knn_l1": knn_l1,
          "proto_euclid": proto_euclid, "riemann_mdm": riemann_mdm, "riemann_ts": riemann_ts,
-         "minirocket": minirocket}
+         "minirocket": minirocket, "td_knn": td_knn, "td_lda": td_lda, "td_lda_pool": td_lda_pool}
 assert set(_IMPL) == set(METHODS)
 
 
