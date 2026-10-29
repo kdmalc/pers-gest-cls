@@ -84,7 +84,7 @@ def _run_epoch(model, loader, optimizer, criterion, device, config, scaler=None,
     total_loss, total_correct, total_samples = 0.0, 0, 0
     total_aux_loss = 0.0                          # tracked separately for diagnostics
     use_imu     = config.get('use_imu', False)
-    clip_val    = float(config.get('grad_clip', 1.0))
+    clip_val    = float(config.get('grad_clip', config.get('gradient_clip_max_norm', 1.0)))
     use_amp     = config.get('use_amp', False) and torch.cuda.is_available()
     use_moe     = config.get('use_MOE', False)
     aux_coeff   = float(config.get('MOE_aux_coeff', 1e-2))
@@ -264,10 +264,12 @@ def pretrain(model, train_dl, val_dl, config: dict, save_path: str = None):
     scheduler     = build_scheduler(optimizer, num_epochs, warmup_epochs) if use_scheduler else None
 
     # ── Early stopping ───────────────────────────────────────────────────────
-    use_es = bool(config.get('use_early_stopping', True))
+    # Fall back to the ablation-config key names (earlystopping_*), which were
+    # previously ignored here (log showed patience=12 / GradClip=1.0 vs config 8 / 10.0).
+    use_es = bool(config.get('use_early_stopping', config.get('use_earlystopping', True)))
     es     = EarlyStopping(
-        patience  = int(config.get('es_patience', 12)),
-        min_delta = float(config.get('es_min_delta', 1e-4)),
+        patience  = int(config.get('es_patience', config.get('earlystopping_patience', 12))),
+        min_delta = float(config.get('es_min_delta', config.get('earlystopping_min_delta', 1e-4))),
     ) if use_es else None
 
     # ── AMP ─────────────────────────────────────────────────────────────────
@@ -301,7 +303,7 @@ def pretrain(model, train_dl, val_dl, config: dict, save_path: str = None):
     print(f"Pretraining: {model_name}")
     print(f"  Device={device} | Epochs={num_epochs} | LR={lr} | BS={config.get('batch_size',64)}")
     print(f"  Optimizer={opt_name} | WD={wd} | LabelSmooth={label_smooth}")
-    print(f"  GradClip={config.get('grad_clip',1.0)} | AMP={use_amp}")
+    print(f"  GradClip={config.get('grad_clip', config.get('gradient_clip_max_norm', 1.0))} | AMP={use_amp}")
     if use_moe:
         print(f"  MoE: placement={config.get('MOE_placement','?')} | "
               f"E={num_experts} | aux_coeff={config.get('MOE_aux_coeff',1e-2):.4f} | "
