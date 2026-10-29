@@ -626,12 +626,8 @@ def _check_moe_collapse(history_or_logs: dict, num_experts: int) -> float | None
 # Data split loading
 # =============================================================================
 
-USER_SPLIT_JSON = (CODE_DIR / "system" / "fixed_user_splits"
-                   / "hpo_strat_kapanji_split.json")
-
-with open(USER_SPLIT_JSON, "r") as f:
-    ALL_SPLITS = json.load(f)
-
+# The split comes from ablation_config.get_hpo_split() (kfold7 fold-0 train users, 4 HPO-val
+# users). The old Kapanji JSON is deliberately NOT loaded here.
 FOLD_IDX = 0
 
 
