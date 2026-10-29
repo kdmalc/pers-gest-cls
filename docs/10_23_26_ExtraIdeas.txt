@@ -1,0 +1,8 @@
+SIMPLE AND GOOD IDEA TO ADD
+A within-dataset test of your own mechanism (cheapest, do this first). You claim ability level dictates behavior, which is why MoE helps. Then the MoE-vs-no-MoE gain should differ across your three ability groups. Compute that per group, with multiple seeds. If the gain concentrates where heterogeneity is highest, you have direct evidence for the mechanism and need no outside dataset. If the gain is flat across groups, that is also important to know, because it weakens your motivation story. With 6, 11 and 15 users per group the test is underpowered, so report effect sizes with intervals and don’t lean on p-values.
+
+
+
+
+LOWER PRIORITY, NEEDS EXPLICIT MANUAL APPROVAL
+A population-heterogeneity comparison on public data. The idea is to compare a heterogeneous cohort against a homogeneous one with the same method, rather than to show state of the art on a benchmark. Public EMG datasets that include amputee or impaired participants alongside able-bodied ones could serve (NinaPro has such subsets, but check which ones fit your preprocessing and modalities). Predict in advance that the MoE gain is larger on the heterogeneous cohort, and report the result either way. This makes your explicit prediction the claim, and a null on the standardized set becomes supporting evidence, not a failure.

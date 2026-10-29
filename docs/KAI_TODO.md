@@ -42,6 +42,13 @@ sha256sum /projects/my13/kai/meta-pers-gest/pers-gest-cls/dataset/meta-learning-
 ```
 **Paste the hash.** Mine is `eb60c8af8294550f0cf407d472daa1df6679340de564ee299436e93df1fac1c4` (72,316,340 bytes). If they differ, tell me where the cluster's copy came from.
 
+## 4b. Quick question: do old per-user results exist? (enables a prelim per-group check)
+Do the OLD L2SO (32-fold) per-user result JSONs for M0 and A4 still exist on the cluster (per-user accuracy for each of the 32 users)? If yes, tell me the path; I will write an adapter and run `system/analysis/group_analysis.py` on them as an **exploratory** look (legacy protocol, legacy 20 Hz EMG, which has the open time-axis anomaly). If not, nothing is lost: the analysis is ready for the kfold7 reruns.
+
+## 4c. Decisions for the PI meeting
+- Confirm the EMG rate policy in `SPEC_2khz_emg.md` §8: Meta comparison at native 2 kHz; main table at one rate fixed in advance (proposed 1 kHz). No sweep.
+- OK to build `segfilt_td64_tensor_dict.pkl` (time-domain features for the LDA/kNN baselines) from the raw CSVs on this laptop, and copy it to the cluster alongside the fs64 file?
+
 ## 5. Decisions (one word each)
 - **"hpo ok"** — HPO every headline comparator (M0, A1, A2, A4, later the transformers) with equal 60-trial budgets, and run A1–A4 both with frozen M0 hyperparameters and re-tuned. Rough cost at 10-way: M0 ≈ 60 trials × ~6 h, A4 ≈ 60 × ~3 h, A1/A2 ≈ 60 × <1 h each (≈ 600 GPU-hours for all four). Say if you want fewer trials for M0.
 - **"start hpo"** — only after item 1 passes: I then give you the exact `hpo_ablation_launcher.sh` commands (M0 first, then A4, A2, A1; journals in `sub2/hpo/optuna_dbs`).

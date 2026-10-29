@@ -96,3 +96,10 @@ The paper states: "each method is evaluated on the input representation it was d
 - **Feature functions:** reuse the safe `shared_processing.py` functions. Unit-test them against hand-computed values on synthetic sinusoids: for a pure sine of frequency f, m2/m0 = (2πf/fs)^2.
 - **Config keys:** `emg_repr = "env20" | "fs64" | "raw3s"`, and `emg_in_ch` follows from it (16 / 112 / 16). `ablation_config` resolves the dict path from `emg_repr`. No silent default: `emg_repr` is required in `make_base_config` and set to `"env20"` explicitly.
 - The episode cache is unchanged: rep ids are format-independent.
+
+## 8. Sampling-rate policy (Kai + Sonnet, 2026-10-23; pending PI sign-off)
+The PI's concern: real devices do not stream 2 kHz, but the Meta comparison needs it. Decision: **no sampling-rate sweep and no tunable knob** (that would be tuning a preprocessing choice on data). Two tables, rates fixed from the literature before any result:
+- **Meta comparison table:** native rate (2048 Hz resampled to 2000 Hz by `resample_poly(125, 128)`), raw-stem input (§3), A10/A11.
+- **Main table:** one realistic rate declared in advance. Proposed 1 kHz: a common research/embedded rate that keeps the whole 20-450 Hz band the features use. Implementation is a fixed anti-alias decimation before filtering in the builder, with the band edge kept below Nyquist. An optional 200 Hz (Myo-class) run may be added but is not part of the main claims. Rates to cite (verify when writing): lab/research sEMG 1-2 kHz; Meta band 2 kHz; Myo armband 200 Hz.
+- **One dev-user sanity check:** FS64 at 1 kHz vs 2048 Hz. The features only use 20-450 Hz, so near-identical results are expected; if so, report a single table with a footnote.
+- Neural methods run on the shared representation; classical methods on their natural inputs (§4), including the Hudgins time-domain features (`emg_td.py`, `emg_repr="td64"`).

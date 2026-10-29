@@ -32,6 +32,11 @@ EncoderMoE was rejected at NeurIPS'26 (low originality/significance). Goal: resu
 | 9a | P1 episode cache, P2 protocol, P3 zero-shot, P7 HPO, P8 stats specs | **Opus** | **done**; Sonnet implements (start with P1 episode cache) |
 | 10 | S3: transformer baselines (param-matched) | Sonnet (after O2) | queued |
 | 11 | Cluster rerun on new protocol | **Kai** | waiting on #3 |
+| 12 | Per-ability-group MoE gain analysis (`SPEC_group_analysis.md`) | Sonnet | **done, unrun** (module + CLI + tests); runs after the kfold7 reruns; prelim only if legacy per-user JSONs exist |
+| 13 | Reviewer-expected classical baselines: PCA+KNN (`$B`, kNN) covered; LDA + Hudgins time-domain (`td_knn`, `td_lda`, `td_lda_pool`) | Sonnet | **implemented, unrun**; needs `segfilt_td64_tensor_dict.pkl` built + copied to cluster |
+| 14 | Offline-vs-real-time discussion (`SPEC_deployment.md`) | Sonnet | text drafted; latency/params measurements after final model |
+| 15 | EMG rate policy: Meta table at native 2 kHz, main table at one declared rate (proposed 1 kHz) (`SPEC_2khz_emg.md` §8) | Kai/PI | **needs PI sign-off**; raw stem (`raw3s`), 1 kHz builder option, A10/A11 rewiring not built yet |
+| 16 | Idea 2: public-dataset heterogeneity comparison (NinaPro) | Kai | on hold, needs explicit approval |
 
 ## Next for Kai
 See `KAI_TODO.md` (immediate blockers only). Opus work: `OPUS_GUIDE.md`.
