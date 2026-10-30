@@ -153,6 +153,8 @@ SPEC[portB_head]="portB_local_adaptation.py|--local-module head|12:00:00|32G"
 for m in dollar_b dollar_b_user knn_l1 proto_euclid; do
     SPEC[A6_$m]="A6_classical_baselines.py|--method $m --cells all|03:00:00|16G|cpu"
 done
+# $B on fs64 (112 channels) needs more than 3 h for some folds: 4 of 7 timed out at 3 h on 2026-10-30
+SPEC[A6_dollar_b]="A6_classical_baselines.py|--method dollar_b --cells all|12:00:00|16G|cpu"
 SPEC[A6_minirocket]="A6_classical_baselines.py|--method minirocket --cells all|06:00:00|16G|cpu"
 SPEC[A6_riemann_mdm]="A6_classical_baselines.py|--method riemann_mdm --cells all|23:00:00|16G|cpu"
 SPEC[A6_riemann_ts]="A6_classical_baselines.py|--method riemann_ts --cells all|23:00:00|16G|cpu"

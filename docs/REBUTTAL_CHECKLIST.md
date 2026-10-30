@@ -67,13 +67,15 @@
 | T4: transformer with MoE feed-forward layers | 🔧 | |
 
 ## Baselines: classical / non-parametric (all 9 k×n cells, env20 and fs64)
-| Run | Status | Acc env20 / fs64 |
+| Run | Status | 10w1s acc, env20 / fs64 (mean ± SD over 28 users) |
 |---|---|---|
-| kNN-L1 | 🏃 (cluster); ✅ laptop, 10w1s | 58.0 / **72.9** [95% CI 69.4, 76.3] |
-| ProtoNet on raw features | 🏃 (cluster); ✅ laptop, 10w1s | 51.1 / 65.6 |
-| `$B` (PCA + L1 1-NN), `$B`-user | 🏃 | |
-| MiniRocket + ridge | 🏃 | |
-| Riemannian MDM / tangent space | 🏃 | |
+| kNN-L1 | ✅ | 58.0 ± 11.2 / 72.9 ± 9.5 |
+| ProtoNet on raw features | ✅ | 51.1 ± 12.4 / 65.6 ± 11.4 |
+| `$B` (PCA + L1 1-NN) | ✅ env20; ❌ fs64 folds 2-5 timed out (relaunch at 12 h) | 78.1 ± 11.2 / – |
+| `$B`-user | ✅ | 58.6 ± 10.8 / 74.0 ± 9.4 |
+| MiniRocket + ridge | ✅ | 78.8 ± 9.4 / 79.5 ± 9.6 |
+| Riemannian MDM | ✅ | 90.4 ± 10.3 / **91.4 ± 8.6** |
+| Riemannian tangent space + LR | ✅ | 86.8 ± 12.5 / 88.8 ± 9.4 |
 | Time-domain features: kNN / LDA / pooled LDA | 🔧 (needs the td64 dict) | |
 
 ## Baselines: few-shot / meta-learning
