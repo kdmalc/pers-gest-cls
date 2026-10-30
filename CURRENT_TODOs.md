@@ -69,15 +69,13 @@ Then `scp` the td64 `.pkl` to the cluster, next to the fs64 file.
   - Ability group barely predicts sharing: Mantel r = 0.05-0.09, p = 0.05-0.17. The ability-cluster story is weak at the data level.
 
 ## 5. Cluster
-**A. Debug runs (launched 2026-10-29).** When they finish, run this on the login node and paste the output:
-```bash
-LOG=/scratch/my13/kai/runs/paper/sub2/eval/logs
-for f in $LOG/kfold7_*_f0_*.out; do echo "=== $f"; grep -E "GIT_REV|smoke|JOB_|PYTHON_EXIT|Traceback|Error|val episodes from cache|\[Test\]|Test head|Test full|Saved to|FINAL" "$f" | tail -25; done
-ls -t /scratch/my13/kai/runs/paper/sub2/hpo/logs/ 2>/dev/null | head    # HPO debug trial log; paste its tail too
-squeue -u $USER
-```
-- The first command prints the key lines (git revision, errors, test accuracy, saved file) from each debug job's log.
-- If you can't find the HPO debug log, `ls /scratch/my13/kai/runs/paper/sub2/hpo/` and tell me what's there.
+**A. Debug runs (launched 2026-10-29): DONE, plumbing OK, numbers meaningless (legacy HPs).** Details and the issue list: `docs/10_29_26_debug_run_results.md`. Fixed the same day (pushed): `pretrain_trainer` ignored the config's `earlystopping_*`/`gradient_clip_max_norm` keys (ran patience 12 / clip 1.0, now 8 / 10.0); legacy Kapanji / L2SO / hpo_test_split code removed from M0, `ablation_config`, the A11 sweep. Still to do:
+- [ ] On the cluster: `git pull`, `git restore system/__pycache__/__init__.cpython-310.pyc`, refresh the scratch launcher copies, re-run `--smoke` M0 and `pytest` (the cleanup was never executed: no Python on the Claude side).
+- [ ] Delete or move the non-smoke A1/A2 fold-0 JSONs (legacy HPs + old patience/clip) from `.../eval/kfold7/{A1,A2}/fold0/`.
+- [ ] HPO search space: cap `label_smooth` (debug trial sampled 0.42), sanity-range `ft_lr`/`ft_steps` (the 46.8% val came from FT, pretrain-only val was 21.8%, train acc 97%, best epoch 4). Update `SPEC_hpo.md`.
+- [ ] MoE logging: entropy is saturated at ln(top_k) (use pre-top-k softmax), imbalance ratios are div-by-0 artifacts, "Routing by Participant" prints `?` (PIDs not passed in the supervised path).
+- [ ] Cosmetic: mojibake `Â±` in FINAL lines; HPO launcher header prints literal `$(hostname)`/`$(date)`; prune per-trial 35 MB checkpoints.
+- [ ] Remaining legacy L2SO/hpo_test_split code: `launchers/eval_launcher.sh` (now incompatible with M0, delete?), A10-A12, A1, A13, A16, fewshot_grid_A4, portB, `tests/tiny_config.py`.
 
 **B. Done:** the dict hash matches the laptop (`eb60c8af…`), and the fs64 dict is copied. **Still to do:** the `mamba install` of pyriemann/aeon. It's only needed if classical baselines are ever run on the cluster, because the laptop already covers them.
 
