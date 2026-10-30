@@ -2,8 +2,8 @@
 Generate the 28/4 outer split + 7 inner folds of 20/4/4 (decided 2026-10-21).
 
   * 4 users are held out as HPO-val users and are NEVER test users. We reuse the
-    val users of the old kapanji split (P005, P131, P116, P109) so earlier HPO
-    stays interpretable; they cover all three strata.
+    val users of the original Kapanji-based HPO split (P005, P131, P116, P109) so
+    earlier HPO stays interpretable; they cover all three strata.
   * The remaining 28 users are split into 7 disjoint test blocks of 4, stratified
     by group (Non-disabled Kapanji / Disabled Kapanji / Disabled Non-Kapanji) by
     shuffling within stratum (seeded) and dealing round-robin across folds.
@@ -17,16 +17,24 @@ import random
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-OLD = HERE / "hpo_strat_kapanji_split.json"
 OUT = HERE / "kfold28_hpo4_split.json"
 SEED = 0
 N_FOLDS = 7
 
+# Source of truth for the Kapanji group labels (copied into the output JSON's "groups").
+GROUPS = {
+    "Non-disabled Kapanji": ["P011", "P010", "P008", "P006", "P005", "P004"],
+    "Disabled Kapanji": ["P111", "P119", "P124", "P110", "P112", "P123", "P132", "P126",
+                         "P131", "P104", "P116"],
+    "Disabled Non-Kapanji": ["P102", "P114", "P107", "P103", "P125", "P127", "P128", "P118",
+                             "P108", "P122", "P106", "P115", "P105", "P109", "P121"],
+}
+HPO_VAL = ["P005", "P131", "P116", "P109"]
+
 
 def main():
-    old = json.loads(OLD.read_text())
-    groups = old[1]
-    hpo_val = list(old[0]["val"])  # P005, P131, P116, P109
+    groups = GROUPS
+    hpo_val = list(HPO_VAL)
 
     pool = {g: [p for p in pids if p not in hpo_val] for g, pids in groups.items()}
     rng = random.Random(SEED)

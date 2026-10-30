@@ -314,9 +314,6 @@ EMG_2KHZ_PKL_PATH = (
 EMG_2KHZ_IN_CH   = 16
 EMG_2KHZ_SEQ_LEN = 4300
 
-USER_SPLIT_JSON = (
-    CODE_DIR / "system" / "fixed_user_splits" / "hpo_strat_kapanji_split.json"
-)
 FOLD_IDX = 0
 
 STUDY_NAME = "ablation_A11_eval_hpo_v2"
@@ -333,15 +330,18 @@ NUM_VAL_EPISODES = 200
 # Data split loading
 # =============================================================================
 
-with open(USER_SPLIT_JSON, "r") as f:
-    ALL_SPLITS = json.load(f)
+import importlib.util as _ilu
+_ks_spec = _ilu.spec_from_file_location(
+    "kfold_split", CODE_DIR / "system" / "fixed_user_splits" / "kfold_split.py")
+kfold_split = _ilu.module_from_spec(_ks_spec)
+_ks_spec.loader.exec_module(kfold_split)
 
 
 def apply_fold_to_config(config: dict) -> dict:
-    split = ALL_SPLITS[FOLD_IDX]
-    config["train_PIDs"] = split["train"]
-    config["val_PIDs"]   = split["val"]
-    config["test_PIDs"]  = split["test"]
+    """kfold7 HPO split: fold-0 train users, validate on the 4 HPO-val users, no test users."""
+    config["train_PIDs"] = list(kfold_split.get_fold(FOLD_IDX)["train"])
+    config["val_PIDs"]   = list(kfold_split.hpo_val_pids())
+    config["test_PIDs"]  = []
     return config
 
 

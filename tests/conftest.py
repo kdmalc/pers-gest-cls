@@ -8,7 +8,7 @@ ORDER IS LOAD-BEARING. ``ablation_config.py`` does real work AT IMPORT TIME:
   * reads ``CODE_DIR`` / ``DATA_DIR`` / ``RUN_DIR`` from the environment, with
     ``CODE_DIR`` defaulting to ``"./"``;
   * calls ``RUN_DIR.mkdir(parents=True, exist_ok=True)``;
-  * opens ``CODE_DIR/system/fixed_user_splits/hpo_strat_kapanji_split.json``;
+  * loads ``CODE_DIR/system/fixed_user_splits/kfold_split.py`` (kfold28_hpo4_split.json);
   * sets ``torch.backends.cudnn.deterministic = True``.
 
 So importing it from anywhere other than the repo root fails, and importing it
@@ -16,7 +16,7 @@ without ``RUN_DIR`` set litters the repo. Everything below the banner runs at
 conftest import, i.e. before any test module is imported.
 
 The split JSON is committed, so no synthetic split file is needed -- we point
-``CODE_DIR`` at the real repo root and let the real 24/4/4 fold load. Tests then
+``CODE_DIR`` at the real repo root and let the real kfold7 splits load. Tests then
 override ``train_PIDs`` / ``val_PIDs`` / ``test_PIDs`` with synthetic PIDs.
 """
 

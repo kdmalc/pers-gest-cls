@@ -116,7 +116,6 @@
   "val_episodes_per_user": "int",
   "use_lslr_at_eval": "bool",
   "use_maml_msl": "str",
-  "user_split_json_filepath": "str",
   "utilization_ratio": "float",
   "val_PIDs": "list",
   "val_reps": "list",
