@@ -37,7 +37,8 @@
 #   manifest), A5, portA, steps sweeps (must use the dev users P005 P131 P116 P109).
 #
 # A14 with encoder / portA need the M0 checkpoint of the SAME fold. Output layout:
-#   $EVAL_OUT_BASE/kfold7/<TOKEN>/fold<k>/        (results JSON + checkpoints)
+#   $EVAL_OUT_BASE/kfold7/<TOKEN>/<EMG_REPR>/fold<k>/   (results JSON + checkpoints; EMG_REPR = --emg-repr,
+#                                                     or the token's own --emg-repr, e.g. td64 for A6_td_*)
 #   $LOG_DIR/kfold7_<TOKEN>_f<k>_<jobid>.out
 
 set -euo pipefail
@@ -158,8 +159,11 @@ submit_job() {
 [[ -n \"\$CKPT\" ]] || { echo \"JOB_FAILED: no M0 checkpoint matching $ckpt_glob\"; exit 3; }
 echo \"CKPT      : \$CKPT\""
     fi
-    local out_dir="$EVAL_OUT_BASE/kfold7/$token/fold$fold"
-    local name="kfold7_${token}${tag}_f${fold}"
+    # the EMG representation is part of the output path: env20 and fs64 runs of one token must never share a folder
+    local repr="$EMG_REPR_ARG"
+    if [[ "$extra" =~ --emg-repr[[:space:]]+([a-z0-9]+) ]]; then repr="${BASH_REMATCH[1]}"; fi
+    local out_dir="$EVAL_OUT_BASE/kfold7/$token/$repr/fold$fold"
+    local name="kfold7_${token}${tag}_${repr}_f${fold}"
     local partition="${PARTITION_ARG:-commons}"
     if [[ "$DEBUG" == true ]]; then
         partition="debug"; time="00:15:00"
@@ -222,7 +226,7 @@ for token in "${TOKENS[@]}"; do
         elif [[ "$extra" == @CKPT:* ]]; then
             # checkpoint of the same fold from the named run; the job fails loudly if absent.
             src="${extra#@CKPT:}"
-            ckpt_glob="$EVAL_OUT_BASE/kfold7/$src/fold$fold/${src}_*_kfold7_fold${fold}_seed42_best.pt"
+            ckpt_glob="$EVAL_OUT_BASE/kfold7/$src/$EMG_REPR_ARG/fold$fold/${src}_*_kfold7_fold${fold}_seed42_best.pt"
             submit_job "$token" "$fold" "$script" "--model $src --cells all --checkpoint \"\$CKPT\"" "$time" "$mem" "" "$ckpt_glob" "$kind"
         else
             submit_job "$token" "$fold" "$script" "$extra" "$time" "$mem" "" "" "$kind"

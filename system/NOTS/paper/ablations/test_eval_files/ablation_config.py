@@ -1201,6 +1201,7 @@ def save_results(results: dict, config: dict, tag: str = "",
     # "not launched through the launcher" and is recorded as such, never invented.
     results["git_rev"] = os.environ["GIT_REV"] if "GIT_REV" in os.environ else None
     results["smoke"] = bool(config["smoke"]) if "smoke" in config else False
+    results["emg_repr"] = config["emg_repr"]          # always set by make_base_config / apply_emg_repr
     results["hpo_config"] = config["hpo_config"] if "hpo_config" in config else None
     results["hpo_source"] = config["hpo_source"] if "hpo_source" in config else None
     results["protocol_check"] = assert_protocol_consistent(
