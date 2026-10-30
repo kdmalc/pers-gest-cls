@@ -54,7 +54,11 @@ mkdir -p ~/gest_results/A6_cluster && scp -r "km82@<NOTS login host>:/scratch/my
 ```
 Then run notebook 02 with `A6_RESULTS=~/gest_results/A6_cluster` (or edit `RESULTS` in its first code cell).
 
-**B. Laptop (done 2026-10-30 by Claude):** kNN-L1 and ProtoNet-Euclid at 10-way 1-shot, both representations, in `~/gest_results/A6_primary/`. Results are in §4.
+**B. Laptop (done 2026-10-30 by Claude, git `58eea72`):** kNN-L1 and ProtoNet-Euclid at 10-way 1-shot, both representations, in `~/gest_results/A6_primary/`. Notebook 02 runs end to end on them. Results are in §4.
+- **Kai's laptop loop started 11:10 the same day** (`$B` first) writes into the same folder.
+  - Its fold-0 `$B` file predates the `emg_repr` fix. Its later files record `git_rev 80fc244` but ran the edited working tree, so their recorded revision is wrong.
+  - If that loop continues, its kNN/ProtoNet runs will duplicate mine, and the aggregator rejects duplicates.
+  - **Stop it (Ctrl+C) and delete `~/gest_results/A6_primary/env20/A6_dollar_b_*`.** The cluster run (A) covers `$B` and the rest.
 
 **C. Time-domain / LDA baselines (laptop build, then cluster).** These need the td64 dict, built from the raw CSVs in Box. Needs your OK; it was a PI question.
 ```bash
@@ -71,7 +75,15 @@ Then, on the cluster: `bash kfold_launcher.sh A6_td_knn A6_td_lda A6_td_lda_pool
 
 ## 4. Results so far (first looks, laptop, 2026-10-29)
 - **EMG representation (dev users, notebook 01).** The pre-registered rule says **adopt fs64**. At 10-way 1-shot, EMG-only fs64 beats env20 by +28.9 pts (proto) and +17.2 pts (1-NN L1), on 4/4 users. Balanced fused fs64+IMU beats env20+IMU by +10.8 / +12.5. The env20 time-axis anomaly points the same way.
-- **kNN-L1 (fused), 28 users, 10-way 1-shot**, from testing notebook 02: env20 ≈ 59%, fs64 ≈ 73% (fold means 53-63% vs 71-77%). This is a reportable baseline, but it was not used for the decision.
+- **Classical baselines, 28 users, 10-way 1-shot (fused EMG+IMU, notebook 02, 2026-10-30).** Reportable numbers, not used for the representation decision.
+
+  | method | env20 | fs64 |
+  |---|---|---|
+  | kNN-L1 | 58.0 [54.0, 62.1] | **72.9** [69.4, 76.3] |
+  | ProtoNet-Euclid (raw) | 51.1 [46.8, 55.7] | 65.6 [61.5, 69.7] |
+
+  fs64 − env20 is +14.9 (kNN) and +14.5 (ProtoNet) pts, 28/28 users better, Holm p < 1e-7.
+  - **Warning for `DECISION_method.md` R4:** old EncoderMoE was 67.7% at 10-way 1-shot (old protocol and split, so not comparable). A no-training kNN on fs64 is already above that number. The rerun M0 must beat these baselines on the same episodes.
 - **Uniqueness (notebook 03, 32 users, model-free).**
   - Cross-user zero-shot (nearest label centroid of the other 31 users) gets 13-16% (chance 10%), against 62-78% for within-user 1-shot. That is under the 20% "keep the user-defined framing" threshold in `SPEC_zeroshot.md`. It is not the pre-registered Z test, which needs trained models.
   - A user's gesture prototype has an other-user nearest neighbour with the same label 13-19% of the time (null 10%, p ≤ .035). That is weak but real shared label semantics.
