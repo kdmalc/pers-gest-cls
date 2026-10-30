@@ -1224,7 +1224,8 @@ def _mamlpp_adapt_and_eval(model, config, support_batch, query_batch, debug=Fals
     q_loss = criterion(logits, labels).item()
     acc    = (preds == labels).sum().item() / B
 
-    return {"loss": q_loss, "acc": acc, "pre_adapt_acc": pre_adapt_acc}
+    return {"loss": q_loss, "acc": acc, "pre_adapt_acc": pre_adapt_acc,
+            "logits": logits.detach().float().cpu()}
 
 def compute_meta_batch_alignment(task_gradients_list):
     """

@@ -72,7 +72,7 @@ def main():
     if args.method in classical.NEEDS_FIT:
         train_pids = config["train_PIDs"]            # the fold's TRAIN users only
         assert not set(train_pids) & set(es.users)
-        kwargs["whitener"] = classical.fit_whitener(tensor_dict, train_pids)
+        kwargs = classical.fit_state(args.method, tensor_dict, train_pids)
 
     rows_by_cell = {}
     for n, k in cells:

@@ -1135,20 +1135,46 @@ def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
 
     model.eval()
     rows_by_cell = {}
+    dump = {} if config.get("dump_query_logits", False) else None
     for n, k in _eval_cells(config, cells):
         eps = es.select(n, k, max_per_user=config["test_episodes_per_user"])
         ds = CachedEpisodeDataset(tensor_dict, eps, config["modality_mask"])
         dl = DataLoader(ds, batch_size=1, shuffle=False, num_workers=4, collate_fn=maml_mm_collate)
         correct = []
-        for batch in dl:
+        for ep, batch in zip(eps, dl):
             metrics = (mamlpp_adapt_and_eval if adapt_and_eval_fn is None else adapt_and_eval_fn)(
                 model, config, batch["support"], batch["query"])
             correct.append(int(round(metrics["acc"] * batch["query"]["labels"].numel())))
+            if dump is not None:
+                if "logits" not in metrics:
+                    raise KeyError("dump_query_logits is set but this evaluator returns no 'logits'")
+                dump[f"{ep.id}|logits"] = metrics["logits"].numpy()
+                dump[f"{ep.id}|labels"] = batch["query"]["labels"].numpy()
         rows_by_cell[(n, k)] = outcomes_to_per_episode(eps, correct)
 
     res = _summarise_eval(es, rows_by_cell)
     _print_eval(res)
+    if dump is not None:
+        res["query_logits_file"] = _save_query_logits(config, dump)
     return res
+
+
+def add_dump_logits_arg(parser):
+    """--dump-logits: also save every test query's logits (failure analysis, hybrid fusion)."""
+    parser.add_argument("--dump-logits", action="store_true",
+                        help="save per-query test logits to <RUN_DIR>/<ablation>_<ts>_fold<k>_query_logits.npz")
+
+
+def _save_query_logits(config: dict, dump: dict) -> str:
+    """npz keyed '<episode_id>|logits' (n_query, n_way) and '<episode_id>|labels' (n_query,), query order
+    as in episodes.episode_numpy.materialize. Returns the file name."""
+    import numpy as np
+    fold = config["fold_idx"] if "fold_idx" in config else "na"
+    seed = config["seed"] if "seed" in config else "na"
+    fname = f"{config['ablation_id']}_{config['timestamp']}_fold{fold}_seed{seed}_query_logits.npz"
+    np.savez_compressed(RUN_DIR / fname, **dump)
+    print(f"[dump_logits] {len(dump) // 2} episodes -> {RUN_DIR / fname}")
+    return fname
 
 
 def run_supervised_test_eval(model, config: dict, tensor_dict_path: str,

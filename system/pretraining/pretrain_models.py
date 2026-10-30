@@ -288,7 +288,13 @@ class DeepCNNLSTM(nn.Module):
             _init_lstm(lstm)
 
         self.dropout = nn.Dropout(drop)
-        self.feat_dim = lstm_h * D
+        # Riemannian variants (A4_cov: covariance pooling; R1_A4: Euclidean alignment by the support set)
+        from arch_variants.spd import check_input_align, build_feature_pool, feature_pool_dim
+        self.feature_pool = build_feature_pool(config, lstm_h * D)
+        self.feat_dim = feature_pool_dim(config, lstm_h * D)
+        self.input_align = check_input_align(config)
+        self.needs_task_support = self.input_align == "ea"
+        self._task_support = None
 
         # ── Head ────────────────────────────────────────────────────────────
         if head_type == 'linear':
@@ -297,6 +303,9 @@ class DeepCNNLSTM(nn.Module):
             self.head = MLPHead(self.feat_dim, self.feat_dim // 2, n_way, drop)
 
     def backbone(self, x_emg: torch.Tensor, x_imu=None, demographics=None):
+        if self.input_align == "ea":
+            from arch_variants.spd import ea_align
+            x_emg, x_imu = ea_align(self, x_emg, x_imu)
         if self.emg_stem is not None:
             x_emg = self.emg_stem(x_emg)
         if self.config.get('use_imu', False) and x_imu is not None:
@@ -317,7 +326,7 @@ class DeepCNNLSTM(nn.Module):
 
         layer1_feat = h1.mean(dim=1)
         layer2_feat = h2.mean(dim=1)
-        layer3_feat = h3.mean(dim=1)
+        layer3_feat = h3.mean(dim=1) if self.feature_pool is None else self.feature_pool(h3)
 
         return layer3_feat, [layer1_feat, layer2_feat, layer3_feat]
 

@@ -106,12 +106,12 @@ Same cached test episodes as the cluster, all 7 folds, 10-way 1-shot, 28 users, 
 
 | Condition | env20 | fs64 |
 |---|---|---|
-| Fused MDM (as on the cluster) | 90.4 ± 10.1 | pending |
-| Support labels shuffled | **9.5 ± 1.0** (chance 10) | pending |
-| EMG only | 73.8 ± 14.7 | pending |
-| IMU only | **91.0 ± 9.6** | pending |
+| Fused MDM (as on the cluster) | 90.4 ± 10.1 | 91.5 ± 8.3 |
+| Support labels shuffled | **9.5 ± 1.0** (chance 10) | **9.6 ± 1.1** |
+| EMG only | 73.8 ± 14.7 | 76.6 ± 10.6 |
+| IMU only | **91.0 ± 9.6** | **91.0 ± 9.6** (same IMU) |
 
-Accuracy by |rep(query) − rep(true-class support)| on env20:
+Accuracy by |rep(query) − rep(true-class support)| (fs64 is within 1-2 points: 96.1 at gap 1, 76.4 at gap 9). env20:
 
 | Gap | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
 |---|---|---|---|---|---|---|---|---|---|

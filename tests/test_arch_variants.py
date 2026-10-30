@@ -324,7 +324,8 @@ def hpo_module():
 def _variant_ids():
     # importing ablation_hpo at collection time would need HPO_DB_DIR; list the ids statically
     return ["X2", "X3", "X4", "X5", "X6", "F1", "F2", "F3", "T0", "T2", "T4",
-            "P1", "P1_moe", "P1_match", "P1_rel", "P1_ridge", "P1_feat", "P3", "A4_ANIL", "M0_ANIL"]
+            "P1", "P1_moe", "P1_match", "P1_rel", "P1_ridge", "P1_feat", "P3", "A4_ANIL", "M0_ANIL",
+            "X7", "X7T", "X8", "X8W", "X9", "A4_cov", "R1", "R1_A4", "P1_cov", "P1_spd"]
 
 
 def test_variant_id_list_matches_the_driver(hpo_module):
@@ -332,7 +333,7 @@ def test_variant_id_list_matches_the_driver(hpo_module):
 
 
 @pytest.mark.parametrize("vid", _variant_ids())
-def test_every_variant_builds_and_runs(hpo_module, vid):
+def test_every_variant_builds_and_runs(hpo_module, vid, monkeypatch):
     import optuna
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     profile = hpo_module.ABLATION_PROFILES[vid]
@@ -347,7 +348,18 @@ def test_every_variant_builds_and_runs(hpo_module, vid):
     if cfg.get("MOE_top_k") is not None:
         cfg["MOE_top_k"] = cfg["top_k"] = (cfg["num_experts"] if cfg.get("MOE_gate_mode") == "uniform"
                                            else min(cfg["MOE_top_k"], cfg["num_experts"]))
+    if cfg.get("MOE_routing_signal") == "cov_centroid":
+        # X8 centroids are initialised from the fold's train users' data: use a small synthetic set here
+        import arch_variants.registry as reg
+        monkeypatch.setattr(reg, "prepare_model_for_data", lambda m, c, log=print: m)
     model = hpo_module.build_model(cfg)
+    if cfg.get("MOE_routing_signal") == "cov_centroid":
+        from MOE.MOE_encoder import init_cov_centroids
+        g = torch.Generator().manual_seed(0)
+        td = {f"U{u}": {c: {"emg": torch.randn(3, cfg["emg_in_ch"], cfg["sequence_length"], generator=g) * (1 + u),
+                            "imu": torch.randn(3, cfg["imu_in_ch"], cfg["sequence_length"], generator=g)}
+                        for c in range(2)} for u in range(cfg["num_experts"] + 1)}
+        init_cov_centroids(model, td, sorted(td))
     assert hpo_module.LAST_MODEL_N_PARAMS > 0
     x = (torch.randn(4, cfg["emg_in_ch"], cfg["sequence_length"]),
          torch.randn(4, cfg["imu_in_ch"], cfg["sequence_length"]))

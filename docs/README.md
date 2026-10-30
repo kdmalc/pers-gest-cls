@@ -13,7 +13,7 @@
 ## Subfolders
 | Folder | What goes there |
 |---|---|
-| `specs/` | Design specs and pre-registered rules: `SPEC_*.md` (protocol, HPO, stats, episodes, 2 kHz EMG, architecture exploration, …), `DECISION_method.md` (go/no-go), `SOTA_COMPARISONS.md` |
+| `specs/` | Design specs and pre-registered rules: `SPEC_*.md` (protocol, HPO, stats, episodes, 2 kHz EMG, architecture exploration, …), `DECISION_method.md` (go/no-go), `SOTA_COMPARISONS.md`, `SPEC_riemannian.md` (covariance track) |
 | `analysis/` | Analyses and idea notes: `COVARIANCE_TUTORIAL.md` (why Riemannian MDM works, reading list), MoEMeta comparison, eval-pipeline audit, ability-cluster hypothesis, study plan, extra ideas |
 | `run_reports/` | Write-ups of specific cluster runs (debug runs, diagnostics) |
 | `papers/` | PDFs: our NeurIPS'26 submission, MoEMeta, the OpenReview thread. Local only, never committed (git-ignored). |

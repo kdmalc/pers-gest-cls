@@ -30,7 +30,10 @@ ARCH_DEFAULTS: dict = dict(
     fusion_mode="early", fusion_branch_width=0.71, fusion_d_model=64, fusion_heads=4,
     tf_d_model=128, tf_heads=4, tf_blocks=3, tf_ff_mult=2, tf_moe_every=0,
     maml_inner_param_include=None,
-
+    # Riemannian variants (section 2R; docs/analysis/COVARIANCE_TUTORIAL.md). Defaults = M0 / A4 unchanged.
+    feature_pool="mean", cov_pool_dim=16, cov_pool_norm="sqrt", cov_shrinkage=0.1,
+    input_align="none", MOE_cov_expert_whiten=False,
+    spd_dims=[32, 16], spd_reeig_eps=1e-4,
 )
 
 
@@ -73,6 +76,29 @@ ARCH_VARIANTS: dict[str, dict] = {
                 set={"fusion_mode": "none", "temporal_model": "transformer", "tf_moe_every": 2,
                      "MOE_skip_unselected_experts": True},
                 spaces=("tf", "moe_sparse"), note="Transformer with sparse MoE feed-forward layers (Switch-style)"),
+    # ── Riemannian / covariance variants (section 2R) ────────────────────────
+    "X7":  dict(base="M0", family="legacy", set={"MOE_routing_signal": "cov_tangent"}, spaces=(),
+                note="Router input = log-Euclidean tangent vector of each modality's input covariance"),
+    "X7T": dict(base="M0", family="legacy", set={"MOE_routing_signal": "cov_tangent_task"}, spaces=(),
+                note="X7 + the support set's mean covariance vector (task-level routing, like X4)"),
+    "X8":  dict(base="M0", family="legacy", set={"MOE_routing_signal": "cov_centroid"}, spaces=(),
+                note="Riemannian experts: gate = distance to E centroids on the SPD manifold (k-means init on train users)"),
+    "X8W": dict(base="M0", family="legacy",
+                set={"MOE_routing_signal": "cov_centroid", "MOE_cov_expert_whiten": True}, spaces=(),
+                note="X8 + each expert re-centres its input at its centroid (cluster-wise re-centring)"),
+    "X9":  dict(base="M0", family="legacy", set={"feature_pool": "cov"}, spaces=("cov_pool",),
+                note="M0 with second-order (covariance) pooling of the LSTM states instead of the mean"),
+    "A4_cov": dict(base="A4", family="legacy", set={"feature_pool": "cov"}, spaces=("cov_pool",),
+                   note="X9's control: covariance pooling without MoE"),
+    "R1":  dict(base="M0", family="legacy", set={"input_align": "ea"}, spaces=(),
+                note="M0 on inputs whitened by the episode support set's mean covariance (Euclidean alignment)"),
+    "R1_A4": dict(base="A4", family="legacy", set={"input_align": "ea"}, spaces=(),
+                  note="R1's control: Euclidean alignment without MoE"),
+    "P1_cov": dict(base="A1", family="metric",
+                   set={"metric_kind": "proto", "metric_backbone": "moe", "feature_pool": "cov"},
+                   spaces=("metric", "cov_pool"), note="CovaMNet-style: ProtoNet on M0's expert bank with covariance pooling"),
+    "P1_spd": dict(base="A4", family="metric", set={"metric_kind": "proto", "metric_backbone": "spdnet"},
+                   spaces=("metric", "spd"), note="ProtoNet on an SPDNet (BiMap/ReEig/LogEig) per modality"),
     # ── Alternatives to MAML (episodic metric learners, no inner loop) ──────────
     "P1":       dict(base="A4", family="metric", set={"metric_kind": "proto", "metric_backbone": "cnnlstm"},
                      spaces=("metric",), note="ProtoNet trained episodically (A4 encoder)"),
@@ -122,6 +148,21 @@ def uses_a4_widths(token: str) -> bool:
 def uses_moe(token: str) -> bool:
     v = ARCH_VARIANTS[token]
     return v["base"] in ("M0", "A1")
+
+
+def prepare_model_for_data(model, config: dict, log=print):
+    """Data-dependent initialisation after building, from the config's TRAIN users only: the X8 / X8W
+    covariance centroids (MOE_encoder.init_cov_centroids). A no-op for every other model."""
+    if config.get("MOE_routing_signal") != "cov_centroid" or not config.get("use_MOE", False):
+        return model
+    import pickle
+    from ablation_config import tensor_dict_file
+    from MAML.maml_data_pipeline import reorient_tensor_dict
+    from MOE.MOE_encoder import init_cov_centroids
+    with open(tensor_dict_file(config), "rb") as f:
+        td = reorient_tensor_dict(pickle.load(f), config)
+    init_cov_centroids(model, td, config["train_PIDs"], seed=int(config.get("seed", 0)), log=log)
+    return model
 
 
 def build_model_for_config(config: dict):

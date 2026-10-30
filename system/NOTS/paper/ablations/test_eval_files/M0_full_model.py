@@ -32,7 +32,7 @@ from ablation_config import (
     make_periodic_checkpoint_fn, make_periodic_test_eval_fn,
     RUN_DIR,
     apply_kfold_fold, KFOLD_N_FOLDS,
-    add_smoke_arg, apply_smoke, add_seed_arg, kfold_tag,
+    add_smoke_arg, apply_smoke, add_seed_arg, kfold_tag, add_dump_logits_arg,
 )
 from MAML.maml_data_pipeline import get_maml_dataloaders
 
@@ -52,11 +52,14 @@ def parse_args() -> argparse.Namespace:
     )
     add_smoke_arg(parser)
     add_seed_arg(parser)
+    add_dump_logits_arg(parser)
     return parser.parse_args()
 
 
 def build_config(args: argparse.Namespace) -> dict:
-    return apply_smoke(make_base_config(ablation_id="M0"), args.smoke)
+    config = apply_smoke(make_base_config(ablation_id="M0"), args.smoke)
+    config["dump_query_logits"] = bool(args.dump_logits)
+    return config
 
 
 def run_one_fold(fold_id: str, seed: int, config: dict) -> dict:

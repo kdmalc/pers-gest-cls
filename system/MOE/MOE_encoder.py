@@ -288,6 +288,139 @@ class CrossModalRouter(nn.Module):
         return self.out(self.xattn(e, i).mean(dim=1))  # (B, out_dim)
 
 
+def _cov_blocks(x_emg, x_imu):
+    return [x_emg] if x_imu is None else [x_emg, x_imu]
+
+
+class CovTangentRouter(nn.Module):
+    """
+    X7 router: the routing vector is read from the log-Euclidean tangent vector of each modality's
+    shrunk channel covariance (docs/analysis/COVARIANCE_TUTORIAL.md section 6). The covariance is a
+    function of the raw input only (computed under no_grad, so no gradient flows through eigh);
+    LayerNorm + a 2-layer MLP map it to the routing vector.
+    """
+    def __init__(self, C_emg: int, C_imu: Optional[int], hidden_dim: int, out_dim: int,
+                 rho: float, dropout: float = 0.1):
+        super().__init__()
+        from arch_variants.spd import tangent_dim
+        self.rho = float(rho)
+        D = tangent_dim(C_emg) + (tangent_dim(C_imu) if C_imu else 0)
+        self.in_dim = D
+        self.net = nn.Sequential(nn.LayerNorm(D), nn.Linear(D, hidden_dim), nn.GELU(),
+                                 nn.Dropout(dropout), nn.Linear(hidden_dim, out_dim))
+
+    def tangent(self, x_emg, x_imu):
+        from arch_variants.spd import block_log_vec
+        with torch.no_grad():
+            return block_log_vec(_cov_blocks(x_emg, x_imu), self.rho).to(x_emg.dtype)
+
+    def forward(self, x_emg, x_imu):
+        return self.net(self.tangent(x_emg, x_imu))
+
+
+class CovCentroidGate(nn.Module):
+    """
+    X8 gate: E learnable centroids in the (standardised) log-Euclidean tangent space; the router logit
+    of expert e is minus the squared distance to centroid e, times a learnable scale. Experts are thus
+    regions of the SPD manifold ("Riemannian experts"). The centroids are initialised by k-means over
+    the TRAIN users' mean tangent vectors (init_cov_centroids); forward raises until that has run.
+
+    With whiten=True, expert e also sees its input re-centred at its centroid: x -> P_e^{-1/2} x per
+    modality block, P_e = expm(centroid_e) (cluster-wise Riemannian re-centring, Zanini et al. 2018).
+    Same top-k / temperature semantics as MOEGate.
+    """
+    def __init__(self, C_emg: int, C_imu: Optional[int], num_experts: int, rho: float,
+                 top_k: Optional[int], temperature: float, whiten: bool):
+        super().__init__()
+        from arch_variants.spd import tangent_dim
+        self.blocks = (C_emg,) + ((C_imu,) if C_imu else ())
+        D = sum(tangent_dim(c) for c in self.blocks)
+        self.num_experts, self.top_k, self.temperature = num_experts, top_k, temperature
+        self.rho, self.whiten = float(rho), bool(whiten)
+        self.centroids = nn.Parameter(torch.zeros(num_experts, D))
+        self.log_scale = nn.Parameter(torch.zeros(()))
+        self.register_buffer("mu", torch.zeros(D))
+        self.register_buffer("sd", torch.ones(D))
+        self.register_buffer("initialised", torch.zeros((), dtype=torch.bool))
+
+    def tangent(self, x_emg, x_imu):
+        from arch_variants.spd import block_log_vec
+        with torch.no_grad():
+            v = block_log_vec(_cov_blocks(x_emg, x_imu), self.rho).to(x_emg.dtype)
+        return (v - self.mu) / self.sd
+
+    def forward_with_logits(self, v):
+        if not bool(self.initialised):
+            raise RuntimeError("CovCentroidGate centroids are not initialised: call "
+                               "MOE.MOE_encoder.init_cov_centroids(model, tensor_dict, train_pids) after building")
+        d2 = (v.unsqueeze(1) - self.centroids.unsqueeze(0)).pow(2).mean(dim=-1)   # (B, E)
+        logits = -d2 * self.log_scale.exp() / self.temperature
+        weights_soft = F.softmax(logits, dim=-1)
+        if self.top_k is not None and self.top_k < self.num_experts:
+            _, idx = torch.topk(weights_soft, self.top_k, dim=-1)
+            mask = torch.zeros_like(weights_soft).scatter_(-1, idx, 1.0)
+            weights_hard = weights_soft * mask
+            weights_hard = weights_hard / (weights_hard.sum(dim=-1, keepdim=True) + 1e-9)
+        else:
+            weights_hard = weights_soft
+        return weights_hard, weights_soft, logits
+
+    def expert_whiteners(self):
+        """Per expert, the list of per-block P_e^{-1/2} = expm(-L_e / 2) (differentiable in the centroids)."""
+        from arch_variants.spd import tangent_dim, untriu_vec
+        raw = self.centroids * self.sd + self.mu                 # back to the unstandardised log space
+        out, start = [], 0
+        for C in self.blocks:
+            n = tangent_dim(C)
+            L = untriu_vec(raw[:, start:start + n], C)           # (E, C, C) symmetric logs
+            out.append(torch.linalg.matrix_exp(-0.5 * L))
+            start += n
+        return [[W[e] for W in out] for e in range(self.num_experts)]
+
+
+def init_cov_centroids(model, tensor_dict: dict, train_pids, seed: int = 0, log=print) -> None:
+    """Initialise an X8 model's CovCentroidGate from the fold's TRAIN users (never val/test):
+    per-trial tangent vectors -> standardisation stats; per-user mean vectors -> k-means(E) -> centroids;
+    the logit scale is set so the initial logits have unit spread over the user means.
+    tensor_dict must be reoriented to (reps, C, T). No-op for models without a CovCentroidGate."""
+    gate = getattr(model, "gate", None)
+    if not isinstance(gate, CovCentroidGate):
+        enc = getattr(model, "encoder", None)              # metric learners wrap the MoE encoder
+        gate = getattr(enc, "gate", None) if enc is not None else None
+        if not isinstance(gate, CovCentroidGate):
+            return
+    import numpy as np
+    from sklearn.cluster import KMeans
+    from arch_variants.spd import block_log_vec
+    use_imu = len(gate.blocks) == 2
+    per_user, all_v = [], []
+    with torch.no_grad():
+        for pid in sorted(train_pids):
+            vs = []
+            for slot in tensor_dict[pid].values():
+                blocks = [slot["emg"].float()] + ([slot["imu"].float()] if use_imu else [])
+                vs.append(block_log_vec(blocks, gate.rho))
+            v = torch.cat(vs)
+            all_v.append(v)
+            per_user.append(v.mean(dim=0))
+    V = torch.cat(all_v)
+    mu, sd = V.mean(dim=0), V.std(dim=0).clamp_min(1e-6)
+    U = ((torch.stack(per_user) - mu) / sd).numpy().astype(np.float64)
+    if U.shape[0] < gate.num_experts:
+        raise ValueError(f"{U.shape[0]} train users < {gate.num_experts} experts: cannot k-means the centroids")
+    km = KMeans(n_clusters=gate.num_experts, n_init=20, random_state=seed).fit(U)
+    C = torch.as_tensor(km.cluster_centers_, dtype=gate.centroids.dtype)
+    d2 = ((torch.as_tensor(U, dtype=C.dtype).unsqueeze(1) - C.unsqueeze(0)) ** 2).mean(dim=-1)
+    spread = float(d2.std(dim=1).mean().clamp_min(1e-6))
+    with torch.no_grad():
+        gate.mu.copy_(mu.to(gate.mu.dtype)); gate.sd.copy_(sd.to(gate.sd.dtype))
+        gate.centroids.copy_(C)
+        gate.log_scale.fill_(float(np.log(1.0 / spread)))
+        gate.initialised.fill_(True)
+    sizes = np.bincount(km.labels_, minlength=gate.num_experts).tolist()
+    log(f"[init_cov_centroids] {len(per_user)} train users -> {gate.num_experts} centroids, cluster sizes {sizes}")
+
+
 def build_routing_module(
     routing_signal: str,
     in_ch: int,
@@ -880,7 +1013,11 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         self.use_shared     = use_shared
         # X4: support-set context, set per episode by mamlpp.task_support() (plain attribute, so it
         # survives functional_call, like _forced_gate_weights below)
-        self.needs_task_support = routing_signal == "context_proj_task"
+        # Riemannian variants (X7 cov_tangent[_task], X8 cov_centroid, X9 feature_pool, R1 input_align)
+        from arch_variants.spd import check_input_align, build_feature_pool, feature_pool_dim
+        self.input_align = check_input_align(config)
+        self.needs_task_support = routing_signal in ("context_proj_task", "cov_tangent_task") \
+            or self.input_align == "ea"
         self._task_support = None
         # router logits of the current forward, handed from backbone() to forward()'s routing dict
         # without changing backbone()'s return signature (A14 and the eval scripts unpack it)
@@ -936,6 +1073,20 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
                                            n_heads=config["MOE_xattn_heads"], out_dim=ctx_out,
                                            dropout=MOE_drop)
             gate_in_dim = ctx_out
+        elif routing_signal in ("cov_tangent", "cov_tangent_task", "cov_centroid"):
+            if front_end_stride > 0 or self.emg_stem is not None:
+                raise ValueError(f"MOE_routing_signal={routing_signal!r} reads the windowed inputs' covariance; "
+                                 "it is not defined with a front-end stride or the raw EMG stem")
+            C_imu_r = C_imu if use_imu else None
+            if routing_signal == "cov_centroid":
+                self.router, gate_in_dim = None, None
+                cov_gate = CovCentroidGate(C_emg, C_imu_r, E, rho=config["cov_shrinkage"],
+                                                top_k=top_k, temperature=gate_temp,
+                                                whiten=config["MOE_cov_expert_whiten"])
+            else:
+                self.router = CovTangentRouter(C_emg, C_imu_r, ctx_hidden, ctx_out,
+                                               rho=config["cov_shrinkage"], dropout=MOE_drop)
+                gate_in_dim = ctx_out * (2 if routing_signal == "cov_tangent_task" else 1)
         else:
             self.router, gate_in_dim = build_routing_module(
                 routing_signal   = routing_signal,
@@ -973,10 +1124,19 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
             self.shared_expert = None
 
         # ── Gating ──────────────────────────────────────────────────────────
-        self.gate = None if gate_mode == "uniform" else \
-            MOEGate(gate_in_dim, E, top_k=top_k, temperature=gate_temp)
+        if routing_signal == "cov_centroid" and gate_mode != "uniform":
+            self.gate = cov_gate
+        else:
+            self.gate = None if gate_mode == "uniform" else \
+                MOEGate(gate_in_dim, E, top_k=top_k, temperature=gate_temp)
+        if config.get("MOE_cov_expert_whiten", False) and routing_signal != "cov_centroid":
+            raise ValueError("MOE_cov_expert_whiten needs MOE_routing_signal='cov_centroid'")
+        self.cov_whiten = routing_signal == "cov_centroid" and bool(config["MOE_cov_expert_whiten"])
+        self.C_emg_in = C_emg
 
         # ── Temporal model: 3 x LSTM (M0) or a transformer (T2) ─────────────
+        if temporal_model == "transformer" and config.get("feature_pool", "mean") != "mean":
+            raise ValueError("feature_pool='cov' pools the LSTM states; not defined for temporal_model='transformer'")
         if temporal_model == "lstm":
             self.lstm1 = nn.LSTM(cnn_out_ch, lstm_h, batch_first=True, bidirectional=bidir)
             self.lstm2 = nn.LSTM(lstm_h * D,  lstm_h, batch_first=True, bidirectional=bidir)
@@ -984,8 +1144,11 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
             for lstm in [self.lstm1, self.lstm2, self.lstm3]:
                 _init_lstm(lstm)
             self.lstm_dropout = nn.Dropout(drop)
-            self.feat_dim = lstm_h * D
+            # X9: second-order (covariance) pooling of the last LSTM's states instead of the mean
+            self.feature_pool = build_feature_pool(config, lstm_h * D)
+            self.feat_dim = feature_pool_dim(config, lstm_h * D)
         else:
+            self.feature_pool = None
             from arch_variants.attention import TemporalTransformer
             d_model = config["tf_d_model"]
             self.temporal = TemporalTransformer(
@@ -1010,7 +1173,21 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         if self.gate_mode == "uniform":
             w = x.new_full((B, self.num_experts), 1.0 / self.num_experts)
             return w, w, None
-        if self.routing_signal == "xattn":
+        x_imu_r = x_imu if self.use_imu else None
+        if self.routing_signal == "cov_centroid":
+            return self.gate.forward_with_logits(self.gate.tangent(x_emg, x_imu_r))
+        if self.routing_signal == "cov_tangent":
+            r = self.router(x_emg, x_imu_r)
+        elif self.routing_signal == "cov_tangent_task":
+            sup = self._task_support
+            if sup is None:
+                raise RuntimeError(
+                    "MOE_routing_signal='cov_tangent_task' needs the episode's support set: wrap the "
+                    "forward in mamlpp.task_support(model, support_batch, device)")
+            s_emg, s_imu = self._aligned(*sup)
+            r_task = self.router(s_emg, s_imu if self.use_imu else None).mean(dim=0, keepdim=True)
+            r = torch.cat([self.router(x_emg, x_imu_r), r_task.expand(B, -1)], dim=-1)
+        elif self.routing_signal == "xattn":
             r = self.router(x_emg, x_imu)
         elif self.routing_signal == "context_proj_task":
             sup = self._task_support
@@ -1040,8 +1217,16 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         return self.router(x)
 
     # ─────────────────────────────────────────────────────────────────────────
+    def _aligned(self, x_emg, x_imu):
+        """R1: Euclidean alignment by the episode's support covariance (identity when input_align='none')."""
+        if self.input_align == "ea":
+            from arch_variants.spd import ea_align
+            return ea_align(self, x_emg, x_imu)
+        return x_emg, x_imu
+
     def backbone(self, x_emg, x_imu=None, demographics=None,
                  return_routing: bool = False):
+        x_emg, x_imu = self._aligned(x_emg, x_imu)
         if self.emg_stem is not None:
             x_emg = self.emg_stem(x_emg)
         x = x_emg
@@ -1081,9 +1266,13 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
             w_soft = w_hard
             router_logits = None
 
-        # 2. Expert CNNs
-        h = _weighted_expert_sum([lambda exp=exp: exp(x) for exp in self.expert_cnns], w_hard,
-                                 skip_unselected=self.skip_unselected)
+        # 2. Expert CNNs (X8 with whitening: expert e sees its input re-centred at its centroid)
+        if self.cov_whiten:
+            Ws = self.gate.expert_whiteners()
+            calls = [lambda exp=exp, W=W: exp(self._whiten(x, W)) for exp, W in zip(self.expert_cnns, Ws)]
+        else:
+            calls = [lambda exp=exp: exp(x) for exp in self.expert_cnns]
+        h = _weighted_expert_sum(calls, w_hard, skip_unselected=self.skip_unselected)
 
         # 3. Add shared expert if enabled
         if self.shared_expert is not None:
@@ -1104,12 +1293,17 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
 
         l1 = h1.mean(dim=1)
         l2 = h2.mean(dim=1)
-        l3 = h3.mean(dim=1)
+        l3 = h3.mean(dim=1) if self.feature_pool is None else self.feature_pool(h3)
 
         self._last_router_logits = router_logits
         if return_routing:
             return l3, [l1, l2, l3], w_hard, w_soft
         return l3, [l1, l2, l3]
+
+    def _whiten(self, x, Ws):
+        """Apply per-block whiteners [W_emg, (W_imu)] to the concatenated (B, C, T) input."""
+        parts = [x[:, :self.C_emg_in]] + ([x[:, self.C_emg_in:]] if len(Ws) == 2 else [])
+        return torch.cat([torch.einsum("ij,bjt->bit", W.to(x.dtype), p) for W, p in zip(Ws, parts)], dim=1)
 
     def forward(self, x_emg, x_imu=None, demographics=None,
                 return_routing: bool = False):

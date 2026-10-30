@@ -118,6 +118,11 @@ ARCH_VARIANT_KINDS = {
     "T4_moe_ffn":       ("flex", dict(fusion_mode="none", temporal_model="transformer", tf_moe_every=1,
                                       use_MOE=True, MOE_top_k=3)),
     "F1_mid_in_moe":    ("flex", dict(fusion_mode="mid", use_MOE=True)),
+    # Riemannian variants (X8 needs a data-dependent init and R1 / X7T the support set:
+    # tests/test_riemannian.py covers them)
+    "X7_cov_router":    ("moe", dict(MOE_routing_signal="cov_tangent", cov_shrinkage=0.1)),
+    "X9_cov_pool":      ("moe", dict(feature_pool="cov", cov_pool_dim=6, cov_pool_norm="sqrt", cov_shrinkage=0.1)),
+    "X9_cov_pool_log":  ("moe", dict(feature_pool="cov", cov_pool_dim=6, cov_pool_norm="log", cov_shrinkage=0.1)),
 }
 
 

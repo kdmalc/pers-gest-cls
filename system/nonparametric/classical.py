@@ -28,12 +28,28 @@ Methods
   td_lda_pool     LDA whose pooled within-class covariance is estimated from the fold's TRAIN users
                   (`fit_whitener`), then nearest class mean in the whitened space; the strongest
                   fair LDA at K=1. Needs `whitener=` (A6 runner builds it per fold).
+  riemann_seg_mdm MDM on N_SEG contiguous time segments (one covariance per segment and modality),
+                  distances summed: keeps coarse temporal order, which a single covariance discards
+                  (a gesture and its time reversal have the same covariance).
+  riemann_rc_pool Per-user Riemannian re-centring (tangent space at the user's own mean covariance:
+                  the support mean for the test user) -> PCA -> a within-(user, class) metric pooled over
+                  the fold's TRAIN users (Ledoit-Wolf) -> nearest class mean. The covariance analogue of
+                  td_lda_pool: other users teach WHICH covariance directions separate gestures.
+                  Needs `state=` (fit_rc_pool on the fold's train users).
+  riemann_cluster_pool  The same with the train users split into RC_CLUSTERS clusters (k-means on their
+                  mean covariances, log-Euclidean); the test user is assigned by its support mean and
+                  uses its cluster's metric. Clustering without an MoE.
+  NB: plain MDM needs no re-centring: the affine-invariant distance is unchanged by it.
 """
 import numpy as np
 
 METHODS = ("dollar_b", "dollar_b_user", "knn_l1", "proto_euclid", "riemann_mdm", "riemann_ts",
-           "minirocket", "td_knn", "td_lda", "td_lda_pool")
-NEEDS_FIT = ("td_lda_pool",)                         # extra fitted state beyond the episode
+           "minirocket", "td_knn", "td_lda", "td_lda_pool",
+           "riemann_seg_mdm", "riemann_rc_pool", "riemann_cluster_pool")
+N_SEG = 3
+RC_PCA = 128
+RC_CLUSTERS = 3
+NEEDS_FIT = ("td_lda_pool", "riemann_rc_pool", "riemann_cluster_pool")   # fitted state beyond the episode
 STATELESS = tuple(m for m in METHODS if m not in NEEDS_FIT)
 
 
@@ -192,7 +208,136 @@ def td_lda_pool(ep, whitener=None):
     return labels[d.argmin(axis=1)]
 
 
-_IMPL = {"dollar_b": dollar_b, "dollar_b_user": dollar_b_user, "knn_l1": knn_l1,
+def riemann_seg_mdm(ep, n_seg: int = N_SEG, estimator: str = "oas"):
+    from pyriemann.classification import MDM
+    T = ep.emg_support.shape[2]
+    if T < 2 * n_seg:
+        raise ValueError(f"T={T} too short for {n_seg} segments")
+    edges = np.linspace(0, T, n_seg + 1).round().astype(int)
+    dist, classes = None, None
+    for a, b in zip(edges[:-1], edges[1:]):
+        for s, q in ((ep.emg_support, ep.emg_query), (ep.imu_support, ep.imu_query)):
+            mdm = MDM(metric="riemann").fit(_covs(s[:, :, a:b], estimator), ep.y_support)
+            d = mdm.transform(_covs(q[:, :, a:b], estimator))
+            dist = d if dist is None else dist + d
+            classes = mdm.classes_
+    return classes[dist.argmin(axis=1)]
+
+
+def _recentred_tangent(covs_by_mod, refs=None):
+    """covs_by_mod: list of (n, C, C) per modality. Tangent vectors at each modality's reference
+    (default: the Riemannian mean of these covariances), concatenated. Returns (vectors, refs)."""
+    from pyriemann.utils.mean import mean_riemann
+    from pyriemann.utils.tangentspace import tangent_space
+    out, used = [], []
+    for i, c in enumerate(covs_by_mod):
+        ref = mean_riemann(c) if refs is None else refs[i]
+        out.append(tangent_space(c, ref, metric="riemann"))
+        used.append(ref)
+    return np.concatenate(out, axis=1), used
+
+
+def _ref_descriptor(refs):
+    """Log-Euclidean vector of a user's mean covariances (for clustering users)."""
+    from pyriemann.utils.base import logm
+    from pyriemann.utils.tangentspace import upper
+    return np.concatenate([upper(logm(r)[None])[0] for r in refs])
+
+
+def fit_rc_pool(tensor_dict, train_pids, n_clusters: int = 1, n_pca: int = RC_PCA,
+                estimator: str = "oas", seed: int = 0):
+    """Fitted state for riemann_rc_pool / riemann_cluster_pool from TRAIN users only.
+    Each train user is re-centred at the Riemannian mean of all its trials' covariances
+    (the test user only has its support set, so its reference is noisier; see the docstring)."""
+    from sklearn.cluster import KMeans
+    from sklearn.covariance import LedoitWolf
+    from sklearn.decomposition import PCA
+    users = []
+    for pid in sorted(train_pids):
+        slots = list(tensor_dict[pid].values())
+        emg = np.concatenate([sl["emg"].numpy() for sl in slots])
+        imu = np.concatenate([sl["imu"].numpy() for sl in slots])
+        labels = np.concatenate([np.full(sl["emg"].shape[0], j) for j, sl in enumerate(slots)])
+        vec, refs = _recentred_tangent([_covs(emg, estimator), _covs(imu, estimator)])
+        users.append({"pid": pid, "vec": vec, "y": labels, "desc": _ref_descriptor(refs)})
+    D = np.stack([u["desc"] for u in users])
+    mu, sd = D.mean(axis=0), D.std(axis=0) + 1e-9
+    if n_clusters > 1:
+        if len(users) < 2 * n_clusters:
+            raise ValueError(f"{len(users)} train users is too few for {n_clusters} clusters")
+        km = KMeans(n_clusters=n_clusters, n_init=20, random_state=seed).fit((D - mu) / sd)
+        assign, centres = km.labels_, km.cluster_centers_
+    else:
+        assign, centres = np.zeros(len(users), dtype=int), np.zeros((1, D.shape[1]))
+    clusters = []
+    for c in range(n_clusters):
+        members = [u for u, a in zip(users, assign) if a == c]
+        if not members:
+            raise ValueError(f"cluster {c} is empty")
+        X = np.concatenate([u["vec"] for u in members])
+        pca = PCA(n_components=min(n_pca, X.shape[0] - 1, X.shape[1]), random_state=seed).fit(X)
+        centred = []
+        for u in members:
+            z = pca.transform(u["vec"])
+            for j in np.unique(u["y"]):
+                zj = z[u["y"] == j]
+                centred.append(zj - zj.mean(axis=0, keepdims=True))
+        cov = LedoitWolf().fit(np.concatenate(centred)).covariance_
+        w, v = np.linalg.eigh(cov)
+        clusters.append({"pca": pca, "W": (v / np.sqrt(np.maximum(w, 1e-12))) @ v.T,
+                         "pids": [u["pid"] for u in members]})
+    return {"mu": mu, "sd": sd, "centres": centres, "clusters": clusters, "estimator": estimator}
+
+
+def assign_cluster(state, refs) -> int:
+    z = (_ref_descriptor(refs) - state["mu"]) / state["sd"]
+    return int(((state["centres"] - z[None]) ** 2).sum(axis=1).argmin())
+
+
+def _rc_pool_predict(ep, state):
+    if state is None:
+        raise ValueError("riemann_rc_pool / riemann_cluster_pool need state= "
+                         "(classical.fit_rc_pool on the fold's train users)")
+    if ep.imu_support is None:
+        raise ValueError("these baselines expect EMG+IMU; imu is None")
+    est = state["estimator"]
+    cs = [_covs(ep.emg_support, est), _covs(ep.imu_support, est)]
+    cq = [_covs(ep.emg_query, est), _covs(ep.imu_query, est)]
+    vs, refs = _recentred_tangent(cs)                       # the test user's reference: its support mean
+    vq, _ = _recentred_tangent(cq, refs)
+    cl = state["clusters"][assign_cluster(state, refs) if len(state["clusters"]) > 1 else 0]
+    zs, zq = cl["pca"].transform(vs) @ cl["W"], cl["pca"].transform(vq) @ cl["W"]
+    labels = np.arange(ep.n_way)
+    protos = np.stack([zs[ep.y_support == c].mean(axis=0) for c in labels])
+    d = ((zq[:, None, :] - protos[None]) ** 2).sum(axis=2)
+    return labels[d.argmin(axis=1)]
+
+
+def riemann_rc_pool(ep, state=None):
+    if state is not None and len(state["clusters"]) != 1:
+        raise ValueError("riemann_rc_pool expects a 1-cluster state (fit_rc_pool(n_clusters=1))")
+    return _rc_pool_predict(ep, state)
+
+
+def riemann_cluster_pool(ep, state=None):
+    if state is not None and len(state["clusters"]) < 2:
+        raise ValueError("riemann_cluster_pool expects a multi-cluster state (fit_rc_pool(n_clusters>1))")
+    return _rc_pool_predict(ep, state)
+
+
+def fit_state(method: str, tensor_dict, train_pids) -> dict:
+    """The kwargs a NEEDS_FIT method takes, fitted on the fold's TRAIN users only."""
+    if method == "td_lda_pool":
+        return {"whitener": fit_whitener(tensor_dict, train_pids)}
+    if method == "riemann_rc_pool":
+        return {"state": fit_rc_pool(tensor_dict, train_pids, n_clusters=1)}
+    if method == "riemann_cluster_pool":
+        return {"state": fit_rc_pool(tensor_dict, train_pids, n_clusters=RC_CLUSTERS)}
+    raise KeyError(f"{method} needs no fitted state")
+
+
+_IMPL = {"riemann_seg_mdm": riemann_seg_mdm, "riemann_rc_pool": riemann_rc_pool,
+         "riemann_cluster_pool": riemann_cluster_pool, "dollar_b": dollar_b, "dollar_b_user": dollar_b_user, "knn_l1": knn_l1,
          "proto_euclid": proto_euclid, "riemann_mdm": riemann_mdm, "riemann_ts": riemann_ts,
          "minirocket": minirocket, "td_knn": td_knn, "td_lda": td_lda, "td_lda_pool": td_lda_pool}
 assert set(_IMPL) == set(METHODS)

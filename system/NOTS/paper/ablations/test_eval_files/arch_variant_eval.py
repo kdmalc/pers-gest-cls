@@ -33,11 +33,11 @@ from ablation_config import (  # noqa: E402
     tensor_dict_file, make_base_config, set_seeds, FIXED_SEED,
     run_episodic_test_eval, run_supervised_test_eval, save_results, save_model_checkpoint,
     count_parameters, make_periodic_checkpoint_fn, apply_kfold_fold, add_fold_arg, kfold_tag,
-    resolve_fold_ids, add_smoke_arg, apply_smoke, add_seed_arg, add_cells_arg, parse_cells,
+    resolve_fold_ids, add_smoke_arg, apply_smoke, add_seed_arg, add_cells_arg, parse_cells, add_dump_logits_arg,
 )
 from arch_variants.registry import (  # noqa: E402
     ARCH_VARIANTS, FAMILY_EVAL_DEFAULTS, A4_CNN_BASE_FILTERS, A4_LSTM_HIDDEN,
-    variant_kind, uses_a4_widths, uses_moe, build_model_for_config,
+    variant_kind, uses_a4_widths, uses_moe, build_model_for_config, prepare_model_for_data,
 )
 
 
@@ -89,7 +89,7 @@ def run_one_fold(token: str, fold_id: str, seed: int, config: dict, cells) -> di
     kind = variant_kind(token)
     tensor_dict_path = tensor_dict_file(config)
 
-    model = build_model_for_config(config).to(config["device"])
+    model = prepare_model_for_data(build_model_for_config(config), config).to(config["device"])
     n_params = count_parameters(model)
     print(f"\n[{token} | {fold_id} | seed={seed}] kind={kind}  parameters={n_params:,}")
     print(f"  train={config['train_PIDs']}\n  val={config['val_PIDs']}\n  test={config['test_PIDs']}")
@@ -154,9 +154,11 @@ def main():
     add_seed_arg(ap)
     add_cells_arg(ap)
     add_smoke_arg(ap)
+    add_dump_logits_arg(ap)
     args = ap.parse_args()
     cells = parse_cells(args.cells)
     config = build_config(args.token, args.smoke)
+    config["dump_query_logits"] = bool(args.dump_logits)
 
     results = []
     for k in resolve_fold_ids(args.fold_idx):

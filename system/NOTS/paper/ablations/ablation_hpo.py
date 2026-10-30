@@ -595,6 +595,12 @@ def _apply_variant(trial: optuna.Trial, config: dict, v: dict) -> dict:
         config["metric_relation_hidden"] = trial.suggest_categorical("metric_relation_hidden", [64, 128, 256])
     if "adann" in spaces:
         config["adann_lambda"] = trial.suggest_float("adann_lambda", 0.01, 1.0, log=True)
+    if "cov_pool" in spaces:
+        config["cov_pool_dim"] = trial.suggest_categorical("cov_pool_dim", [8, 16, 24])
+        config["cov_pool_norm"] = trial.suggest_categorical("cov_pool_norm", ["sqrt", "log"])
+    if "spd" in spaces:
+        dims = trial.suggest_categorical("spd_dims", ["32-16", "48-24", "24-12"])   # str: Optuna-storable
+        config["spd_dims"] = [int(d) for d in dims.split("-")]
     return config
 
 
@@ -767,8 +773,8 @@ LAST_MODEL_N_PARAMS = None   # set by build_model; read into the trial's user at
 def build_model(config: dict):
     """Build the model a config describes (arch_variants.registry.build_model_for_config)."""
     global LAST_MODEL_N_PARAMS
-    from arch_variants.registry import build_model_for_config
-    model = build_model_for_config(config)
+    from arch_variants.registry import build_model_for_config, prepare_model_for_data
+    model = prepare_model_for_data(build_model_for_config(config), config)
     LAST_MODEL_N_PARAMS = int(sum(p.numel() for p in model.parameters()))
     print(f"  [build_model] {config['arch_family']}: {LAST_MODEL_N_PARAMS:,} parameters")
     model.to(config["device"])

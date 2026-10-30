@@ -134,7 +134,7 @@ CPUS=10
 
 # token -> "script|extra args|time|mem[|cpu]"   (--fold-idx <k> is appended per job; `cpu` = no GPU)
 declare -A SPEC
-SPEC[M0]="M0_full_model.py||12:00:00|32G"
+SPEC[M0]="M0_full_model.py|--dump-logits|12:00:00|32G"
 SPEC[A1]="A1_no_maml_moe.py||02:00:00|24G"
 SPEC[A2]="A2_no_maml_no_moe.py||02:00:00|16G"
 SPEC[A3]="A3_A4_maml_no_moe.py|--ablation A3|12:00:00|24G"
@@ -158,15 +158,20 @@ SPEC[A6_dollar_b]="A6_classical_baselines.py|--method dollar_b --cells all|12:00
 SPEC[A6_minirocket]="A6_classical_baselines.py|--method minirocket --cells all|06:00:00|16G|cpu"
 SPEC[A6_riemann_mdm]="A6_classical_baselines.py|--method riemann_mdm --cells all|23:00:00|16G|cpu"
 SPEC[A6_riemann_ts]="A6_classical_baselines.py|--method riemann_ts --cells all|23:00:00|16G|cpu"
+# Riemannian extensions (classical.py; COVARIANCE_TUTORIAL.md section 8): segment covariances; per-user
+# re-centring + tangent space + a within-class metric pooled over the fold's TRAIN users (K=1, or per user cluster)
+SPEC[A6_riemann_seg_mdm]="A6_classical_baselines.py|--method riemann_seg_mdm --cells all|12:00:00|16G|cpu"
+SPEC[A6_riemann_rc_pool]="A6_classical_baselines.py|--method riemann_rc_pool --cells all|06:00:00|32G|cpu"
+SPEC[A6_riemann_cluster_pool]="A6_classical_baselines.py|--method riemann_cluster_pool --cells all|06:00:00|32G|cpu"
 # Reviewer-requested classical baselines on Hudgins time-domain features (needs segfilt_td64_tensor_dict.pkl).
 for m in td_knn td_lda td_lda_pool; do
     SPEC[A6_$m]="A6_classical_baselines.py|--method $m --emg-repr td64 --cells all|03:00:00|16G|cpu"
 done
 # Architecture-exploration tokens (arch_variants/registry.py ARCH_VARIANTS; finalists of the dev-user screen only).
 # Launcher token V_<token>; tests/test_arch_variants.py checks this list against the registry.
-ARCH_VARIANT_TOKENS="X2 X3 X4 X5 X6 F1 F2 F3 T0 T2 T4 P1 P1_moe P1_match P1_rel P1_ridge P1_feat P3 A4_ANIL M0_ANIL"
+ARCH_VARIANT_TOKENS="X2 X3 X4 X5 X6 F1 F2 F3 T0 T2 T4 P1 P1_moe P1_match P1_rel P1_ridge P1_feat P3 A4_ANIL M0_ANIL X7 X7T X8 X8W X9 A4_cov R1 R1_A4 P1_cov P1_spd"
 for t in $ARCH_VARIANT_TOKENS; do
-    SPEC[V_$t]="arch_variant_eval.py|--token $t --cells all|12:00:00|32G"
+    SPEC[V_$t]="arch_variant_eval.py|--token $t --cells all --dump-logits|12:00:00|32G"   # per-query logits: failure analysis, hybrid
 done
 SPEC[V_P3]="arch_variant_eval.py|--token P3 --cells all|03:00:00|24G"
 # Zero-shot cross-user (SPEC_zeroshot.md): Z1 + Z2 + Z4 train their own models; Z3 reads the fold's M0 checkpoint.

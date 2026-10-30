@@ -78,6 +78,24 @@
 | Riemannian tangent space + LR | ✅ | 86.8 ± 12.5 / 88.8 ± 9.4 |
 | Time-domain features: kNN / LDA / pooled LDA | 🔧 (needs the td64 dict) | |
 
+## Riemannian approaches (`specs/SPEC_riemannian.md`)
+| Run | Status | Acc / result |
+|---|---|---|
+| MDM sanity: shuffled labels / EMG-only / IMU-only (env20; fs64) | ✅ | 9.5 / 73.8 / 91.0; 9.6 / 76.6 / 91.0 |
+| Cluster gate G1-G4 (laptop, 32 users) | 🔧 | |
+| Failure analysis P1-P4 + gesture descriptors (laptop) | 🔧 | |
+| High- vs low-movement analysis (P2) | 🔧 | |
+| MDM on 3 time segments (`seg_mdm`) | 🔧 | |
+| Re-centring + pooled tangent metric (`rc_pool`; `cluster_pool`, 3 clusters) | 🔧 | |
+| X7 / X7T: covariance-vector router (sample; + support set) | 🔧 | |
+| X8 / X8W: Riemannian experts (centroid gate; + re-centred experts) | 🔧 | |
+| X9 / A4_cov: covariance pooling (MoE; no-MoE control) | 🔧 | |
+| R1 / R1_A4: Euclidean alignment by the support set (MoE; control) | 🔧 | |
+| P1_cov: ProtoNet + covariance pooling on the expert bank | 🔧 | |
+| P1_spd: ProtoNet on SPDNet | 🔧 | |
+| H1: hybrid model + MDM (leave-one-user-out weight) | 🔧 (needs a model's logits) | |
+| SPDNet experts inside MAML | ⬜ (after P1_spd) | |
+
 ## Baselines: few-shot / meta-learning
 | Run | Status | Acc |
 |---|---|---|

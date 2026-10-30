@@ -26,6 +26,7 @@ in one forward pass. docs/specs/SPEC_architecture_exploration.md section 2D (P1 
     "moe"       DeepCNNLSTM_EncoderMOE (M0's expert bank, trained as a metric learner: separates
                 "MoE features" from "MAML adaptation")
     "flexnet"   arch_variants.flexnet.FlexNet (any fusion / transformer variant)
+    "spdnet"    arch_variants.spd.SPDNetEncoder (per-modality covariance -> BiMap/ReEig -> LogEig; P1_spd)
 
 Training (metric_pretrain) mirrors mamlpp_pretrain's interface and history dict, so the HPO driver
 and the epoch-level pruning callback treat both identically. Evaluation (metric_adapt_and_eval)
@@ -60,7 +61,10 @@ def _build_encoder(config: dict) -> nn.Module:
     if bb == "flexnet":
         from arch_variants.flexnet import FlexNet
         return FlexNet(cfg)
-    raise ValueError(f"metric_backbone must be cnnlstm|moe|flexnet, got {bb!r}")
+    if bb == "spdnet":
+        from arch_variants.spd import SPDNetEncoder
+        return SPDNetEncoder(cfg)
+    raise ValueError(f"metric_backbone must be cnnlstm|moe|flexnet|spdnet, got {bb!r}")
 
 
 class EpisodicMetricLearner(nn.Module):
@@ -115,7 +119,9 @@ class EpisodicMetricLearner(nn.Module):
         q_emg, q_imu, q_y = _get(query, "emg"), _get(query, "imu"), query["labels"].to(device).long()
         n_s = s_emg.shape[0]
         x_imu = torch.cat([s_imu, q_imu]) if s_imu is not None else None
-        z, routing = self.embed(torch.cat([s_emg, q_emg]), x_imu)
+        from MAML.mamlpp import task_support            # support-conditioned encoders (X4, X7T, R1)
+        with task_support(self.encoder, support, device):
+            z, routing = self.embed(torch.cat([s_emg, q_emg]), x_imu)
         zs, zq = z[:n_s], z[n_s:]
         n_way = int(s_y.max().item()) + 1
         onehot = F.one_hot(s_y, n_way).float()                        # (Ns, n)
@@ -172,7 +178,7 @@ def metric_adapt_and_eval(model, config, support_batch, query_batch, debug=False
     acc = (logits.argmax(dim=-1) == y).float().mean().item()
     if was_training:
         model.train()
-    return {"loss": loss, "acc": acc, "pre_adapt_acc": None}
+    return {"loss": loss, "acc": acc, "pre_adapt_acc": None, "logits": logits.detach().float().cpu()}
 
 
 def metric_pretrain(model, config, episodic_train_loader, episodic_val_loader=None, epoch_callback=None):
