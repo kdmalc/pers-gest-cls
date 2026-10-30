@@ -1,12 +1,12 @@
 # CURRENT TODOs
-*Short list of open threads only; finished work goes to `docs/LOG.md`. Run tracker: `docs/REBUTTAL_CHECKLIST.md`. Top-level plan: `docs/PLAN_resubmission.md`. Docs index: `docs/README.md`. Architecture work: `docs/specs/SPEC_architecture_exploration.md`. Updated 2026-10-30, evening.*
+*Short list of open threads only; finished work goes to `docs/LOG.md`. Run tracker: `docs/REBUTTAL_CHECKLIST.md`. Top-level plan: `docs/PLAN_resubmission.md`. Docs index: `docs/README.md`. Architecture work: `docs/specs/SPEC_architecture_exploration.md`. Updated 2026-10-30, late evening.*
 
 **Goal:** resubmit EncoderMoE (rejected NeurIPS'26) on one clean protocol: 28 users, 7 folds, cached episodes, 10-way 1-shot primary. Add the reviewer-requested baselines and ablations. **Venue: ICML (Jan) or TMLR, decided after the main runs finish.**
 
 ## 0. What Claude is doing now
-- **Nothing running.** Everything below is built and tested locally (386 tests pass); none of it has run on the cluster.
+- **Nothing running.** Waiting on Kai's cluster batch B (debug HPO re-run on fs64, now including the Q1 family) and C (eval-path smoke tests). Results of the 2026-10-30 batch: §4.
 - **Next code, waiting for Kai's go:** nothing queued. Open options: F4, T1/T3, CNP, the GNI side of the raw-EMG comparison, ports of A7/A8/portA and Kaifosh (A10-A12) to the cache, EMGBench EMG-only (promised to fkxS).
-- **Add to the next cluster batch (B or C2):** `Q1 Q1_nola Q1_mlp Q1_uni Q1_ce` with `--emg-repr fs64 --debug` first, then in the screen with the other P-tokens (no frozen MAML HPs: they are metric learners).
+- The Q1 family is in the B command below; after B it goes into the screen with the other P-tokens (no frozen MAML HPs: they are metric learners).
 
 ## 1. Plan (Kai, 2026-10-30 evening)
 1. **Settle the MoE and fusion architecture first, on the dev users. No final HPO yet.**
@@ -35,23 +35,13 @@ source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/conda.sh && source /opt/
 mamba activate /projects/my13/kai/meta-pers-gest/envs/fl-torch
 ```
 
-**A. Classical baselines (launched 2026-10-30, CPU).** When `squeue --me` shows no `kfold7_A6_*` job:
-```bash
-for f in /scratch/my13/kai/runs/paper/sub2/eval/logs/kfold7_A6_*.out; do rc=$(grep -o "PYTHON_EXIT_CODE=[0-9]*" "$f"); [[ "$rc" == "PYTHON_EXIT_CODE=0" ]] || echo "${rc:-NO_EXIT_LINE(timeout/killed)}  $f"; done   # empty = all OK
-sacct -u km82 -S 2026-10-30 -X --format=JobID,JobName%34,State,Elapsed | grep -E "TIMEOUT|FAILED|OUT_OF_ME"                                          # empty = none timed out
-```
-Then copy the results to the laptop:
-```bash
-# on the laptop (Git Bash)
-mkdir -p ~/gest_results/A6_cluster && scp -r "km82@<NOTS login host>:/scratch/my13/kai/runs/paper/sub2/eval/kfold7/A6_*" ~/gest_results/A6_cluster/
-```
-Claude then runs notebook 02 with `A6_RESULTS=~/gest_results/A6_cluster`.
+**A. Classical baselines: done 2026-10-30** (all 7 tokens x 7 folds x {env20, fs64}; the four `$B` fs64 folds that hit 3 h finished at 12 h in ~1.5 h each). Results in §4; copies on the lab desktop in `~/gest_results/r1030/eval/kfold7/`.
 
-**B. Debug trials of the new code: RE-RUN after this `git pull`.**
-- **Bug found 2026-10-30 evening:** the HPO driver never applied `--emg-repr` to the training config, so the first debug batch (and any earlier "fs64" study) trained on the **env20** dict.
-- That batch still shows crashes, but its epoch times are not fs64 times. Paste me its output anyway, then re-run on the fixed code.
+**B. Debug trials of the new code: RE-RUN (not done yet).**
+- The first batch (jobs 2475010-27, 2026-10-30 14:00-16:45) is read in §4. The debug jobs run one at a time and each loads the code when it starts; the cluster repo pulled the `--emg-repr` fix at about 16:25, so A4 through T4 trained on **env20** (`emg_in_ch: 16`) and only P1, P1_moe, P1_rel, P1_feat, P3, A4_ANIL on fs64. No Tracebacks. M0, X2, X3, X4, X6, T2 and F3 hit the 15-min debug limit inside trial 0 (fine for this check).
+- HPO logs never print `PYTHON_EXIT_CODE`; judge them by the pass rule below, not by an exit line.
 ```bash
-bash hpo_ablation_launcher.sh A4 M0 X2 X3 X4 X6 T2 F1 F2 F3 T0 T4 P1 P1_moe P1_rel P1_feat P3 A4_ANIL Q1 Q1_mlp --emg-repr fs64 --debug
+bash hpo_ablation_launcher.sh A4 M0 X2 X3 X4 X6 T2 F1 F2 F3 T0 T4 P1 P1_moe P1_rel P1_feat P3 A4_ANIL Q1 Q1_nola Q1_mlp Q1_uni Q1_ce --emg-repr fs64 --debug
 ```
 When they finish, paste Claude the output of:
 ```bash
@@ -66,7 +56,8 @@ bash kfold_launcher.sh V_X2 V_P1 V_P3 Z_all M0 --folds 0 --debug --hpo-config le
 # after that M0 smoke finishes (they read its fold-0 checkpoint):
 bash kfold_launcher.sh Z3 A16_M0 --folds 0 --debug --hpo-config legacy --emg-repr fs64
 ```
-Pass: every `kfold7_*_f0_*.out` ends with `PYTHON_EXIT_CODE=0`.
+Pass: every `kfold7_*_f0_*.out` ends with `PYTHON_EXIT_CODE=0`, and every new result JSON records `"emg_repr": "fs64"`.
+- **Bug fixed 2026-10-30 late evening:** eval scripts applied `EMG_REPR` per fold only, so they trained on fs64 but `save_results()` recorded `emg_repr: env20` from the base config (seen in the 11:21 M0 fs64 smoke). `make_base_config()` now applies `EMG_REPR`. Any eval JSON written before this fix under a `.../fs64/` folder is mislabelled; the A6 results are not affected (A6 sets the representation itself).
 
 **C2. The architecture screen**, after B passes. It uses ≥ 24 trials and the legacy shared HPs frozen.
 ```bash
@@ -95,8 +86,20 @@ sacct -u km82 -S 2026-10-29 -X -n -P --format=JobID,ElapsedRaw,AllocTRES | \
 ```
 
 **E. Housekeeping still open from the 10/29 debug run:**
-- run one `--smoke` M0 on fs64: `bash kfold_launcher.sh M0 --folds 0 --debug --hpo-config legacy --emg-repr fs64`;
+- the `--smoke` M0 on fs64 is covered by C (the 11:21 run trained but mislabelled its JSON, see C);
 - delete the non-smoke A1/A2 fold-0 JSONs under `.../eval/kfold7/{A1,A2}/fold0/`.
+
+**F. Send results back to Claude (any batch).** `touch ~/batch_mark` right before launching; afterwards:
+```bash
+cd /scratch/my13/kai/runs/paper/sub2
+{ echo "### sacct"; sacct -u km82 -S $(date -r ~/batch_mark +%Y-%m-%dT%H:%M) -X --format=JobID,JobName%40,State,Elapsed
+  echo "### HPO report"; python $CODE/system/NOTS/paper/ablations/hpo_tools.py report --db-dir hpo/optuna_dbs; } > status_batch.txt 2>&1
+find eval hpo status_batch.txt -newer ~/batch_mark -type f ! -name '*.pt' ! -name '*.pkl' > files_batch.txt
+tar czf ~/results_batch.tgz -T files_batch.txt && ls -lh ~/results_batch.tgz
+# laptop / lab desktop (Git Bash):
+mkdir -p ~/gest_results/<name> && scp "km82@<NOTS login host>:~/results_batch.tgz" ~/gest_results/<name>/
+```
+(`$CODE` = `/projects/my13/kai/meta-pers-gest/pers-gest-cls`; run with the mamba env active or `hpo_tools` fails on `numpy`.)
 
 ## 3. Code status (all local-tested; none cluster-tested yet)
 | Item | Where | Launch |
@@ -137,6 +140,26 @@ sacct -u km82 -S 2026-10-29 -X -n -P --format=JobID,ElapsedRaw,AllocTRES | \
 - fs64 is better for 28/28 users.
 - **Bar for learned models:** about 78% on the dev users (1-NN L1).
 - **R4 risk:** old M0 scored 67.7% (old protocol), which is below the untrained kNN.
+
+**Classical baselines, 28 users, 10-way 1-shot, final (cluster A6, all 7 folds):** mean ± SD over users.
+
+| method | env20 | fs64 |
+|---|---|---|
+| Riemannian MDM | 90.4 ± 10.3 | **91.4 ± 8.6** [88.0, 94.2] |
+| Riemannian tangent space + LR | 86.8 ± 12.5 | 88.8 ± 9.4 |
+| `$B` (PCA + L1 1-NN) | 78.1 ± 11.2 | 80.4 ± 8.9 |
+| MiniRocket + ridge | 78.8 ± 9.4 | 79.5 ± 9.6 |
+| `$B`-user | 58.6 ± 10.8 | 74.0 ± 9.4 |
+| kNN-L1 | 58.0 ± 11.2 | 72.9 ± 9.5 |
+| ProtoNet (raw features) | 51.1 ± 12.4 | 65.6 ± 11.4 |
+
+- MDM fs64 beats every other row (paired Wilcoxon, Holm p < 0.001) except MDM env20 (+1.1, p = 0.14).
+- **The bar for learned models is MDM, ~91%, not `$B`.** See `analysis/COVARIANCE_TUTORIAL.md`.
+
+**HPO debug batch 1 (2026-10-30, one trial each, dev users; plumbing only, not results):**
+- fs64: P1 ProtoNet 76.8 after 1 epoch, P1_moe 67.3, P3 63.8, P1_feat 38.9, P1_rel 32.2, A4_ANIL 22.1 (low; check after B).
+- env20 (pre-fix): A4 34.7, F1 36.5, F2 36.0, T0 12.0, T4 11.2.
+- Epoch time (env20): ~130-145 s for the E=22 MoE variants (M0, X2, X4, X6, T2), 55 s X3, 35 s A4, 40-53 s F1-F3. A4_ANIL on fs64: 22 s. Use the B re-run for the fs64 trial-budget estimate.
 
 **Uniqueness (notebook 03):**
 - Cross-user zero-shot gets 13-16%, against 62-78% within-user.
