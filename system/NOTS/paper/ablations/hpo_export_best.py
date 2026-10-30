@@ -73,6 +73,11 @@ def overrides_for(H, ablation: str, params: dict) -> dict:
     return out
 
 
+def _all_params(t) -> dict:
+    """Optuna params plus the frozen ones of a screening study (ablation_hpo HPO_FIXED_PARAMS_JSON)."""
+    return {**t.user_attrs.get("fixed_params", {}), **t.params}
+
+
 def cmd_candidates(a):
     H, study, name = _load_study(a.ablation, a.journal)
     done = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
@@ -81,8 +86,9 @@ def cmd_candidates(a):
     done.sort(key=lambda t: t.value, reverse=True)
     cands = []
     for rank, t in enumerate(done[: a.top_k]):
-        cands.append({"rank": rank, "trial": t.number, "value": t.value, "params": t.params,
-                      "overrides": overrides_for(H, a.ablation, t.params)})
+        p = _all_params(t)
+        cands.append({"rank": rank, "trial": t.number, "value": t.value, "params": p,
+                      "overrides": overrides_for(H, a.ablation, p)})
         print(f"rank {rank}: trial {t.number}  dev acc {t.value*100:.2f}%")
     Path(a.out).write_text(json.dumps({"ablation": a.ablation, "study": name,
                                        "n_complete": len(done), "candidates": cands}, indent=1))
@@ -105,7 +111,7 @@ def cmd_finalize(a):
         raise SystemExit("candidates have different numbers of re-eval seeds; finish them first")
     best_trial = max(summary, key=lambda t: summary[t]["mean"])
     H, study, name = _load_study(a.ablation, a.journal)
-    params = study.trials[best_trial].params
+    params = _all_params(study.trials[best_trial])
     out_path = Path(a.out)
     allcfg = json.loads(out_path.read_text()) if out_path.exists() else {}
     allcfg[a.ablation] = {

@@ -9,8 +9,8 @@ import MOE.MOE_encoder as me
 from test_models_functional import BATCH, _build
 
 
-def _stack_version(calls, w_hard):
-    """The old dense implementation (reference)."""
+def _stack_version(calls, w_hard, skip_unselected=False):
+    """The old dense implementation (reference). skip_unselected is accepted and ignored (dense)."""
     outs = [c() for c in calls]
     stacked = torch.stack(outs, dim=1)
     w = w_hard.reshape(w_hard.shape[0], w_hard.shape[1], *([1] * (outs[0].dim() - 1)))

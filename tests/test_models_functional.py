@@ -85,7 +85,59 @@ def _build(kind: str, cfg: dict, seed: int = 1234):
         cfg["model_type"] = "DeepCNNLSTM"
         cfg["MOE_placement"] = "middle"
         return build_MOE_model(cfg)
+    if kind in ARCH_VARIANT_KINDS:
+        return _build_arch_variant(kind, cfg)
     raise AssertionError(f"unknown model kind {kind}")
+
+
+def arch_keys(cfg: dict) -> dict:
+    """The architecture-exploration keys at their M0/A4 values (ablation_hpo._arch_fixed_defaults), tiny dims."""
+    cfg.update(
+        MOE_gate_mode="learned", MOE_routing_signal="context_proj", MOE_use_shared_expert=False,
+        MOE_router_z_coeff=0.0, MOE_skip_unselected_experts=False,
+        MOE_xattn_d_model=8, MOE_xattn_heads=2, temporal_model="lstm",
+        fusion_mode="early", fusion_branch_width=0.71, fusion_d_model=8, fusion_heads=2,
+        tf_d_model=16, tf_heads=4, tf_blocks=2, tf_ff_mult=2, tf_moe_every=0,
+    )
+    return cfg
+
+
+# Architecture-exploration variants (docs/SPEC_architecture_exploration.md). X4 is absent on purpose:
+# it needs the episode's support set (tests/test_arch_variants.py covers it inside task_support).
+ARCH_VARIANT_KINDS = {
+    "X2_uniform_gate":  ("moe", dict(MOE_gate_mode="uniform", MOE_top_k=3)),
+    "X3_sparse_top1":   ("moe", dict(MOE_top_k=1, MOE_router_z_coeff=1e-3, MOE_skip_unselected_experts=True)),
+    "X5_shared_expert": ("moe", dict(MOE_use_shared_expert=True)),
+    "X6_xattn_router":  ("moe", dict(MOE_routing_signal="xattn")),
+    "T2_moe_transformer": ("moe", dict(temporal_model="transformer")),
+    "F1_mid":           ("flex", dict(fusion_mode="mid", use_MOE=False)),
+    "F2_film":          ("flex", dict(fusion_mode="film", use_MOE=False)),
+    "F3_xattn":         ("flex", dict(fusion_mode="xattn", use_MOE=False)),
+    "T0_transformer":   ("flex", dict(fusion_mode="none", temporal_model="transformer", use_MOE=False)),
+    # dense top-k (= E) so no expert is legitimately inert in the per-tensor zeroing test
+    "T4_moe_ffn":       ("flex", dict(fusion_mode="none", temporal_model="transformer", tf_moe_every=1,
+                                      use_MOE=True, MOE_top_k=3)),
+    "F1_mid_in_moe":    ("flex", dict(fusion_mode="mid", use_MOE=True)),
+}
+
+
+def _build_arch_variant(kind: str, cfg: dict):
+    family, over = ARCH_VARIANT_KINDS[kind]
+    cfg = arch_keys(dict(cfg))
+    cfg.update(over)
+    if family == "moe":
+        from MOE.MOE_encoder import build_MOE_model
+        cfg.update(use_MOE=True, model_type="DeepCNNLSTM", MOE_placement="encoder")
+        return build_MOE_model(cfg)
+    from arch_variants.flexnet import FlexNet
+    model = FlexNet(cfg)
+    if cfg["fusion_mode"] == "film":
+        # FiLM starts at identity (zero-initialised gamma/beta conv), which makes the whole IMU branch
+        # inert at init; give it weights so the per-tensor substitution checks can see the IMU branch
+        with torch.no_grad():
+            model.encoder.film.weight.normal_(0, 0.1)
+            model.encoder.film.bias.normal_(0, 0.1)
+    return model
 
 
 ALL_MODELS = [
@@ -94,6 +146,7 @@ ALL_MODELS = [
     "TST",
     "DeepCNNLSTM_EncoderMOE",
     "DeepCNNLSTM_MiddleMOE",
+    *ARCH_VARIANT_KINDS,
 ]
 
 BATCH = 6

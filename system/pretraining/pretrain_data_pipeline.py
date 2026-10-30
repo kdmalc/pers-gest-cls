@@ -145,6 +145,7 @@ class PretrainGestureDataset(Dataset):
         aug_ch_drop: float = 0.10,
         emg_channels: int = 16,
         imu_channels: int = 72,
+        user_index: dict = None,                 # pid -> int; adds "user" to each sample (ADANN)
     ):
         self.use_imu       = use_imu
         self.augment       = augment
@@ -153,6 +154,7 @@ class PretrainGestureDataset(Dataset):
         self.aug_ch_drop   = aug_ch_drop
         self.emg_channels  = emg_channels
         self.imu_channels  = imu_channels
+        self.user_index    = user_index
 
         # ── Determine which gesture class labels to include ──────────────────
         # Keys in tensor_dict[pid] are 0-indexed integer class labels.
@@ -203,7 +205,7 @@ class PretrainGestureDataset(Dataset):
                     emg_trial = emg_all[trial_idx]   # (C, T)
                     imu_trial = imu_all[trial_idx] if imu_all is not None else None
 
-                    self.samples.append((emg_trial, imu_trial, class_label))
+                    self.samples.append((emg_trial, imu_trial, class_label, pid))
 
         if skipped_trials > 0:
             print(f"[PretrainGestureDataset] Warning: skipped {skipped_trials} "
@@ -213,7 +215,7 @@ class PretrainGestureDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        emg_ct, imu_ct, class_label = self.samples[idx]
+        emg_ct, imu_ct, class_label, pid = self.samples[idx]
 
         # Data is (C, T) — reorient_tensor_dict was called before this Dataset
         # was constructed. Assert rather than permute so a missing reorient call
@@ -240,11 +242,14 @@ class PretrainGestureDataset(Dataset):
             if self.augment:
                 imu = _gaussian_noise(imu, self.aug_noise_std)
 
-        return {
+        out = {
             "emg":   emg,                                       # (C_emg, T)
             "imu":   imu,                                       # (C_imu, T) or None
             "label": torch.tensor(class_label, dtype=torch.long),
         }
+        if self.user_index is not None:
+            out["user"] = torch.tensor(self.user_index[pid], dtype=torch.long)
+        return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -257,7 +262,10 @@ def pretrain_collate(batch):
     imus   = None
     if batch[0]["imu"] is not None:
         imus = torch.stack([b["imu"] for b in batch])   # (B, C_imu, T)
-    return {"emg": emgs, "imu": imus, "labels": labels}
+    out = {"emg": emgs, "imu": imus, "labels": labels}
+    if "user" in batch[0]:
+        out["users"] = torch.stack([b["user"] for b in batch])   # (B,) ADANN domain labels
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -298,6 +306,9 @@ def get_pretrain_dataloaders(config: dict, tensor_dict: dict):
         aug_ch_drop               = config.get("aug_ch_drop", 0.10),
         emg_channels              = emg_channels,
         imu_channels              = imu_channels,
+        # ADANN (arch_variants/adann.py) needs the training user of every sample
+        user_index                = ({pid: i for i, pid in enumerate(config["train_PIDs"])}
+                                     if "adann_lambda" in config else None),
     )
     val_ds = PretrainGestureDataset(
         tensor_dict,

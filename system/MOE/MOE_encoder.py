@@ -267,6 +267,27 @@ class ContextProjRouter(nn.Module):
         return r
 
 
+class CrossModalRouter(nn.Module):
+    """
+    X6 router: EMG time tokens cross-attend to IMU time tokens; the pooled result is the routing
+    vector. Couples fusion and routing (docs/SPEC_architecture_exploration.md, X6). Uses the
+    functional_call-safe attention block (arch_variants.attention), never nn.MultiheadAttention.
+    """
+    def __init__(self, C_emg: int, C_imu: int, d_model: int, n_heads: int, out_dim: int,
+                 dropout: float = 0.1):
+        super().__init__()
+        from arch_variants.attention import CrossAttentionBlock
+        self.emg_proj = nn.Linear(C_emg, d_model)
+        self.imu_proj = nn.Linear(C_imu, d_model)
+        self.xattn = CrossAttentionBlock(d_model, n_heads, dropout)
+        self.out = nn.Sequential(nn.LayerNorm(d_model), nn.Linear(d_model, out_dim))
+
+    def forward(self, x_emg: torch.Tensor, x_imu: torch.Tensor) -> torch.Tensor:
+        e = self.emg_proj(x_emg.permute(0, 2, 1))      # (B, T, d)
+        i = self.imu_proj(x_imu.permute(0, 2, 1))
+        return self.out(self.xattn(e, i).mean(dim=1))  # (B, out_dim)
+
+
 def build_routing_module(
     routing_signal: str,
     in_ch: int,
@@ -326,11 +347,20 @@ def build_routing_module(
         # so the gate sees ctx_out_dim + demo_embed_dim.
         gate_in_dim = ctx_out_dim + demo_embed_dim
 
+    elif routing_signal == "context_proj_task":
+        # X4: the model concatenates [sample context, mean context of the episode's support set]
+        router = ContextProjRouter(
+            in_ch=in_ch, hidden_dim=ctx_hidden_dim, out_dim=ctx_out_dim,
+            use_conv=use_conv_in_proj, conv_kernel=conv_kernel,
+            gn_groups=gn_groups, dropout=dropout,
+        )
+        gate_in_dim = 2 * ctx_out_dim
+
     else:
         raise ValueError(
             f"Unknown MOE_routing_signal '{routing_signal}'. "
             "Must be one of: 'linear_proj_input', 'context_proj', "
-            "'context_proj_with_demo'."
+            "'context_proj_with_demo', 'context_proj_task' (or 'xattn', built by the model)."
         )
 
     return router, gate_in_dim
@@ -372,7 +402,7 @@ class DemographicsEmbedder(nn.Module):
 # Gating Network
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _weighted_expert_sum(calls, w_hard):
+def _weighted_expert_sum(calls, w_hard, skip_unselected: bool = False):
     """
     sum_e w_hard[:, e] * calls[e]()  -- accumulated as a running sum so the (B, E, ...) stack of
     expert outputs and its weighted copy are never materialised (peak memory O(B*C*T) in the
@@ -386,9 +416,17 @@ def _weighted_expert_sum(calls, w_hard):
     torch.func.functional_call with substituted parameters, and the backward-time recompute runs
     outside that context, i.e. with the ORIGINAL parameters: gradients are wrong (verified
     2026-10-21: 12 of 57 parameter gradients differed once parameters were substituted).
+
+    skip_unselected: do not run an expert that no sample in the batch selected (its output is
+    multiplied by 0, so the forward value is identical). Off by default because it changes the
+    optimiser state: a skipped expert gets grad None instead of zeros, and Adam then skips its
+    momentum / weight-decay step, so M0 would not reproduce. Used by the sparse variants (X3, T4),
+    where it saves most of the expert compute.
     """
     total = None
     for e, call in enumerate(calls):
+        if skip_unselected and not bool((w_hard[:, e] > 0).any()):
+            continue
         out = call()
         w = w_hard[:, e].reshape(-1, *([1] * (out.dim() - 1)))
         term = out * w
@@ -430,6 +468,11 @@ class MOEGate(nn.Module):
         Callers should apply weights_hard to the expert outputs and pass both
         tensors to the routing_info dict so the correct aux loss can be computed.
         """
+        weights_hard, weights_soft, _ = self.forward_with_logits(r)
+        return weights_hard, weights_soft
+
+    def forward_with_logits(self, r: torch.Tensor):
+        """forward() plus the temperature-scaled router logits (for the router z-loss, X3)."""
         logits       = self.linear(r) / self.temperature   # (B, E)
         weights_soft = F.softmax(logits, dim=-1)            # (B, E)
 
@@ -441,7 +484,7 @@ class MOEGate(nn.Module):
         else:
             weights_hard = weights_soft   # dense: identical
 
-        return weights_hard, weights_soft
+        return weights_hard, weights_soft, logits
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -816,11 +859,32 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         routing_signal = config.get("MOE_routing_signal", "context_proj")
         use_shared     = config.get("MOE_use_shared_expert", False)
         demo_embed_dim = config.get("demo_embed_dim", 8)
+        # Architecture-exploration switches (docs/SPEC_architecture_exploration.md). The defaults
+        # reproduce M0 exactly; .get() only so checkpoints saved before these keys still load.
+        gate_mode      = config.get("MOE_gate_mode", "learned")        # "learned" | "uniform" (X2)
+        temporal_model = config.get("temporal_model", "lstm")          # "lstm" | "transformer" (T2)
+        self.skip_unselected = bool(config.get("MOE_skip_unselected_experts", False))
+        if gate_mode not in ("learned", "uniform"):
+            raise ValueError(f"MOE_gate_mode must be 'learned' or 'uniform', got {gate_mode!r}")
+        if gate_mode == "uniform" and top_k is not None and top_k != E:
+            raise ValueError(f"MOE_gate_mode='uniform' is dense: set MOE_top_k = num_experts ({E}), "
+                             f"got {top_k}")
+        if temporal_model not in ("lstm", "transformer"):
+            raise ValueError(f"temporal_model must be 'lstm' or 'transformer', got {temporal_model!r}")
+        self.gate_mode      = gate_mode
+        self.temporal_model = temporal_model
 
         self.use_imu        = use_imu
         self.num_experts    = E
         self.routing_signal = routing_signal
         self.use_shared     = use_shared
+        # X4: support-set context, set per episode by mamlpp.task_support() (plain attribute, so it
+        # survives functional_call, like _forced_gate_weights below)
+        self.needs_task_support = routing_signal == "context_proj_task"
+        self._task_support = None
+        # router logits of the current forward, handed from backbone() to forward()'s routing dict
+        # without changing backbone()'s return signature (A14 and the eval scripts unpack it)
+        self._last_router_logits = None
         D = 2 if bidir else 1
 
         in_ch = C_emg + (C_imu if use_imu else 0)
@@ -857,17 +921,28 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
             self.demo_embedder = None
 
         # ── Routing module ───────────────────────────────────────────────────
-        self.router, gate_in_dim = build_routing_module(
-            routing_signal   = routing_signal,
-            in_ch            = front_end_out_ch,
-            ctx_hidden_dim   = ctx_hidden,
-            ctx_out_dim      = ctx_out,
-            use_conv_in_proj = True,
-            conv_kernel      = k,
-            gn_groups        = gn_grps,
-            dropout          = MOE_drop,
-            demo_embed_dim   = demo_embed_dim,
-        )
+        if gate_mode == "uniform":
+            # X2: no router, no gate; every expert gets weight 1/E (pure ensembling control)
+            self.router, gate_in_dim = None, None
+        elif routing_signal == "xattn":
+            if not use_imu or front_end_stride > 0:
+                raise ValueError("MOE_routing_signal='xattn' needs use_imu=True and no front-end stride")
+            self.router = CrossModalRouter(C_emg, C_imu, d_model=config["MOE_xattn_d_model"],
+                                           n_heads=config["MOE_xattn_heads"], out_dim=ctx_out,
+                                           dropout=MOE_drop)
+            gate_in_dim = ctx_out
+        else:
+            self.router, gate_in_dim = build_routing_module(
+                routing_signal   = routing_signal,
+                in_ch            = front_end_out_ch,
+                ctx_hidden_dim   = ctx_hidden,
+                ctx_out_dim      = ctx_out,
+                use_conv_in_proj = True,
+                conv_kernel      = k,
+                gn_groups        = gn_grps,
+                dropout          = MOE_drop,
+                demo_embed_dim   = demo_embed_dim,
+            )
 
         # ── Expert CNN encoders ──────────────────────────────────────────────
         expert_cnns = []
@@ -893,16 +968,25 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
             self.shared_expert = None
 
         # ── Gating ──────────────────────────────────────────────────────────
-        self.gate = MOEGate(gate_in_dim, E, top_k=top_k, temperature=gate_temp)
+        self.gate = None if gate_mode == "uniform" else \
+            MOEGate(gate_in_dim, E, top_k=top_k, temperature=gate_temp)
 
-        # ── LSTM ─────────────────────────────────────────────────────────────
-        self.lstm1 = nn.LSTM(cnn_out_ch, lstm_h, batch_first=True, bidirectional=bidir)
-        self.lstm2 = nn.LSTM(lstm_h * D,  lstm_h, batch_first=True, bidirectional=bidir)
-        self.lstm3 = nn.LSTM(lstm_h * D,  lstm_h, batch_first=True, bidirectional=bidir)
-        for lstm in [self.lstm1, self.lstm2, self.lstm3]:
-            _init_lstm(lstm)
-        self.lstm_dropout = nn.Dropout(drop)
-        self.feat_dim = lstm_h * D
+        # ── Temporal model: 3 x LSTM (M0) or a transformer (T2) ─────────────
+        if temporal_model == "lstm":
+            self.lstm1 = nn.LSTM(cnn_out_ch, lstm_h, batch_first=True, bidirectional=bidir)
+            self.lstm2 = nn.LSTM(lstm_h * D,  lstm_h, batch_first=True, bidirectional=bidir)
+            self.lstm3 = nn.LSTM(lstm_h * D,  lstm_h, batch_first=True, bidirectional=bidir)
+            for lstm in [self.lstm1, self.lstm2, self.lstm3]:
+                _init_lstm(lstm)
+            self.lstm_dropout = nn.Dropout(drop)
+            self.feat_dim = lstm_h * D
+        else:
+            from arch_variants.attention import TemporalTransformer
+            d_model = config["tf_d_model"]
+            self.temporal = TemporalTransformer(
+                cnn_out_ch, d_model=d_model, n_heads=config["tf_heads"], n_blocks=config["tf_blocks"],
+                d_ff=int(config["tf_ff_mult"] * d_model), dropout=drop)
+            self.feat_dim = d_model
 
         # ── Head ────────────────────────────────────────────────────────────
         if head_type == "linear":
@@ -915,6 +999,30 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
             )
 
     # ─────────────────────────────────────────────────────────────────────────
+    def _gate(self, x: torch.Tensor, x_emg, x_imu, demographics):
+        """-> (w_hard, w_soft, router_logits or None), each (B, E)."""
+        B = x.shape[0]
+        if self.gate_mode == "uniform":
+            w = x.new_full((B, self.num_experts), 1.0 / self.num_experts)
+            return w, w, None
+        if self.routing_signal == "xattn":
+            r = self.router(x_emg, x_imu)
+        elif self.routing_signal == "context_proj_task":
+            sup = self._task_support
+            if sup is None:
+                raise RuntimeError(
+                    "MOE_routing_signal='context_proj_task' needs the episode's support set: wrap the "
+                    "forward in mamlpp.task_support(model, support_batch, device)")
+            s_emg, s_imu = sup
+            xs = torch.cat([s_emg, s_imu], dim=1) if (self.use_imu and s_imu is not None) else s_emg
+            if self.front_end is not None:
+                xs = self.front_end(xs)
+            r_task = self.router(xs).mean(dim=0, keepdim=True)        # (1, ctx_out)
+            r = torch.cat([self.router(x), r_task.expand(B, -1)], dim=-1)
+        else:
+            r = self._get_routing_vector(x, demographics)
+        return self.gate.forward_with_logits(r)
+
     def _get_routing_vector(self, x: torch.Tensor,
                             demographics: Optional[torch.Tensor]) -> torch.Tensor:
         if self.routing_signal == "context_proj_with_demo":
@@ -934,9 +1042,8 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         if self.front_end is not None:
             x = self.front_end(x)
 
-        # 1. Routing vector
-        r = self._get_routing_vector(x, demographics)
-        w_hard, w_soft = self.gate(r)                              # each (B, E)
+        # 1. Routing vector + gate (uniform for X2)
+        w_hard, w_soft, router_logits = self._gate(x, x_emg, x_imu, demographics)  # each (B, E)
 
         # ── Routing-source override (MoEMeta Port A diagnostic) ──────────────
         # When `_forced_gate_weights` is set to a (E,) or (1, E) tensor, that
@@ -963,15 +1070,24 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
             )
             w_hard = fw.expand(w_hard.shape[0], -1)
             w_soft = w_hard
+            router_logits = None
 
         # 2. Expert CNNs
-        h = _weighted_expert_sum([lambda exp=exp: exp(x) for exp in self.expert_cnns], w_hard)
+        h = _weighted_expert_sum([lambda exp=exp: exp(x) for exp in self.expert_cnns], w_hard,
+                                 skip_unselected=self.skip_unselected)
 
         # 3. Add shared expert if enabled
         if self.shared_expert is not None:
             h = h + self.shared_expert(x)
 
-        # 4. LSTM
+        # 4. Temporal model
+        if self.temporal_model == "transformer":
+            feat, feats, _ = self.temporal(h)
+            self._last_router_logits = router_logits
+            if return_routing:
+                return feat, feats, w_hard, w_soft
+            return feat, feats
+
         h = h.permute(0, 2, 1)
         h1, _ = self.lstm1(h);  h1 = self.lstm_dropout(h1)
         h2, _ = self.lstm2(h1); h2 = self.lstm_dropout(h2)
@@ -981,6 +1097,7 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         l2 = h2.mean(dim=1)
         l3 = h3.mean(dim=1)
 
+        self._last_router_logits = router_logits
         if return_routing:
             return l3, [l1, l2, l3], w_hard, w_soft
         return l3, [l1, l2, l3]
@@ -990,7 +1107,12 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         result = self.backbone(x_emg, x_imu, demographics, return_routing=return_routing)
         if return_routing:
             feat, _, w_hard, w_soft = result
-            return self.head(feat), {"gate_weights": w_hard, "gate_weights_soft": w_soft}
+            info = {"gate_weights": w_hard, "gate_weights_soft": w_soft}
+            if self._last_router_logits is not None:
+                info["router_logits"] = self._last_router_logits
+            self._last_router_logits = None
+            return self.head(feat), info
+        self._last_router_logits = None
         return self.head(result[0])
 
     def get_features(self, x_emg, x_imu=None, demographics=None):

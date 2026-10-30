@@ -113,7 +113,7 @@ HPO_DB_DIR = Path(os.environ["HPO_DB_DIR"])   # set by the launcher (sub2/hpo/op
 HPO_DB_DIR.mkdir(parents=True, exist_ok=True)
 
 # MoE collapse detection (same as v3 HPO script)
-COLLAPSE_MAX_LOAD_THRESHOLD = 0.80
+# (collapse threshold: relative to the uniform selection rate, set in mamlpp_pretrain; see _objective_episodic)
 COLLAPSE_PENALTY            = 0.0
 
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M")
@@ -239,6 +239,73 @@ ABLATION_PROFILES: dict[str, dict] = {
 }
 
 # =============================================================================
+# Architecture-exploration variants (docs/SPEC_architecture_exploration.md)
+# =============================================================================
+# Each variant is its OWN Optuna study with the same budget (never a categorical arm inside one
+# study). "base" = the profile whose HP groups it reuses (M0: MAML+MoE, A4: MAML no MoE at the
+# param-matched widths, A2: supervised); "family" = model builder (legacy = pretrain_models /
+# MOE_encoder, flexnet = arch_variants.flexnet, metric = arch_variants.metric_learners);
+# "set" = fixed config overrides; "spaces" = extra HP groups (see _apply_variant).
+ARCH_VARIANTS: dict[str, dict] = {
+    # ── MoE structure (same expert bank as M0; one change each) ──────────────
+    "X2":  dict(base="M0", family="legacy", set={"MOE_gate_mode": "uniform"}, spaces=("moe_uniform",),
+                note="M0 with a fixed uniform gate (1/E, no router): routing or just ensembling?"),
+    "X3":  dict(base="M0", family="legacy", set={"MOE_skip_unselected_experts": True}, spaces=("moe_sparse",),
+                note="Sparse top-1/2 over a small bank + load balance + router z-loss (ST-MoE recipe)"),
+    "X4":  dict(base="M0", family="legacy", set={"MOE_routing_signal": "context_proj_task"}, spaces=(),
+                note="Task-conditioned routing: [sample context, support-set mean context]"),
+    "X5":  dict(base="M0", family="legacy", set={"MOE_use_shared_expert": True}, spaces=(),
+                note="Shared always-on expert + routed experts (DeepSeek-MoE style)"),
+    "X6":  dict(base="M0", family="legacy", set={"MOE_routing_signal": "xattn"}, spaces=("xattn_router",),
+                note="Router input = EMG tokens cross-attending to IMU tokens"),
+    # ── EMG-IMU fusion, screened on the no-MoE MAML backbone (reference: A4 = early concat) ─
+    "F1":  dict(base="A4", family="flexnet", set={"fusion_mode": "mid"}, spaces=("fusion",),
+                note="Mid fusion: per-modality CNNs, features concatenated before the LSTM"),
+    "F2":  dict(base="A4", family="flexnet", set={"fusion_mode": "film"}, spaces=("fusion",),
+                note="FiLM: IMU CNN produces per-channel, per-step gamma/beta for the EMG CNN"),
+    "F3":  dict(base="A4", family="flexnet", set={"fusion_mode": "xattn"}, spaces=("fusion", "fusion_xattn"),
+                note="Cross-attention fusion: EMG tokens <-> IMU tokens"),
+    # ── Transformers ─────────────────────────────────────────────────────────
+    "T0":  dict(base="A4", family="flexnet", set={"fusion_mode": "none", "temporal_model": "transformer"},
+                spaces=("tf",), note="Single transformer on the 64 time steps (no CNN, no MoE), MAML++"),
+    "T2":  dict(base="M0", family="legacy", set={"temporal_model": "transformer"}, spaces=("tf",),
+                note="M0's CNN expert bank, LSTM replaced by a transformer"),
+    "T4":  dict(base="M0", family="flexnet",
+                set={"fusion_mode": "none", "temporal_model": "transformer", "tf_moe_every": 2,
+                     "MOE_skip_unselected_experts": True},
+                spaces=("tf", "moe_sparse"), note="Transformer with sparse MoE feed-forward layers (Switch-style)"),
+    # ── Alternatives to MAML (episodic metric learners, no inner loop) ──────────
+    "P1":       dict(base="A4", family="metric", set={"metric_kind": "proto", "metric_backbone": "cnnlstm"},
+                     spaces=("metric",), note="ProtoNet trained episodically (A4 encoder)"),
+    "P1_moe":   dict(base="A1", family="metric", set={"metric_kind": "proto", "metric_backbone": "moe"},
+                     spaces=("metric",), note="ProtoNet trained episodically on M0's expert-bank encoder"),
+    "P1_match": dict(base="A4", family="metric", set={"metric_kind": "matching", "metric_backbone": "cnnlstm"},
+                     spaces=("metric",), note="Matching Network (no FCE)"),
+    "P1_rel":   dict(base="A4", family="metric", set={"metric_kind": "relation", "metric_backbone": "cnnlstm"},
+                     spaces=("metric", "metric_relation"), note="Relation Network (CE on relation scores)"),
+    "P1_ridge": dict(base="A4", family="metric", set={"metric_kind": "ridge", "metric_backbone": "cnnlstm"},
+                     spaces=("metric",), note="R2-D2 closed-form ridge head"),
+    "P1_feat":  dict(base="A4", family="metric", set={"metric_kind": "feat", "metric_backbone": "cnnlstm"},
+                     spaces=("metric",), note="FEAT: set-to-set adapted prototypes"),
+    # ── Other learning approaches ──────────────────────────────────────────
+    "P3":       dict(base="A2", family="legacy", set={"adann_disc_hidden": 128}, spaces=("adann",),
+                     note="ADANN-style: supervised + gradient-reversal user head, then fine-tune"),
+    "A4_ANIL":  dict(base="A4", family="legacy", set={"maml_inner_param_include": ["head"]}, spaces=(),
+                     note="ANIL: inner loop adapts the head only (A4 backbone)"),
+    "M0_ANIL":  dict(base="M0", family="legacy", set={"maml_inner_param_include": ["head"]}, spaces=(),
+                     note="ANIL on M0 (MoEMeta Port B is close to this)"),
+}
+
+for _vid, _v in ARCH_VARIANTS.items():
+    _p = dict(ABLATION_PROFILES[_v["base"]])
+    _p.update(variant=_v, note=_v["note"], script=None)
+    if _v["family"] == "metric":
+        _p.update(use_maml=False, use_sup_ft=False, eval_mode="metric")
+    if _vid == "T4":
+        _p["fix_arch"] = False
+    ABLATION_PROFILES[_vid] = _p
+
+# =============================================================================
 # Warm-start params  (M0 only — top-10 from the existing v3 50-step HPO run)
 # =============================================================================
 
@@ -288,6 +355,63 @@ ABLATIONS_WITH_M0_WARMSTART = {} #{"M0", "A5", "A8", "A12"}
 # =============================================================================
 # HP suggestion helpers
 # =============================================================================
+
+def _load_fixed_params() -> dict:
+    """HPO_FIXED_PARAMS_JSON (launcher --fixed-params): {param name: value} frozen in every trial."""
+    p = os.environ.get("HPO_FIXED_PARAMS_JSON", "")
+    if not p:
+        return {}
+    fixed = json.loads(Path(p).read_text())
+    if not isinstance(fixed, dict) or not fixed:
+        raise SystemExit(f"HPO_FIXED_PARAMS_JSON={p} must hold a non-empty {{name: value}} object")
+    return fixed
+
+
+class _FixedParamTrial:
+    """
+    Wraps an Optuna trial so suggest_*(name, ...) returns the frozen value for names in `fixed`
+    and samples everything else. Used by the architecture screen: the shared training HPs (outer
+    LR, MAML step sizes, ...) are frozen at one tuned config, so each variant's study only searches
+    its own few architecture HPs and a small budget suffices. A frozen value outside the search
+    range raises (no silent clipping). Every name in `fixed` must actually be suggested by the
+    profile; objective() checks that after the config is built.
+    """
+
+    def __init__(self, trial, fixed: dict):
+        self._trial, self._fixed, self.used = trial, fixed, set()
+
+    def __getattr__(self, name):
+        return getattr(self._trial, name)
+
+    def _get(self, name, check):
+        v = self._fixed[name]
+        if not check(v):
+            raise ValueError(f"fixed param {name}={v!r} is outside this profile's search range")
+        self.used.add(name)
+        return v
+
+    def suggest_float(self, name, low, high, **kw):
+        if name in self._fixed:
+            return float(self._get(name, lambda v: low <= float(v) <= high))
+        return self._trial.suggest_float(name, low, high, **kw)
+
+    def suggest_int(self, name, low, high, **kw):
+        if name in self._fixed:
+            return int(self._get(name, lambda v: low <= int(v) <= high))
+        return self._trial.suggest_int(name, low, high, **kw)
+
+    def suggest_categorical(self, name, choices):
+        if name in self._fixed:
+            return self._get(name, lambda v: v in choices)
+        return self._trial.suggest_categorical(name, choices)
+
+
+def _with_fixed_params(trial):
+    fixed = _load_fixed_params()
+    if not fixed or isinstance(trial, _FixedParamTrial):
+        return trial
+    return _FixedParamTrial(trial, fixed)
+
 
 def _suggest_shared_hps(trial: optuna.Trial, config: dict, fix_arch: bool) -> dict:
     """
@@ -385,7 +509,8 @@ def _suggest_maml_hps(trial: optuna.Trial, config: dict) -> dict:
     return config
 
 
-def _suggest_moe_hps(trial: optuna.Trial, config: dict, ablation_id: str) -> dict:
+def _suggest_moe_hps(trial: optuna.Trial, config: dict, ablation_id: str,
+                     moe_space: str = "m0") -> dict:
     """
     Suggest MoE-specific HPs. Only called when use_moe=True.
 
@@ -393,7 +518,36 @@ def _suggest_moe_hps(trial: optuna.Trial, config: dict, ablation_id: str) -> dic
     set used by the sweep script so HPO explores the full mountain-curve range.
     For all other ablations, num_experts is drawn from the HPO-friendly
     coarser grid.
+
+    moe_space (architecture variants):
+      "m0"      the M0 space below
+      "uniform" X2: fixed uniform gate. Only the bank size and expert dropout are searched; the
+                router HPs do not exist (top_k = E, no aux loss).
+      "sparse"  X3 / T4: small bank, top-1/2, Switch load balance + router z-loss, temperature 1
+                (the ST-MoE recipe; the z-loss replaces temperature as the logit regulariser).
     """
+    if moe_space == "uniform":
+        E = trial.suggest_categorical("num_experts", [4, 8, 16, 22, 28, 36])
+        config.update(num_experts=E, MOE_top_k=E, top_k=E, MOE_gate_temperature=1.0, MOE_aux_coeff=0.0,
+                      MOE_ctx_out_dim=32, MOE_ctx_hidden_dim=64, apply_MOE_aux_loss_inner_outer="outer",
+                      MOE_router_z_coeff=0.0)
+        config["MOE_dropout"] = trial.suggest_float("MOE_dropout", 1e-4, 0.2, log=True)
+        return _moe_fixed(config)
+    if moe_space == "sparse":
+        E = trial.suggest_categorical("num_experts", [4, 8, 16])
+        k = trial.suggest_categorical("MOE_top_k", [1, 2])
+        config.update(num_experts=E, MOE_top_k=k, top_k=k, MOE_gate_temperature=1.0)
+        config["MOE_aux_coeff"]      = trial.suggest_float("MOE_aux_coeff", 1e-3, 0.1, log=True)
+        config["MOE_router_z_coeff"] = trial.suggest_float("MOE_router_z_coeff", 1e-4, 1e-2, log=True)
+        config["MOE_ctx_out_dim"]    = trial.suggest_categorical("MOE_ctx_out_dim", [16, 32, 64])
+        config["MOE_ctx_hidden_dim"] = 64
+        config["MOE_dropout"]        = trial.suggest_float("MOE_dropout", 1e-4, 0.2, log=True)
+        config["apply_MOE_aux_loss_inner_outer"] = "outer"
+        return _moe_fixed(config)
+    if moe_space != "m0":
+        raise ValueError(f"unknown moe_space {moe_space!r}")
+    config["MOE_router_z_coeff"] = 0.0
+
     if ablation_id == "A5":
         # Match the sweep values exactly — HPO finds the best overall config
         # within this range; the sweep script then fixes num_experts to each
@@ -417,7 +571,10 @@ def _suggest_moe_hps(trial: optuna.Trial, config: dict, ablation_id: str) -> dic
     config["MOE_dropout"]         = trial.suggest_float("MOE_dropout", 1e-4, 0.2, log=True)
     config["apply_MOE_aux_loss_inner_outer"] = trial.suggest_categorical(
         "MOE_aux_loss_plcmt", ["inner", "both", "outer"])
+    return _moe_fixed(config)
 
+
+def _moe_fixed(config: dict) -> dict:
     # Fixed MoE settings
     config["use_MOE"]              = True
     config["MOE_placement"]        = "encoder"
@@ -446,6 +603,58 @@ def _suggest_supervised_ft_hps(trial: optuna.Trial, config: dict) -> dict:
     config["ft_steps"]        = trial.suggest_categorical("ft_steps", [10, 25, 50, 100, 200])
     config["ft_optimizer"]    = "adam"
     config["ft_weight_decay"] = config["weight_decay"]
+    return config
+
+
+def _arch_fixed_defaults(config: dict) -> dict:
+    """
+    Explicit values for every architecture-exploration key, written into every trial's config (and so
+    into its printed snapshot and checkpoint). These reproduce M0 / A4 exactly; variants overwrite
+    them in _apply_variant. Set here rather than read with .get() defaults in the models, so that
+    no model silently falls back to a value nobody chose.
+    """
+    config.update(
+        arch_family="legacy",
+        MOE_gate_mode="learned", MOE_routing_signal="context_proj", MOE_use_shared_expert=False,
+        MOE_router_z_coeff=0.0, MOE_skip_unselected_experts=False,
+        MOE_xattn_d_model=64, MOE_xattn_heads=4,
+        temporal_model="lstm",
+        fusion_mode="early", fusion_branch_width=0.71, fusion_d_model=64, fusion_heads=4,
+        tf_d_model=128, tf_heads=4, tf_blocks=3, tf_ff_mult=2, tf_moe_every=0,
+        maml_inner_param_include=None,
+    )
+    return config
+
+
+def _apply_variant(trial: optuna.Trial, config: dict, v: dict) -> dict:
+    """Fixed overrides + the extra HP groups of an architecture variant (ARCH_VARIANTS)."""
+    config["arch_family"] = v["family"]
+    config.update(copy.deepcopy(v["set"]))
+    spaces = v["spaces"]
+    if "fusion" in spaces:
+        # 0.71 ~ 1/sqrt(2): two branches at this width have about the conv parameters of one early CNN
+        config["fusion_branch_width"] = trial.suggest_categorical("fusion_branch_width", [0.5, 0.71, 1.0])
+    if "fusion_xattn" in spaces:
+        config["fusion_d_model"] = trial.suggest_categorical("fusion_d_model", [32, 64, 128])
+    if "xattn_router" in spaces:
+        config["MOE_xattn_d_model"] = trial.suggest_categorical("MOE_xattn_d_model", [32, 64])
+    if "tf" in spaces:
+        # transformers get their own capacity / regularisation range (SPEC section 2C)
+        config["tf_d_model"] = trial.suggest_categorical("tf_d_model", [64, 128, 192])
+        config["tf_heads"]   = trial.suggest_categorical("tf_heads", [4, 8])
+        config["tf_blocks"]  = trial.suggest_categorical("tf_blocks", [2, 3, 4])
+        config["tf_ff_mult"] = trial.suggest_categorical("tf_ff_mult", [2, 4])
+        config["dropout"]    = trial.suggest_float("tf_dropout", 0.0, 0.3)
+    if "metric" in spaces:
+        # episodic training without an inner loop: no MAML HPs; meta-batch as in MAML
+        config.update(meta_learning=True, meta_batchsize=24, label_smooth=0.0,
+                      maml_inner_steps=0, maml_inner_steps_eval=0)
+        config["episodes_per_epoch_train"] = trial.suggest_categorical(
+            "episodes_per_epoch_train", [100, 200, 250, 500])
+    if "metric_relation" in spaces:
+        config["metric_relation_hidden"] = trial.suggest_categorical("metric_relation_hidden", [64, 128, 256])
+    if "adann" in spaces:
+        config["adann_lambda"] = trial.suggest_float("adann_lambda", 0.01, 1.0, log=True)
     return config
 
 
@@ -496,6 +705,7 @@ def build_config_from_trial(
     sys.path.append(os.path.join(os.path.dirname(__file__), 'test_eval_files'))
     from ablation_config import make_base_config, replace_head_for_eval
 
+    trial = _with_fixed_params(trial)
     config = make_base_config(ablation_id=ablation_id)
 
     config["results_save_dir"] = str(RUN_DIR)
@@ -564,6 +774,8 @@ def build_config_from_trial(
         config["front_end_stride"] = 20
 
     # ── Suggest HPs by group ─────────────────────────────────────────────────
+    _arch_fixed_defaults(config)
+    variant = profile.get("variant")
     _suggest_shared_hps(trial, config, fix_arch=profile["fix_arch"])
 
     if profile["use_maml"]:
@@ -572,7 +784,11 @@ def build_config_from_trial(
         _suggest_no_maml_fixed(config)
 
     if profile["use_moe"]:
-        _suggest_moe_hps(trial, config, ablation_id=ablation_id)
+        moe_space = "m0"
+        if variant is not None:
+            moe_space = ("uniform" if "moe_uniform" in variant["spaces"]
+                         else "sparse" if "moe_sparse" in variant["spaces"] else "m0")
+        _suggest_moe_hps(trial, config, ablation_id=ablation_id, moe_space=moe_space)
     else:
         _suggest_no_moe_fixed(config)
 
@@ -580,6 +796,17 @@ def build_config_from_trial(
         _suggest_supervised_ft_hps(trial, config)
         _suggest_label_smooth_supervised(trial, config)
 
+    if variant is not None:
+        _apply_variant(trial, config, variant)
+
+    if isinstance(trial, _FixedParamTrial):
+        unused = set(trial._fixed) - trial.used
+        if unused:
+            raise SystemExit(f"fixed params {sorted(unused)} are not searched by {ablation_id} (or are "
+                             f"conditionally inactive); remove them from HPO_FIXED_PARAMS_JSON")
+        config["hpo_fixed_params"] = dict(trial._fixed)
+        if not isinstance(trial._trial, optuna.trial.FixedTrial):
+            trial._trial.set_user_attr("fixed_params", dict(trial._fixed))
     return config
 
 
@@ -587,17 +814,30 @@ def build_config_from_trial(
 # Model builder
 # =============================================================================
 
+LAST_MODEL_N_PARAMS = None   # set by build_model; read into the trial's user attrs by objective()
+
+
 def build_model(config: dict):
     """Build model matching ablation profile. Mirrors ablation_config.py builders."""
-    use_moe  = config.get("use_MOE",      False)
-
-    if use_moe:
+    global LAST_MODEL_N_PARAMS
+    family = config["arch_family"]
+    if family == "flexnet":
+        from arch_variants.flexnet import build_flexnet
+        model = build_flexnet(config)
+    elif family == "metric":
+        from arch_variants.metric_learners import build_metric_learner
+        model = build_metric_learner(config)
+    elif family != "legacy":
+        raise ValueError(f"unknown arch_family {family!r}")
+    elif config.get("use_MOE", False):
         from MOE.MOE_encoder import build_MOE_model
         model = build_MOE_model(config)
     else:
         from pretraining.pretrain_models import build_model as _build
         model = _build(config)
 
+    LAST_MODEL_N_PARAMS = int(sum(p.numel() for p in model.parameters()))
+    print(f"  [build_model] {family}: {LAST_MODEL_N_PARAMS:,} parameters")
     model.to(config["device"])
     return model
 
@@ -725,13 +965,20 @@ def _objective_episodic(trial: optuna.Trial, config: dict) -> float:
           f"global_best={global_best_val_acc*100:.2f}% (ep{int(np.argmax(val_acc_log))}), "
           f"burnin_best={burnin_best_val_acc*100:.2f}% (ep{burnin_best_epoch})")
 
-    # MoE collapse check
-    if config.get("use_MOE", False):
+    # MoE collapse check.
+    # Uses the report's own is_collapsed flag, whose threshold is relative to the uniform selection
+    # rate (mamlpp_pretrain: (1 + 0.8) * top_k / E for top-k routing). The previous absolute test
+    # (max selection freq > 0.80) zeroed every perfectly balanced trial with top_k / E >~ 0.7
+    # (e.g. E=8, k=6: uniform rate 0.75), i.e. it silently removed part of the M0 search space.
+    # A uniform gate (X2) cannot collapse and is not checked (its argmax "dominant expert" is a tie).
+    if config.get("use_MOE", False) and config["MOE_gate_mode"] != "uniform":
         max_load = _check_moe_collapse(history, num_experts=config["num_experts"])
         trial.set_user_attr("final_max_expert_load",
                             max_load if max_load is not None else -1.0)
-        if max_load is not None and max_load > COLLAPSE_MAX_LOAD_THRESHOLD:
-            print(f"  [Trial {trial.number}] MoE COLLAPSED (max_load={max_load:.2f}). Penalising.")
+        reports = history.get("routing_reports", [])
+        if reports and reports[-1].get("is_collapsed", False):
+            print(f"  [Trial {trial.number}] MoE COLLAPSED (max selection freq={max_load:.2f}, "
+                  f"threshold={reports[-1]['collapse_freq_threshold']:.2f}). Penalising.")
             return COLLAPSE_PENALTY
 
     # Save checkpoint (best state across all epochs, for post-hoc analysis)
@@ -761,6 +1008,15 @@ def _objective_episodic(trial: optuna.Trial, config: dict) -> float:
 
     per_user_means = [float(np.mean(accs)) for accs in user_metrics.values()]
     mean_acc = float(np.nanmean(per_user_means))
+
+    if config.get("use_MOE", False):
+        # routing on the dev episodes after adaptation (what the model predicts with); needed to read
+        # X1 vs X2 (routing vs ensembling) and the per-user routing claim
+        from MOE.routing_metrics import collect_episode_routing, format_summary
+        rs = collect_episode_routing(trained_model, config, val_dl, adapted=True)
+        if rs is not None:
+            print(f"  [Trial {trial.number}] Routing on dev episodes (adapted):\n{format_summary(rs)}")
+            trial.set_user_attr("routing", {k: v for k, v in rs.items() if not isinstance(v, list)})
 
     trial.set_user_attr("global_best_val_acc",  float(global_best_val_acc))
     trial.set_user_attr("burnin_best_val_acc",  burnin_best_val_acc)
@@ -811,7 +1067,11 @@ def _objective_supervised(trial: optuna.Trial, config: dict) -> float:
     )
 
     model = build_model(config)
-    trained_model, history = pretrain(model, train_dl, val_dl_flat, config)
+    if "adann_lambda" in config:          # P3: gradient-reversal user head during pretraining
+        from arch_variants.adann import adann_pretrain
+        trained_model, history = adann_pretrain(model, train_dl, val_dl_flat, config)
+    else:
+        trained_model, history = pretrain(model, train_dl, val_dl_flat, config)
     best_val_acc = max(history["val_acc"]) if history["val_acc"] else float("nan")
 
     # Save checkpoint
@@ -871,6 +1131,43 @@ def _objective_supervised(trial: optuna.Trial, config: dict) -> float:
     trial.set_user_attr("per_user_val_accs",     per_user_means)
     print(f"  [Trial {trial.number}] Val acc (head_only): {mean_acc*100:.2f}% "
           f"(pretrain best: {best_val_acc*100:.2f}%)")
+    return mean_acc
+
+
+def _objective_metric(trial: optuna.Trial, config: dict) -> float:
+    """
+    Objective for the episodic metric learners (P1 family): same cached dev episodes, same per-user
+    mean at 10-way 1-shot, same burn-in and pruning as _objective_episodic; no inner loop.
+    """
+    from MAML.maml_data_pipeline import get_maml_dataloaders
+    from arch_variants.metric_learners import metric_pretrain, metric_adapt_and_eval
+    from ablation_config import tensor_dict_file as _tdp
+
+    HPO_BURNIN_EPOCHS = 5
+    train_dl, val_dl = get_maml_dataloaders(config, tensor_dict_path=_tdp(config))
+    model = build_model(config)
+
+    def _prune_cb(epoch, val_acc):
+        trial.report(val_acc, epoch)
+        if trial.should_prune():
+            raise optuna.TrialPruned()
+
+    trained_model, history = metric_pretrain(model, config, train_dl, episodic_val_loader=val_dl,
+                                             epoch_callback=_prune_cb)
+    val_acc_log = history["val_acc_log"]
+    post = val_acc_log[HPO_BURNIN_EPOCHS:] or val_acc_log
+    trial.set_user_attr("burnin_best_val_acc", float(max(post)) if post else 0.0)
+    trial.set_user_attr("n_epochs_run", len(val_acc_log))
+
+    user_metrics: dict = defaultdict(list)
+    for batch in val_dl:
+        m = metric_adapt_and_eval(trained_model, config, batch["support"], batch["query"])
+        user_metrics[batch["user_id"]].append(m["acc"])
+    per_user_means = [float(np.mean(a)) for a in user_metrics.values()]
+    mean_acc = float(np.nanmean(per_user_means))
+    trial.set_user_attr("per_user_val_accs", per_user_means)
+    print(f"  [Trial {trial.number}] metric learner ({config['metric_kind']}, {config['metric_backbone']}): "
+          f"dev per-user mean {mean_acc*100:.2f}%")
     return mean_acc
 
 
@@ -990,12 +1287,52 @@ def _objective_a11(trial: optuna.Trial) -> float:
 # Optuna objective wrapper
 # =============================================================================
 
+def _record_timing(trial, ablation_id: str, start: float, state: str) -> None:
+    """
+    Per-trial cost, stored in the Optuna journal (user attrs) AND printed as one greppable line, for
+    every trial, including pruned and crashed ones. hpo_report.py reads the journal; the line is for
+    grep: grep -h HPO_TRIAL_TIMING <log dir>/*.out
+    """
+    import socket
+    wall = time.time() - start
+    info = {
+        "ablation": ablation_id, "trial": trial.number, "state": state,
+        "wall_time_s": round(wall, 1), "gpu_hours": round(wall / 3600.0, 4),
+        "n_params": LAST_MODEL_N_PARAMS,
+        "host": socket.gethostname(), "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "slurm_array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
+        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "peak_gpu_mem_gb": (round(torch.cuda.max_memory_allocated() / 1e9, 2)
+                            if torch.cuda.is_available() else None),
+        "emg_repr": os.environ.get("EMG_REPR"),
+    }
+    if not isinstance(trial, optuna.trial.FixedTrial):
+        for k, v in info.items():
+            trial.set_user_attr(k, v)
+    print("HPO_TRIAL_TIMING " + json.dumps(info), flush=True)
+
+
 def objective(trial: optuna.Trial, ablation_id: str, profile: dict) -> float:
     trial_start = time.time()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
     print("=" * 80)
-    print(f"[{ablation_id} | Trial {trial.number}] Starting")
+    print(f"[{ablation_id} | Trial {trial.number}] Starting  ({profile['note']})")
     print("=" * 80)
+    state = "FAIL"
+    try:
+        result = _objective_dispatch(trial, ablation_id, profile)
+        state = "COMPLETE"
+        return result
+    except optuna.TrialPruned:
+        state = "PRUNED"
+        raise
+    finally:
+        _record_timing(trial, ablation_id, trial_start, state)
 
+
+def _objective_dispatch(trial: optuna.Trial, ablation_id: str, profile: dict) -> float:
+    trial_start = time.time()
     if profile["is_a11"]:
         # A11 has its own fully self-contained objective — bypass the config
         # builder entirely since it would produce meaningless training HPs.
@@ -1014,6 +1351,8 @@ def objective(trial: optuna.Trial, ablation_id: str, profile: dict) -> float:
             result = _objective_episodic(trial, config)
         elif profile["eval_mode"] == "supervised":
             result = _objective_supervised(trial, config)
+        elif profile["eval_mode"] == "metric":
+            result = _objective_metric(trial, config)
         else:
             raise ValueError(f"Unknown eval_mode: {profile['eval_mode']!r}")
 
@@ -1073,7 +1412,10 @@ def study_name_for(ablation_id: str) -> str:
     emg_repr = os.environ.get("EMG_REPR")
     if not emg_repr:
         raise SystemExit("EMG_REPR is not set (hpo_ablation_launcher.sh --emg-repr env20|fs64)")
-    return f"ablation_{ablation_id}_10w1s_kfold7_{emg_repr}_v1"
+    # HPO_STUDY_SUFFIX (launcher --study-suffix) separates e.g. a screening study or an E x k grid
+    # from the main study of the same ablation
+    suffix = os.environ.get("HPO_STUDY_SUFFIX", "")
+    return f"ablation_{ablation_id}_10w1s_kfold7_{emg_repr}_v1" + (f"_{suffix}" if suffix else "")
 
 
 def run_study(ablation_id: str, profile: dict, n_trials: int = 1) -> optuna.Study:
@@ -1178,7 +1520,29 @@ if __name__ == "__main__":
                         help="Re-evaluate this finished trial's exact config (top-3 re-evaluation) "
                              "instead of running a new trial. Needs --seed.")
     parser.add_argument("--seed", type=int, default=None, help="Training seed for --replay-trial.")
+    parser.add_argument("--enqueue-json", type=str, default=None,
+                        help="JSON list of param dicts to enqueue into the study (e.g. an E x top_k grid "
+                             "from hpo_tools.py grid). Workers run queued trials before sampling new ones.")
+    parser.add_argument("--enqueue-only", action="store_true",
+                        help="With --enqueue-json: enqueue and exit (run once, on the login node, BEFORE "
+                             "launching the array, so parallel workers cannot enqueue duplicates).")
     args = parser.parse_args()
+
+    if args.enqueue_json:
+        if not args.enqueue_only:
+            raise SystemExit("--enqueue-json needs --enqueue-only (enqueue once, then launch the array)")
+        _name = study_name_for(args.ablation)
+        _study = optuna.create_study(
+            study_name=_name, direction="maximize", load_if_exists=True,
+            storage=JournalStorage(JournalFileBackend(str(HPO_DB_DIR / f"{_name}.log"))))
+        _items = json.loads(Path(args.enqueue_json).read_text())
+        if len(_study.trials) > 0:
+            raise SystemExit(f"study {_name} already has {len(_study.trials)} trials; refusing to enqueue "
+                             f"into it (use a new --study-suffix)")
+        for _p in _items:
+            _study.enqueue_trial(_p)
+        print(f"Enqueued {len(_items)} trials into {_name} ({HPO_DB_DIR / (_name + '.log')})")
+        sys.exit(0)
 
     if args.data_dir:
         DATA_DIR = Path(args.data_dir).resolve()
@@ -1215,7 +1579,9 @@ if __name__ == "__main__":
         study = optuna.load_study(
             study_name=study_name,
             storage=JournalStorage(JournalFileBackend(str(HPO_DB_DIR / f"{study_name}.log"))))
-        params = study.trials[args.replay_trial].params
+        _t = study.trials[args.replay_trial]
+        # frozen params of a screening study (HPO_FIXED_PARAMS_JSON) are not Optuna params; restore them
+        params = {**_t.user_attrs.get("fixed_params", {}), **_t.params}
         score = objective(optuna.trial.FixedTrial(params), ablation_id, profile)
         out = RUN_DIR / f"reeval_{ablation_id}_trial{args.replay_trial}_seed{args.seed}.json"
         out.write_text(json.dumps({"ablation": ablation_id, "trial": args.replay_trial,

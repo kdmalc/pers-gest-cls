@@ -15,6 +15,15 @@
 #   bash hpo_ablation_launcher.sh A1 --debug              # single trial, debug partition,
 #                                                          # no journal write, warm-start enqueued
 #   bash hpo_ablation_launcher.sh A3 --n-trials 50        # custom trial count
+#   bash hpo_ablation_launcher.sh X2 F1 T0 --emg-repr fs64 --n-trials 24 --study-suffix screen \
+#        --fixed-params /scratch/.../shared_maml.json          # (hpo_tools.py freeze makes the JSON)
+#                                                          # architecture screen (ARCH_VARIANTS tokens
+#                                                          # in ablation_hpo.py: X2-X6 F1-F3 T0 T2 T4
+#                                                          # P1 P1_moe P1_match P1_rel P1_ridge P1_feat
+#                                                          # P3 A4_ANIL M0_ANIL)
+#
+# Per-trial cost: every trial prints one "HPO_TRIAL_TIMING {json}" line and stores the same fields in
+# the journal; summarise with  python system/NOTS/paper/ablations/hpo_tools.py report
 #
 # Output layout:
 #   Optuna journals : $HPO_DB_DIR/ablation_<ID>_10w1s_kfold7_<EMG_REPR>_v1.log
@@ -62,6 +71,8 @@ N_TRIALS=60     # equal budget per method family (docs/SPEC_hpo.md)
 EXPLICIT_N_TRIALS=""   
 OVERRIDE_PARTITION=""
 EMG_REPR_ARG=""        # required: env20 | fs64 (no silent default)
+STUDY_SUFFIX=""        # optional: separate study of the same ablation (screen, Exk grid)
+FIXED_PARAMS=""        # optional: absolute path of a {param: value} JSON frozen in every trial (screen)
 i=0
 args_array=("$@")
 
@@ -74,8 +85,10 @@ while [[ $i -lt ${#args_array[@]} ]]; do
         --n-trials)   i=$((i+1)); N_TRIALS="${args_array[$i]}"; EXPLICIT_N_TRIALS="${args_array[$i]}" ;;
         --partition)  i=$((i+1)); OVERRIDE_PARTITION="${args_array[$i]}" ;;
         --emg-repr)   i=$((i+1)); EMG_REPR_ARG="${args_array[$i]}" ;;
+        --study-suffix) i=$((i+1)); STUDY_SUFFIX="${args_array[$i]}" ;;
+        --fixed-params) i=$((i+1)); FIXED_PARAMS="${args_array[$i]}" ;;
         all)         ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 A12) ;;
-        -*)           echo "WARNING: Unknown flag '$arg' — ignoring." ;;
+        -*)           echo "ERROR: unknown flag '$arg'"; exit 1 ;;
         *)            ABLATIONS+=("$arg") ;;
     esac
     i=$((i+1))
@@ -91,6 +104,10 @@ if [[ ${#ABLATIONS[@]} -eq 0 ]]; then
     echo "ERROR: No ablations specified."
     echo "Usage: bash hpo_ablation_launcher.sh [M0|A1|A2|A3|A4|A5|A7|A8|A11|A12|M0_MOE_hpo|all] --emg-repr {env20|fs64} [--dry-run] [--debug] [--n-trials N] [--partition PARTITION]"
     exit 1
+fi
+if [[ -n "$FIXED_PARAMS" ]]; then
+    [[ "$FIXED_PARAMS" = /* && -f "$FIXED_PARAMS" ]] || { echo "ERROR: --fixed-params needs an existing absolute path (got '$FIXED_PARAMS')"; exit 1; }
+    [[ -n "$STUDY_SUFFIX" ]] || { echo "ERROR: --fixed-params needs --study-suffix (a frozen-HP study must not share the main study's journal)"; exit 1; }
 fi
 case "$EMG_REPR_ARG" in
     env20|fs64) ;;
@@ -231,7 +248,7 @@ for ABLATION in "${ABLATIONS[@]}"; do
         EFFECTIVE_PARTITION="$PARTITION"
         EFFECTIVE_CONCURRENCY="10"
         EFFECTIVE_SCRIPT="$HPO_SCRIPT_PATH"
-        EFFECTIVE_JOURNAL="$HPO_DB_DIR/ablation_${ABLATION}_10w1s_kfold7_${EMG_REPR_ARG}_v1.log"
+        EFFECTIVE_JOURNAL="$HPO_DB_DIR/ablation_${ABLATION}_10w1s_kfold7_${EMG_REPR_ARG}_v1${STUDY_SUFFIX:+_$STUDY_SUFFIX}.log"
     fi
 
     # --partition flag overrides whatever was resolved above for all ablations
@@ -244,7 +261,7 @@ for ABLATION in "${ABLATIONS[@]}"; do
     ARRAY_END=$((EFFECTIVE_N_TRIALS - 1))
 
     JOB_NAME="hpo_${ABLATION}"
-    OUT_DIR="$HPO_OUT_BASE/$EMG_REPR_ARG/$ABLATION"
+    OUT_DIR="$HPO_OUT_BASE/$EMG_REPR_ARG/$ABLATION${STUDY_SUFFIX:+_$STUDY_SUFFIX}"
     mkdir -p "$OUT_DIR"
 
     if [[ "$DEBUG" == true ]]; then
@@ -269,6 +286,8 @@ DATA_DIR=$DATA_DIR,\
 HPO_DB_DIR=$HPO_DB_DIR,\
 HPO_USE_JOURNAL=0,\
 EMG_REPR=$EMG_REPR_ARG,\
+HPO_STUDY_SUFFIX=$STUDY_SUFFIX,\
+HPO_FIXED_PARAMS_JSON=$FIXED_PARAMS,\
 N_TRIALS=1,\
 MAML_DIR=$CODE_DIR/system/MAML,\
 MOE_DIR=$CODE_DIR/system/MOE,\
@@ -308,6 +327,8 @@ DATA_DIR=$DATA_DIR,\
 HPO_DB_DIR=$HPO_DB_DIR,\
 HPO_USE_JOURNAL=1,\
 EMG_REPR=$EMG_REPR_ARG,\
+HPO_STUDY_SUFFIX=$STUDY_SUFFIX,\
+HPO_FIXED_PARAMS_JSON=$FIXED_PARAMS,\
 N_TRIALS=1,\
 MAML_DIR=$CODE_DIR/system/MAML,\
 MOE_DIR=$CODE_DIR/system/MOE,\
@@ -325,6 +346,7 @@ PYTHONPATH=$CODE_DIR:$CODE_DIR/system/MAML:$CODE_DIR/system/MOE:${PYTHONPATH:-}"
         echo "  Memory     : $MEM"
         echo "  Output dir : $OUT_DIR"
         echo "  Optuna DB  : $EFFECTIVE_JOURNAL"
+        echo "  Frozen HPs : ${FIXED_PARAMS:-none}"
         echo "  Log dir    : $LOG_DIR"
         echo "════════════════════════════════════════════════════"
     fi

@@ -1,6 +1,6 @@
 # SPEC — architecture exploration: MoE revamp, fusion, transformers, alternatives, raw EMG
 
-*Written 2026-10-30 (Opus) from Kai's questions of the same day. Builds on `SPEC_moe_compute.md` (X/T matrices), `SOTA_COMPARISONS.md` (baseline list), `SPEC_2khz_emg.md` (representations), `SPEC_hpo.md` (HPO protocol) and `DECISION_method.md` (go/no-go rules). Status: design agreed with nobody yet. Kai to confirm the candidate list (§2) and the budgets (§3).*
+*Written 2026-10-30 (Opus) from Kai's questions of the same day; §3-4 revised the same afternoon after his review. Builds on `SPEC_moe_compute.md` (X/T matrices), `SOTA_COMPARISONS.md` (baseline list), `SPEC_2khz_emg.md` (representations), `SPEC_hpo.md` (HPO protocol) and `DECISION_method.md` (go/no-go rules). Status: design agreed with nobody yet. Kai to confirm the candidate list (§2) and the budgets (§3).*
 
 ## 0. Ground rules
 1. **Dev users only.** All exploration uses the 4 dev users (P005, P109, P116, P131) and their cached dev episodes, via the HPO machinery (`ablation_hpo.py`, objective = per-user mean at 10-way 1-shot). The 28 fold users are touched only for the final runs of the finalists.
@@ -75,7 +75,7 @@
 |---|---|---|---|
 | P1 | **ProtoNet trained episodically** on fs64 (same encoder family, metric-based, no inner loop) | the closest prior work in this population (Sarwat et al. 2024, stroke, one-shot ProtoNet). With kNN already at 73%, a learned metric on fs64 is the most likely strong simple method. | **high** |
 | P2 | Pretrain + fine-tune with a dev-tuned budget (Chen et al. 2019 "baseline++"; = A1/A2 with tuned ft) | exists; the tuning now covers the fine-tune budget | required (exists) |
-| P3 | **ADANN:** supervised pretrain with a gradient-reversal user-ID head (users as domains), then fine-tune on the support set (Côté-Allard 2020) | EMG-recognisable cross-user baseline; tests whether *removing* user identity helps when labels are user-defined (prediction: it hurts, which is an informative finding) | medium |
+| P3 | **ADANN-style (multi-domain DANN core):** supervised pretrain with a gradient-reversal user-ID head (users as domains), then fine-tune on the support set (Côté-Allard 2020) | EMG-recognisable cross-user baseline; tests whether *removing* user identity helps when labels are user-defined (prediction: it hurts, which is an informative finding) | medium |
 | P4 | Pretrained encoder + kNN / nearest centroid (frozen features, no adaptation) | separates "better features" from "better adaptation"; A14 already does this for the M0/A4 backbones | exists (A14) |
 | P5 | CNP / attentive neural process (context = support set) | Kai asked; low expected value with 10 reps × 10 classes per user and 20 training users; amortised inference tends to underfit task-specific mappings this idiosyncratic | low (Tier 3) |
 | P6 | Learned `$B` / covariance metric (`system/nonparametric/metric_models.py`) | the natural "method" if a classical baseline wins (R4) | conditional on R4 |
@@ -92,30 +92,73 @@
   2. **The matched EMG-only comparison ARaC asked for:** M0 trained EMG-only on raw 2 kHz (stem) vs GNI fine-tuned EMG-only, same episodes.
 - The stem is not built yet (`emg_repr = "raw3s"`, a raw builder and `emg_stem` are all pending). Medium effort. It is not needed before the weekend.
 
-## 3. Protocol and budgets
+## 3. Protocol and budgets (revised 2026-10-30 after Kai's review)
+**Why staged.** Kai's point: if the MoE scheme changes, M0 changes, and the param-matched controls (A1, A4) must be re-matched to it. Tuning them fully before the architecture is settled wastes the budget.
+
+The other problem is budget. The full M0 space has about 17 HPs. 16 TPE trials over 17 dims is random search, which is too few to rank architectures (Kai: "isn't 16 way too small?" Yes, for the full space).
+
+The fix is to separate the shared training HPs from each architecture's own HPs.
+
+**Stage 0 (now): shared training HPs.**
+- Full HPO of **A4** (MAML, no MoE, fixed width): the cheapest MAML model, and its architecture does not depend on the MoE outcome.
+- Also **A2** (supervised, fixed arch), which is needed in every version of the paper.
+- Freeze A4's best training HPs for stage S with `hpo_tools.py freeze`: outer_lr, wd, inner steps, both inner step sizes, LSLR on/off, MSL, episodes per epoch.
+
 **Stage S (screen), dev users, fs64.**
-- Every candidate gets the **same small budget: 16 Optuna trials with MedianPruner**, under the shared HPO objective.
-- **Order:** fusion screen on X0 (F0-F3) → MoE screen with the best fusion (X1-X5) → transformers (T0, T2, T4) → alternatives (P1, P3).
-- **Promotion rule (pre-stated):** promote a variant if its best-trial dev mean at 10-way 1-shot beats its family reference by ≥ 2 points with ≥ 3/4 dev users better. Otherwise keep the simpler one.
-- Required controls (X0, X1, X2, T0, T2, P1, P2) go to stage F regardless.
+- Each variant is its own study (`--study-suffix screen --fixed-params ...`) and searches only its own HPs, 2-6 dims:
+  - X: bank size, dropout, router HPs;
+  - F: branch width, attention width;
+  - T: d_model, heads, depth, FF width, dropout;
+  - metric learners: lr, wd, episodes, plus kind-specific HPs.
+- **24 trials each**, with MedianPruner. At 2-6 dims this is a reasonable budget; at 17 dims it would not be.
+- **Caveat:** frozen HPs tuned for a CNN-LSTM can disadvantage the transformers. So the T family freezes only the inner-loop HPs and keeps outer_lr / wd searched (a separate freeze file without those two keys).
+- **Order:** the fusion screen on A4 (F1-F3 vs A4) and the MoE screen (X2-X6 vs M0 at the frozen HPs) can run in parallel. Then the transformers, then the alternatives.
+- **Promotion rule (pre-stated):** promote a variant if its best-trial dev mean at 10-way 1-shot beats its family reference by ≥ 2 points, with ≥ 3/4 dev users better. Otherwise keep the simpler model.
+- Required controls (X0 = A4, X1 = M0, X2, T0, T2, P1, P2) go to stage F regardless.
+
+**E and top-k: a grid, not TPE.**
+- On the best MoE-family config: E ∈ {4, 8, 16, 22, 36} × k ∈ {1, 2, 4, 9}, k ≤ E (17 configs), 2 seeds.
+- Built with `hpo_tools.py grid` and enqueued with `ablation_hpo.py --enqueue-json ... --enqueue-only`.
+- This separates the MoE size from the other HPs (Kai's concern) and gives reviewers the E=8-vs-22 figure.
+- Inside TPE, E and k are entangled with the router HPs, and 60 trials cannot map them.
 
 **Stage F (full), finalists only.**
-- 60 trials each (`SPEC_hpo.md`), top-3 × 3-seed replay, export to `best_hpo_configs.json`, then 7 folds × 3 seeds.
+- The finalists plus their re-matched controls (M0 or its successor, A1, and A4 re-matched to the final bank) get the **full space with 100 trials** if the trial cost allows, 60 at minimum.
+- Then the top-3 × 3-seed replay, export to `best_hpo_configs.json`, and 7 folds × 3 seeds.
+- Replay and export restore the frozen HPs from each trial's `fixed_params` attribute.
+
+**Is this "architecture search"?** Yes, in the plain sense: a small set of hand-designed architectures, each with an equal small tuning budget, plus a pre-stated promotion rule. Neural architecture search (a searched cell space) is not warranted here, and reviewers would not expect it.
 
 **Compute.**
-- The fs64 trial cost is not measured yet. The first HPO jobs give it: read `JOB_END` minus `JOB_START` per trial from the logs.
-- 16 trials × ~13 screened variants ≈ 200 trials, versus 60 × ~8 finalists ≈ 480 trials. If an M0-type trial costs ~3-6 GPU-h at 10-way, stage S is roughly 600-1000 GPU-h. Re-estimate after the weekend.
-- **If compute is short:** cut in this order: T1/T3, P5, X5, F4, X6. Never cut X2, T0, T2 or P1.
+- Every trial now records its wall time, GPU, peak memory and parameter count. `hpo_tools.py report` totals them.
+- The debug runs (CURRENT_TODOs §2B) give the per-epoch time; set the budgets from that.
+- Rough count: stage S ≈ 24 trials × ~14 variants ≈ 340 trials, most of them pruned or cheap (the metric learners have no inner loop). Stage F ≈ 100 × ~6 ≈ 600 trials.
+- **If compute is short,** cut in this order: T1/T3, P5, X5, F4, X6, the 100 → 60 trials of stage F. Never cut X2, T0, T2 or P1.
 
-## 4. Status and implementation order (2026-10-30)
-| Item | Status | Next |
+## 4. Status (2026-10-30, end of the Opus code session)
+All rows below are built and pass the local tests (356 in total). **None has run on the cluster yet**: CURRENT_TODOs §2B has the debug commands.
+
+| Item | HPO token | Where |
 |---|---|---|
-| HPO for A1, A2, A4, M0 on fs64 (existing code) | ready once the fs64 HPO debug trial passes | Kai, weekend |
-| X2 uniform gate | not built (small) | next code session |
-| F1 mid fusion, F2 FiLM | not built (small) | next |
-| Functional attention block (shared by F3, T0, T2, T4) | not built | next |
-| T0, T2, T4 | not built | after the attention block |
-| X3, X4, X5 | X5 = flag; X3/X4 not built | after the F screen |
-| P1 episodic ProtoNet, P3 ADANN | not built | parallel |
-| EMG-RAW stem | not built | after stage S starts |
-| Routing diagnostics (pre-top-k entropy, per-user routing) | broken (debug issues 5-7) | with X2 (needed to interpret X1 vs X2) |
+| X2 uniform gate (dense, no router) | `X2` | `MOE_encoder.DeepCNNLSTM_EncoderMOE` (`MOE_gate_mode`) |
+| X3 sparse top-1/2 + Switch balance + router z-loss, skipping unselected experts | `X3` | same class; z-loss in `mamlpp._compute_aux_loss` |
+| X4 routing on [sample context, support-set mean context] | `X4` | same class; `mamlpp.task_support` sets the support set per episode (train, adapt, eval, collapse check) |
+| X5 shared expert | `X5` | existing flag |
+| X6 cross-attention router (EMG tokens attend to IMU tokens) | `X6` | `MOE_encoder.CrossModalRouter` |
+| T2 M0's experts + transformer instead of the LSTM | `T2` | same class (`temporal_model`) |
+| Functional attention, transformer block, token MoE-FFN | (shared) | `arch_variants/attention.py` |
+| F1 mid, F2 FiLM (identity at init), F3 cross-attention fusion | `F1 F2 F3` | `arch_variants/flexnet.py` (also supports a fusion encoder as expert, for carrying the winner into the MoE) |
+| T0 transformer on the 64 steps; T4 Switch-style MoE-FFN transformer | `T0 T4` | `flexnet.py` |
+| P1 ProtoNet (A4 encoder or M0's bank), Matching Net, Relation Net, R2-D2, FEAT | `P1 P1_moe P1_match P1_rel P1_ridge P1_feat` | `arch_variants/metric_learners.py` |
+| P3 ADANN-style (multi-domain DANN core; no domain-specific BN) | `P3` | `arch_variants/adann.py` |
+| ANIL (head-only inner loop) | `A4_ANIL M0_ANIL` | existing `maml_inner_param_include` |
+| Routing diagnostics: pre-top-k entropy / ln E, usage entropy, dead experts, I(expert; user), I(expert; gesture \| user), with permutation nulls | stored per MoE trial (`routing`) | `MOE/routing_metrics.py` |
+| Per-trial timing, `hpo_tools.py` (report / freeze / grid), frozen HPs, study suffix, enqueue | all tokens | `ablation_hpo.py`, launcher |
+
+**How to read X1 vs X2:**
+- If X2 ≈ X1 and X1's routing shows soft entropy / ln E near 1 and I(expert; user) near its null, the gate is ensembling, not routing. The paper must then not claim user-specific routing.
+- If X1 > X2 and the routing is sharp and user-informative, routing is doing work.
+
+On Kai's question "is uniform routing good?": *balanced usage across the batch* is good, because it prevents collapse. *Uniform weights per sample* means the router does nothing. A healthy router has low per-sample entropy and high usage entropy.
+
+**Not built:** EMG-RAW stem; F4; T1/T3; CNP (P5); learned `$B` (P6, only if R4 triggers); 7-fold eval scripts for the new tokens (finalists only, after stage S).

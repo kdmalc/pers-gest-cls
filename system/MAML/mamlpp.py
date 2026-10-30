@@ -142,21 +142,56 @@ def _compute_aux_loss(routing_info, config, aux_coeff):
     Handles both dense and top-k routing.
     Returns a scalar tensor, or 0.0 if routing info is absent.
     """
-    if routing_info is None or aux_coeff <= 0:
+    if routing_info is None:
         return 0.0
+    # Router z-loss (ST-MoE, Zoph et al. 2022; X3): mean squared log-partition of the router logits.
+    # Keeps the logits small so top-k selection stays stable. Optional key, 0 = off (M0).
+    z_coeff = float(config.get("MOE_router_z_coeff", 0.0))
+    z_loss = 0.0
+    if z_coeff > 0 and routing_info.get("router_logits") is not None:
+        z_loss = z_coeff * torch.logsumexp(routing_info["router_logits"], dim=-1).pow(2).mean()
+    if aux_coeff <= 0:
+        return z_loss
     gate_w = routing_info.get('gate_weights')
     if gate_w is None:
-        return 0.0
+        return z_loss
     top_k = config['MOE_top_k']
     num_experts = config['num_experts']
     if top_k is None or top_k == num_experts:   # dense / soft routing
-        return _dense_MOE_aux_loss(gate_w, coeff=aux_coeff)
+        return _dense_MOE_aux_loss(gate_w, coeff=aux_coeff) + z_loss
     else:                                        # sparse top-k routing
         gate_w_soft = routing_info.get('gate_weights_soft', gate_w)
         imp_coeff = float(config.get("MOE_importance_coeff", 0.0))
         switch_loss = _topk_MOE_aux_loss(gate_w_soft, gate_w, coeff=aux_coeff)
         imp_loss = _importance_loss(gate_w_soft, coeff=imp_coeff)
-        return switch_loss + imp_loss
+        return switch_loss + imp_loss + z_loss
+
+
+class task_support:
+    """
+    Context manager: expose the episode's support set to a model that routes on it (X4,
+    MOE_routing_signal='context_proj_task'), for every forward inside the block, support and query.
+    A no-op for every other model (no `needs_task_support` attribute). The support tensors are the
+    raw inputs; the model re-encodes them with the CURRENT (fast) weights, so under functional_call
+    the task context adapts with the inner loop.
+    """
+    def __init__(self, model, support_batch, device):
+        self.model = model
+        self.active = bool(getattr(model, "needs_task_support", False))
+        if self.active:
+            emg = _to_device(support_batch["emg"], device)
+            imu = support_batch.get("imu", None)
+            self.support = (emg, _to_device(imu, device) if imu is not None else None)
+
+    def __enter__(self):
+        if self.active:
+            self.model._task_support = self.support
+        return self
+
+    def __exit__(self, *exc):
+        if self.active:
+            self.model._task_support = None
+        return False
 
 
 # -----------------------------
@@ -376,11 +411,12 @@ def train_MAMLpp_one_epoch(model, episodic_loader, meta_opt, config, epoch_idx, 
                                               include_substrings=_inner_inc)
 
             # 1. Inner Loop
-            thetaN, q_logits, q_labels, meta_loss_task = inner_loop_mamlpp(
-                model, current_theta0, episode["support"], episode["query"], 
-                config, lslr=(model._lslr if use_lslr else None), 
-                criterion=criterion, epoch=epoch_idx
-            )
+            with task_support(model, episode["support"], device):
+                thetaN, q_logits, q_labels, meta_loss_task = inner_loop_mamlpp(
+                    model, current_theta0, episode["support"], episode["query"],
+                    config, lslr=(model._lslr if use_lslr else None),
+                    criterion=criterion, epoch=epoch_idx
+                )
 
             # 2. Metrics
             with torch.no_grad():
@@ -677,7 +713,11 @@ def mamlpp_pretrain(model, config, episodic_train_loader, episodic_val_loader=No
         #           num_experts=num_experts, model_name=model_name,
         #           epoch=ep, plot_dir=config['MOE_plot_dir'],
         #       )
-        if use_MOE and MOE_log_every > 0 and ep % MOE_log_every == 0 and episodic_val_loader is not None:
+        # a uniform gate (X2, MOE_gate_mode="uniform") cannot collapse; its argmax "dominant expert"
+        # is a tie and would always read as expert 0, so it is not checked
+        gate_uniform = config.get("MOE_gate_mode", "learned") == "uniform"
+        if (use_MOE and not gate_uniform and MOE_log_every > 0 and ep % MOE_log_every == 0
+                and episodic_val_loader is not None):
             report = _maml_collapse_check_only(
                 model, episodic_val_loader, config,
                 num_experts=num_experts, model_name=model_name, epoch=ep,
@@ -802,7 +842,8 @@ def _maml_collapse_check_only(model, episodic_val_loader, config,
 
                     # No inner-loop adapt — use meta-init params directly.
                     # We only care about collapse, not adapted accuracy.
-                    out = model(x_emg=qemg, x_imu=qimu, return_routing=True)
+                    with task_support(model, episode['support'], device):
+                        out = model(x_emg=qemg, x_imu=qimu, return_routing=True)
                     if not (isinstance(out, tuple) and len(out) == 2
                             and isinstance(out[1], dict)):
                         # Model didn't return routing info — bail out silently.
@@ -1146,6 +1187,11 @@ def assert_support_query_rep_disjoint(support_batch, query_batch):
 
 
 def mamlpp_adapt_and_eval(model, config, support_batch, query_batch, debug=False):
+    with task_support(model, support_batch, config['device']):
+        return _mamlpp_adapt_and_eval(model, config, support_batch, query_batch, debug=debug)
+
+
+def _mamlpp_adapt_and_eval(model, config, support_batch, query_batch, debug=False):
     assert_support_query_rep_disjoint(support_batch, query_batch)
     pre_adapt_acc = None
 
