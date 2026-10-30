@@ -46,7 +46,9 @@ bash kfold_launcher.sh $B --hpo-config legacy --emg-repr fs64
 
 When the jobs finish, check for failures and copy the results to the laptop:
 ```bash
-grep -L "PYTHON_EXIT_CODE=0" /scratch/my13/kai/runs/paper/sub2/eval/logs/kfold7_A6_*.out   # lists any failed job (empty = all OK)
+# run only after squeue --me is empty (a running job has no exit line yet, so it would look "failed")
+for f in /scratch/my13/kai/runs/paper/sub2/eval/logs/kfold7_A6_*.out; do rc=$(grep -o "PYTHON_EXIT_CODE=[0-9]*" "$f"); [[ "$rc" == "PYTHON_EXIT_CODE=0" ]] || echo "${rc:-NO_EXIT_LINE(timeout/killed)}  $f"; done   # empty = all OK
+sacct -u km82 -S 2026-10-30 -X --format=JobID,JobName%34,State,Elapsed | grep -E "TIMEOUT|FAILED|OUT_OF_ME"   # empty = none timed out
 ```
 ```bash
 # on the laptop (Git Bash); small JSONs only
