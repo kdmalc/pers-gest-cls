@@ -206,3 +206,32 @@ So `$B` uses the covariance to choose *a coordinate system per template*. It the
 - `pyRiemann` (Barachant et al.), the library we use: `Covariances(estimator="oas")`, `MDM(metric="riemann")`, `TangentSpace`.
 
 *Check before citing:* the author lists and venue details above are from memory. Verify each against the publisher page before it goes into the paper. Verify Li et al. 2017 (MPN-COV) and Li et al. 2019 (CovaMNet) most carefully.
+
+## 8. Fairness, feature combinations, and which options keep MoE / clustering (2026-10-30)
+
+**Fairness.** The covariance is a fixed function of the same windows every method sees. It uses no extra data, no labels and no other users. Covariance of the *input* is feature engineering. Covariance of *learned features* is a pooling layer (second-order pooling), so it is architecture. Either is fair against a raw-signal model such as Meta GNI, as long as:
+- every method uses the same episodes;
+- MDM / TS are reported as baselines;
+- there is an ablation of our model with and without the covariance part.
+
+The real reviewer risk is "MDM alone gets 91%", not unfairness. The model has to beat MDM.
+
+**Does anything carry information that covariance misses?** Test this offline before building any model:
+- **Per-query complementarity:** the oracle "MDM or X correct" rate, and error overlap, for X ∈ {MiniRocket, td features, `$B`}.
+- **Distance-level fusion:** a z-scored sum of distances (not feature concatenation, which dilutes at 1-shot).
+- **Segment covariances:** split each trial into 2-4 windows and use one covariance per window. This keeps coarse temporal order, which fixes the time-reversal blind spot.
+
+fs64 EMG is already a spectral time series: 16 channels × 7 spectral features = 112 channels. So its covariance already mixes in the spectral information.
+
+**Options by how much MoE / clustering they keep**
+
+| Keeps | Option | Reuses from the paper | Cost |
+|---|---|---|---|
+| MoE is the method | **X7:** router on the tangent-space covariance | MoE, MAML, routing diagnostics (X1 vs X2, I(expert; user)) | low |
+| MoE is the method | **Riemannian experts:** each expert owns a reference point (cluster-wise re-centering), routed by distance on the SPD manifold | MoE framing, routing analyses, ability-cluster hypothesis | medium |
+| MoE is the method | **Second-order pooling experts:** each expert = encoder → covariance → log-map; ProtoNet / MDM head | MoE, MAML, episodes | medium |
+| MoE kept, covariance on the side | **Hybrid late fusion:** MoE logits + λ·(−MDM distance) | everything | lowest |
+| Clustering without MoE | Riemannian k-means / Gaussian mixture over per-user mean covariances, then per-cluster re-centering + MDM | ability-cluster analyses | low |
+| No clustering | Plain MDM / TS, per-user re-centering, CovaMNet, SPDNet | eval pipeline only | low to high |
+
+**Gate before any clustering claim:** do users' mean covariances cluster at all, and do the clusters match ability groups or the MoE routing? If not, the covariance-plus-clustering story is weak.
