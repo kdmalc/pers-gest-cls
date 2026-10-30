@@ -75,6 +75,28 @@ Then, on the cluster: `bash kfold_launcher.sh A6_td_knn A6_td_lda A6_td_lda_pool
 - `02_classical_baselines_28users.ipynb`: reads any folder of A6 results and groups them by the recorded `emg_repr`. It gives the summary table with CIs, the full grid, and the paired fs64-vs-env20 comparison.
 - `03_gesture_uniqueness.ipynb`: **run** (all 32 users, no training). Results are in §4.
 
+## 3b. Weekend launch: HPO on fs64 for the models that are needed whatever happens (added 2026-10-30)
+A1, A2 (pretrain + fine-tune), A4 (MAML, no MoE) and M0 (EncoderMoE as submitted) are in the paper whatever the architecture exploration finds, so their tuning can start now. Architecture variants come later (`docs/SPEC_architecture_exploration.md`).
+```bash
+cd /projects/my13/kai/meta-pers-gest/pers-gest-cls && git pull
+L=/projects/my13/kai/meta-pers-gest/pers-gest-cls/system/NOTS/paper/ablations/launchers
+cp $L/kfold_launcher.sh $L/hpo_ablation_launcher.sh /scratch/my13/kai/runs/paper/sub2/
+cd /scratch/my13/kai/runs/paper/sub2
+
+# 1) debug: one trial each on fs64 (debug partition, ~10 min). M0/A4 will not finish a trial in 10 min;
+#    the check is that they load fs64 and start training without a Traceback.
+bash hpo_ablation_launcher.sh M0 --emg-repr fs64 --debug
+bash hpo_ablation_launcher.sh A4 --emg-repr fs64 --debug
+# plus the eval-path smoke on fs64:
+bash kfold_launcher.sh M0 --folds 0 --debug --hpo-config legacy --emg-repr fs64
+
+# 2) if those are clean (paste me their log tails first if unsure): the real studies, 60 trials each
+bash hpo_ablation_launcher.sh A1 A2 A4 M0 --emg-repr fs64 --dry-run
+bash hpo_ablation_launcher.sh A1 A2 A4 M0 --emg-repr fs64
+```
+- Before trusting any trial numbers, record the per-trial wall time (`JOB_START` / `JOB_END` in the HPO logs). It sets the compute budget for the architecture screen.
+- **Dev bar:** a trial's dev accuracy at 10-way 1-shot has to beat ~78% (fs64 1-NN L1 on the same dev users, notebook 01) to matter.
+
 ## 4. Results so far (first looks, laptop, 2026-10-29)
 - **EMG representation (dev users, notebook 01).** The pre-registered rule says **adopt fs64**. At 10-way 1-shot, EMG-only fs64 beats env20 by +28.9 pts (proto) and +17.2 pts (1-NN L1), on 4/4 users. Balanced fused fs64+IMU beats env20+IMU by +10.8 / +12.5. The env20 time-axis anomaly points the same way.
 - **Classical baselines, 28 users, 10-way 1-shot (fused EMG+IMU, notebook 02, 2026-10-30).** Reportable numbers, not used for the representation decision.
@@ -111,6 +133,7 @@ sacct -u km82 -S 2026-10-29 -X -n -P --format=JobID,ElapsedRaw,AllocTRES | \
 ```
 
 ## 6. Code still to write (Opus/Sonnet; can start now, in parallel with HPO)
+Plan, candidates, budgets and promotion rules: **`docs/SPEC_architecture_exploration.md`** (MoE revamp X0-X6, fusion F0-F4, transformers T0/T2/T4, alternatives P1-P6, raw-EMG fairness).
 - [ ] Transformers T0-T3 (`SPEC_moe_compute.md` §3) + their HPO space.
 - [ ] MoE X-matrix: X2 uniform gate (key control), X3, X4 task-conditioned routing.
 - [ ] Zero-shot Z1-Z4 script (`SPEC_zeroshot.md`).

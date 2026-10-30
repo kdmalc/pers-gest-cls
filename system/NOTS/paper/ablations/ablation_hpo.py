@@ -323,9 +323,11 @@ def _suggest_label_smooth_supervised(trial: optuna.Trial, config: dict) -> dict:
     """
     Tune label_smooth for supervised (non-MAML) ablations.
     MAML warm-start was done entirely with 0.05, but supervised training
-    is a different regime — open the range to [0.0, 0.5].
+    is a different regime, so it is tuned over [0.0, 0.2].
     """
-    config["label_smooth"] = trial.suggest_float("label_smooth", 0.0, 0.5)
+    # capped at 0.2: the 10/29 debug trial drew 0.42, which flattens 10-way targets towards uniform
+    # (docs/10_29_26_debug_run_results.md, issue 4)
+    config["label_smooth"] = trial.suggest_float("label_smooth", 0.0, 0.2)
     return config
 
 
