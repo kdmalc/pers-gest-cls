@@ -45,7 +45,7 @@ def _jsonable(v):
 
 def _load_study(ablation: str, journal: str = None):
     import ablation_hpo as H
-    name = f"ablation_{ablation}_10w1s_kfold7_v1"
+    name = H.study_name_for(ablation)   # needs EMG_REPR in the environment
     path = Path(journal) if journal else H.HPO_DB_DIR / f"{name}.log"
     if not path.exists():
         raise FileNotFoundError(path)

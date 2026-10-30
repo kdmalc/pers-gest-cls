@@ -1,11 +1,11 @@
 # CURRENT TODOs (short; top-level plan: `docs/PLAN_resubmission.md`; history: `LOG.md`, `docs/FULL_RUNNING_LOG.md`)
-*Updated 2026-10-29 (evening).*
+*Updated 2026-10-30.*
 
 ## 1. Main goal
 Resubmit EncoderMoE (rejected NeurIPS'26). Rerun everything on one clean protocol: 28 users, 7 folds, shared cached episodes, 10-way 1-shot primary. Add the baselines and ablations the reviewers asked for. Fix the EMG representation. Pick the venue after the reruns (`PLAN_resubmission.md` §6).
 
 ## 2. Order of work
-1. **Laptop (§3):** confirm the EMG representation on the dev users (done tonight: the rule says **fs64**, see §4), run the classical baselines on the 28 users, and run the uniqueness notebook.
+1. **EMG representation:** done on the dev users (the rule says **fs64**, §4). **Classical baselines:** full grid on the cluster (§3A); quick laptop numbers are in §4.
 2. **Kai + PI:** sign off on fs64 for the main table.
 3. **Cluster:** check the debug results (§5A). Then reply "hpo ok" / "start hpo". HPO runs at 10-way 1-shot on the dev users with `emg_repr=fs64`.
 4. **Code, in parallel with HPO:** transformers, the MoE X-matrix (uniform-gate control), zero-shot, the upper bound, the seed flag, A13 at 10-way (§6). The transformers come first because they need their own HPO.
@@ -19,45 +19,55 @@ Resubmit EncoderMoE (rejected NeurIPS'26). Rerun everything on one clean protoco
 
 The aggregator rejects smoke runs and mismatched episodes. The classical-baseline runs from §3 are final-paper results as they are: they are deterministic, read the same episodes, and are reported for both representations. Rerun anything whose code changes later.
 
-## 3. Laptop runs (Kai, 2026-10-30)
-Use Git Bash. All of these run on the CPU.
+## 3. Classical baselines: cluster for the long runs, laptop for quick checks (updated 2026-10-30)
+**Rule of thumb:** anything over ~5 h goes to the cluster. The full 3x3 grid for all 7 baselines x 2 EMG versions is roughly 30+ CPU-hours on the laptop, but on the cluster it is 98 parallel CPU jobs (7 tokens x 7 folds x 2), done in a few hours.
 
-**A. Classical baselines, primary cell (10-way 1-shot), both representations.** About 5 min per method per representation for the fast ones. Riemannian takes about 20 min per fold, so run it last or overnight.
+**A. Cluster (Kai): every classical baseline, all 9 cells, env20 and fs64.**
 ```bash
-cd ~/Repos/pers-gest-cls && git pull
-cd system/NOTS/paper/ablations/test_eval_files
-export CODE_DIR=~/Repos/pers-gest-cls HPO_CONFIG=legacy GIT_REV=$(git rev-parse --short HEAD)
-PY=~/anaconda3/envs/fl_torch/python.exe
-for r in env20 fs64; do
-  export RUN_DIR=~/gest_results/A6_primary/$r
-  for m in dollar_b dollar_b_user knn_l1 proto_euclid minirocket riemann_mdm riemann_ts; do
-    for k in 0 1 2 3 4 5 6; do $PY A6_classical_baselines.py --method $m --emg-repr $r --fold-idx $k; done
-  done
-done
+cd /projects/my13/kai/meta-pers-gest/pers-gest-cls && git pull
+git status --short          # should be clean; if the tracked .pyc shows up: git restore system/__pycache__/__init__.cpython-310.pyc
+L=/projects/my13/kai/meta-pers-gest/pers-gest-cls/system/NOTS/paper/ablations/launchers
+cp $L/kfold_launcher.sh $L/hpo_ablation_launcher.sh /scratch/my13/kai/runs/paper/sub2/
+
+# one-time: MiniRocket needs aeon, Riemannian needs pyriemann (your dry run was clean)
+module purge && module load Mamba/23.11.0-0
+source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/conda.sh && source /opt/apps/software/Mamba/23.11.0-0/etc/profile.d/mamba.sh
+mamba install -p /projects/my13/kai/meta-pers-gest/envs/fl-torch -c conda-forge pyriemann=0.9 aeon pytest
+
+cd /scratch/my13/kai/runs/paper/sub2
+B="A6_dollar_b A6_dollar_b_user A6_knn_l1 A6_proto_euclid A6_minirocket A6_riemann_mdm A6_riemann_ts"
+bash kfold_launcher.sh $B --hpo-config legacy --emg-repr env20 --dry-run | head -20   # check paths: .../kfold7/<token>/env20/fold<k>
+bash kfold_launcher.sh $B --hpo-config legacy --emg-repr env20
+bash kfold_launcher.sh $B --hpo-config legacy --emg-repr fs64
 ```
-- `HPO_CONFIG=legacy` is only there because the runner requires it to be set. Classical methods have no hyperparameters from HPO.
-- Keep a separate `RUN_DIR` per representation, because the file names don't record it.
-- Never run the same method/cell twice into one folder. The aggregator rejects duplicate episodes.
+- CPU-only jobs on `commons`, 10 CPUs and 16 GB each. Time limits: 3 h for `$B`/kNN/ProtoNet, 6 h for MiniRocket, 23 h for Riemannian.
+- `--hpo-config legacy` is only there because the launcher requires the flag. Classical methods take no tuned hyperparameters.
+- Output: `/scratch/my13/kai/runs/paper/sub2/eval/kfold7/A6_<method>/<env20|fs64>/fold<k>/`. Since 2026-10-30, each results JSON also records `emg_repr`.
 
-**B. Full 3x3 grid (later or overnight; several hours for `$B` and Riemannian).** Same loop, with `RUN_DIR=~/gest_results/A6_grid/$r` and `--cells all` added.
-
-**C. Time-domain / LDA baselines.** These first need the td64 dict, which is built from the raw CSVs in Box (needs your OK, it was a PI question):
+When the jobs finish, check for failures and copy the results to the laptop:
 ```bash
-cd ~/Repos/pers-gest-cls
-$PY system/universal_preprocessing/EMG_preprocessing/build_td64_tensor_dict.py \
-  --root "/c/Users/kdmen/Box/Yamagami Lab/Data/2024_UIST_dataset/upload/segmented_raw_data" \
-  --fused-dict dataset/meta-learning-sup-que-ds/segfilt_rts_tensor_dict.pkl \
-  --out dataset/meta-learning-sup-que-ds/segfilt_td64_tensor_dict.pkl
-cd system/NOTS/paper/ablations/test_eval_files; export RUN_DIR=~/gest_results/A6_primary/td64
-for m in td_knn td_lda td_lda_pool; do for k in 0 1 2 3 4 5 6; do
-  $PY A6_classical_baselines.py --method $m --emg-repr td64 --fold-idx $k; done; done
+grep -L "PYTHON_EXIT_CODE=0" /scratch/my13/kai/runs/paper/sub2/eval/logs/kfold7_A6_*.out   # lists any failed job (empty = all OK)
 ```
-Then `scp` the td64 `.pkl` to the cluster, next to the fs64 file.
+```bash
+# on the laptop (Git Bash); small JSONs only
+mkdir -p ~/gest_results/A6_cluster && scp -r "km82@<NOTS login host>:/scratch/my13/kai/runs/paper/sub2/eval/kfold7/A6_*" ~/gest_results/A6_cluster/
+```
+Then run notebook 02 with `A6_RESULTS=~/gest_results/A6_cluster` (or edit `RESULTS` in its first code cell).
+
+**B. Laptop (done 2026-10-30 by Claude):** kNN-L1 and ProtoNet-Euclid at 10-way 1-shot, both representations, in `~/gest_results/A6_primary/`. Results are in §4.
+
+**C. Time-domain / LDA baselines (laptop build, then cluster).** These need the td64 dict, built from the raw CSVs in Box. Needs your OK; it was a PI question.
+```bash
+cd ~/Repos/pers-gest-cls; PY=~/anaconda3/envs/fl_torch/python.exe
+$PY system/universal_preprocessing/EMG_preprocessing/build_td64_tensor_dict.py   --root "/c/Users/kdmen/Box/Yamagami Lab/Data/2024_UIST_dataset/upload/segmented_raw_data"   --fused-dict dataset/meta-learning-sup-que-ds/segfilt_rts_tensor_dict.pkl   --out dataset/meta-learning-sup-que-ds/segfilt_td64_tensor_dict.pkl
+scp dataset/meta-learning-sup-que-ds/segfilt_td64_tensor_dict.pkl km82@<NOTS login host>:/projects/my13/kai/meta-pers-gest/pers-gest-cls/dataset/meta-learning-sup-que-ds/
+```
+Then, on the cluster: `bash kfold_launcher.sh A6_td_knn A6_td_lda A6_td_lda_pool --hpo-config legacy`. Their output lands under `.../td64/` automatically.
 
 **D. Notebooks** (`system/stats/`; open them in Jupyter with the `fl_torch` kernel):
-- `01_emg_repr_decision_dev.ipynb`: **already run** (outputs saved). Uses dev users only, with the decision rule written in the notebook.
-- `02_classical_baselines_28users.ipynb`: run it after A finishes. It reads `~/gest_results/A6_primary/` (set `A6_RESULTS` to use `A6_grid`). It gives the summary table with CIs, the full grid, and the paired fs64-vs-env20 comparison.
-- `03_gesture_uniqueness.ipynb`: **already run** (all 32 users, no training). Results are in §4.
+- `01_emg_repr_decision_dev.ipynb`: **run** (outputs saved). Dev users only; the decision rule is in the notebook.
+- `02_classical_baselines_28users.ipynb`: reads any folder of A6 results and groups them by the recorded `emg_repr`. It gives the summary table with CIs, the full grid, and the paired fs64-vs-env20 comparison.
+- `03_gesture_uniqueness.ipynb`: **run** (all 32 users, no training). Results are in §4.
 
 ## 4. Results so far (first looks, laptop, 2026-10-29)
 - **EMG representation (dev users, notebook 01).** The pre-registered rule says **adopt fs64**. At 10-way 1-shot, EMG-only fs64 beats env20 by +28.9 pts (proto) and +17.2 pts (1-NN L1), on 4/4 users. Balanced fused fs64+IMU beats env20+IMU by +10.8 / +12.5. The env20 time-axis anomaly points the same way.
@@ -70,14 +80,15 @@ Then `scp` the td64 `.pkl` to the cluster, next to the fs64 file.
 
 ## 5. Cluster
 **A. Debug runs (launched 2026-10-29): DONE, plumbing OK, numbers meaningless (legacy HPs).** Details and the issue list: `docs/10_29_26_debug_run_results.md`. Fixed the same day (pushed): `pretrain_trainer` ignored the config's `earlystopping_*`/`gradient_clip_max_norm` keys (ran patience 12 / clip 1.0, now 8 / 10.0); legacy Kapanji / L2SO / hpo_test_split code removed from M0, `ablation_config`, the A11 sweep. Still to do:
-- [ ] On the cluster: `git pull`, `git restore system/__pycache__/__init__.cpython-310.pyc`, refresh the scratch launcher copies, re-run `--smoke` M0 and `pytest` (the cleanup was never executed: no Python on the Claude side).
+- [x] The cleanup commits pass the full local test suite (233 tests, laptop, 2026-10-30).
+- [ ] On the cluster: after the §3A `git pull`, re-run one `--smoke` M0 (`bash kfold_launcher.sh M0 --folds 0 --debug --hpo-config legacy --emg-repr fs64`). This also checks M0 on fs64.
 - [ ] Delete or move the non-smoke A1/A2 fold-0 JSONs (legacy HPs + old patience/clip) from `.../eval/kfold7/{A1,A2}/fold0/`.
 - [ ] HPO search space: cap `label_smooth` (debug trial sampled 0.42), sanity-range `ft_lr`/`ft_steps` (the 46.8% val came from FT, pretrain-only val was 21.8%, train acc 97%, best epoch 4). Update `SPEC_hpo.md`.
 - [ ] MoE logging: entropy is saturated at ln(top_k) (use pre-top-k softmax), imbalance ratios are div-by-0 artifacts, "Routing by Participant" prints `?` (PIDs not passed in the supervised path).
 - [ ] Cosmetic: mojibake `Â±` in FINAL lines; HPO launcher header prints literal `$(hostname)`/`$(date)`; prune per-trial 35 MB checkpoints.
 - [ ] Remaining legacy L2SO/hpo_test_split code: `launchers/eval_launcher.sh` (now incompatible with M0, delete?), A10-A12, A1, A13, A16, fewshot_grid_A4, portB, `tests/tiny_config.py`.
 
-**B. Done:** the dict hash matches the laptop (`eb60c8af…`), and the fs64 dict is copied. **Still to do:** the `mamba install` of pyriemann/aeon. It's only needed if classical baselines are ever run on the cluster, because the laptop already covers them.
+**B. Done:** the dict hash matches the laptop (`eb60c8af…`), and the fs64 dict is copied. The `mamba install` of pyriemann/aeon is now part of §3A.
 
 **C. GPU-hour accounting.** From now on, count paper compute from 2026-10-29:
 ```bash
@@ -92,7 +103,7 @@ sacct -u km82 -S 2026-10-29 -X -n -P --format=JobID,ElapsedRaw,AllocTRES | \
 - [ ] Upper bound (ARaC Q2): fine-tune on all non-test reps of the test user.
 - [ ] `--seed` flag through the eval scripts and launcher (3 seeds for headline methods).
 - [ ] A13 modality ablation at 10-way (currently 3-way default); add an fs64 run.
-- [ ] **Blocker for "start hpo":** `hpo_ablation_launcher.sh` has no `--emg-repr` option (checked 2026-10-29), so HPO would run on env20. Add the flag, plus a test that the HPO config picks up fs64.
+- [x] HPO launcher now requires `--emg-repr env20|fs64` (exports EMG_REPR; study name, journal and output dir include it). Not yet exercised on the cluster: `--debug --dry-run` first.
 - [ ] Episodically trained ProtoNet; ANIL (= portB) checked on the cache.
 - [ ] Port A7/A8/portA/A16 and Kaifosh (A10-A12) to the cache; FS-HGR / EMG-CrossFormer (Tier 3).
 

@@ -1066,13 +1066,21 @@ def _filter_warm_start_params(raw_params: dict, suggest_keys: set[str]) -> dict:
 # Study runner
 # =============================================================================
 
+def study_name_for(ablation_id: str) -> str:
+    """Optuna study name; includes the EMG representation so env20 and fs64 studies never mix."""
+    emg_repr = os.environ.get("EMG_REPR")
+    if not emg_repr:
+        raise SystemExit("EMG_REPR is not set (hpo_ablation_launcher.sh --emg-repr env20|fs64)")
+    return f"ablation_{ablation_id}_10w1s_kfold7_{emg_repr}_v1"
+
+
 def run_study(ablation_id: str, profile: dict, n_trials: int = 1) -> optuna.Study:
     sleep_time = random.uniform(0, 10)
     print(f"Staggering start: sleeping {sleep_time:.2f}s …")
     time.sleep(sleep_time)
 
     use_journal = int(os.environ.get("HPO_USE_JOURNAL", "1"))
-    study_name  = f"ablation_{ablation_id}_10w1s_kfold7_v1"
+    study_name  = study_name_for(ablation_id)
     journal_path = HPO_DB_DIR / f"{study_name}.log"
 
     if use_journal:
@@ -1201,7 +1209,7 @@ if __name__ == "__main__":
         SEED_OVERRIDE = args.seed
         VAL_EPISODES_OVERRIDE = 100            # all cached dev episodes per user
         random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
-        study_name = f"ablation_{ablation_id}_10w1s_kfold7_v1"
+        study_name = study_name_for(ablation_id)
         study = optuna.load_study(
             study_name=study_name,
             storage=JournalStorage(JournalFileBackend(str(HPO_DB_DIR / f"{study_name}.log"))))

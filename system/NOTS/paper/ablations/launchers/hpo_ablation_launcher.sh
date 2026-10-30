@@ -17,7 +17,7 @@
 #   bash hpo_ablation_launcher.sh A3 --n-trials 50        # custom trial count
 #
 # Output layout:
-#   Optuna journals : $HPO_DB_DIR/ablation_<ID>_10w1s_kfold7_v1.log
+#   Optuna journals : $HPO_DB_DIR/ablation_<ID>_10w1s_kfold7_<EMG_REPR>_v1.log
 #   Trial checkpts  : $HPO_OUT_BASE/<ID>/trial_<array_task_id>/
 #   SLURM logs      : $LOG_DIR/<jobname>_<jobid>_<taskid>.out
 #
@@ -60,7 +60,8 @@ DRY_RUN=false
 DEBUG=false
 N_TRIALS=60     # equal budget per method family (docs/SPEC_hpo.md)
 EXPLICIT_N_TRIALS=""   
-OVERRIDE_PARTITION=""  
+OVERRIDE_PARTITION=""
+EMG_REPR_ARG=""        # required: env20 | fs64 (no silent default)
 i=0
 args_array=("$@")
 
@@ -72,7 +73,8 @@ while [[ $i -lt ${#args_array[@]} ]]; do
         --debug)      DEBUG=true ;;
         --n-trials)   i=$((i+1)); N_TRIALS="${args_array[$i]}"; EXPLICIT_N_TRIALS="${args_array[$i]}" ;;
         --partition)  i=$((i+1)); OVERRIDE_PARTITION="${args_array[$i]}" ;;
-        all)          ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 A12) ;;
+        --emg-repr)   i=$((i+1)); EMG_REPR_ARG="${args_array[$i]}" ;;
+        all)         ABLATIONS=(M0 A1 A2 A3 A4 A5 A7 A8 A11 A12) ;;
         -*)           echo "WARNING: Unknown flag '$arg' — ignoring." ;;
         *)            ABLATIONS+=("$arg") ;;
     esac
@@ -87,9 +89,13 @@ fi
 
 if [[ ${#ABLATIONS[@]} -eq 0 ]]; then
     echo "ERROR: No ablations specified."
-    echo "Usage: bash hpo_ablation_launcher.sh [M0|A1|A2|A3|A4|A5|A7|A8|A11|A12|M0_MOE_hpo|all] [--dry-run] [--debug] [--n-trials N] [--partition PARTITION]"
+    echo "Usage: bash hpo_ablation_launcher.sh [M0|A1|A2|A3|A4|A5|A7|A8|A11|A12|M0_MOE_hpo|all] --emg-repr {env20|fs64} [--dry-run] [--debug] [--n-trials N] [--partition PARTITION]"
     exit 1
 fi
+case "$EMG_REPR_ARG" in
+    env20|fs64) ;;
+    *) echo "ERROR: --emg-repr env20|fs64 is required (got '${EMG_REPR_ARG}')"; exit 1 ;;
+esac
 
 # =============================================================================
 # Cluster defaults
@@ -176,10 +182,10 @@ _make_wrap_body() {
     local script_path="$4"   # full path to the HPO python script to invoke
     if [[ "$use_task_id" == "true" ]]; then
         local run_dir_line="export RUN_DIR=$out_dir/trial_\${SLURM_ARRAY_TASK_ID}"
-        local job_echo='echo '"'"'JOB_START host=$(hostname) date=$(date) jobid=${SLURM_JOB_ID} task=${SLURM_ARRAY_TASK_ID}'"'"
+        local job_echo='echo "JOB_START host=$(hostname) date=$(date) jobid=${SLURM_JOB_ID} task=${SLURM_ARRAY_TASK_ID}"'
     else
         local run_dir_line="export RUN_DIR=$out_dir/debug_trial_\${SLURM_JOB_ID}"
-        local job_echo='echo '"'"'JOB_START host=$(hostname) date=$(date) jobid=${SLURM_JOB_ID} [debug-single]'"'"
+        local job_echo='echo "JOB_START host=$(hostname) date=$(date) jobid=${SLURM_JOB_ID} [debug-single]"'
     fi
 
     cat <<WRAPEOF
@@ -206,7 +212,7 @@ nvidia-smi || true
 
 python -u $script_path --ablation $ablation
 
-echo 'JOB_END date=\$(date)'
+echo "JOB_END date=\$(date)"
 WRAPEOF
 }
 
@@ -225,7 +231,7 @@ for ABLATION in "${ABLATIONS[@]}"; do
         EFFECTIVE_PARTITION="$PARTITION"
         EFFECTIVE_CONCURRENCY="10"
         EFFECTIVE_SCRIPT="$HPO_SCRIPT_PATH"
-        EFFECTIVE_JOURNAL="$HPO_DB_DIR/ablation_${ABLATION}_10w1s_kfold7_v1.log"
+        EFFECTIVE_JOURNAL="$HPO_DB_DIR/ablation_${ABLATION}_10w1s_kfold7_${EMG_REPR_ARG}_v1.log"
     fi
 
     # --partition flag overrides whatever was resolved above for all ablations
@@ -238,7 +244,7 @@ for ABLATION in "${ABLATIONS[@]}"; do
     ARRAY_END=$((EFFECTIVE_N_TRIALS - 1))
 
     JOB_NAME="hpo_${ABLATION}"
-    OUT_DIR="$HPO_OUT_BASE/$ABLATION"
+    OUT_DIR="$HPO_OUT_BASE/$EMG_REPR_ARG/$ABLATION"
     mkdir -p "$OUT_DIR"
 
     if [[ "$DEBUG" == true ]]; then
@@ -262,6 +268,7 @@ CODE_DIR=$CODE_DIR,\
 DATA_DIR=$DATA_DIR,\
 HPO_DB_DIR=$HPO_DB_DIR,\
 HPO_USE_JOURNAL=0,\
+EMG_REPR=$EMG_REPR_ARG,\
 N_TRIALS=1,\
 MAML_DIR=$CODE_DIR/system/MAML,\
 MOE_DIR=$CODE_DIR/system/MOE,\
@@ -300,6 +307,7 @@ CODE_DIR=$CODE_DIR,\
 DATA_DIR=$DATA_DIR,\
 HPO_DB_DIR=$HPO_DB_DIR,\
 HPO_USE_JOURNAL=1,\
+EMG_REPR=$EMG_REPR_ARG,\
 N_TRIALS=1,\
 MAML_DIR=$CODE_DIR/system/MAML,\
 MOE_DIR=$CODE_DIR/system/MOE,\
@@ -343,7 +351,7 @@ echo "Inspect ablation HPO results:"
 echo "  python -c \""
 echo "    import optuna"
 echo "    from optuna.storages.journal import JournalStorage, JournalFileBackend"
-echo "    storage = JournalStorage(JournalFileBackend('$HPO_DB_DIR/ablation_<ID>_10w1s_kfold7_v1.log'))"
+echo "    storage = JournalStorage(JournalFileBackend('$HPO_DB_DIR/ablation_<ID>_10w1s_kfold7_<EMG_REPR>_v1.log'))"
 echo "    study = optuna.load_study(study_name='ablation_<ID>_1s3w_hpo_v1', storage=storage)"
 echo "    print(study.best_trial)"
 echo "  \""
