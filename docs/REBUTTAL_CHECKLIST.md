@@ -116,6 +116,7 @@
 | Gesture uniqueness across users | ✅ | cross-user zero-shot 13-16% vs within-user 62-78% |
 | Per-ability-group gain (M0 − A4) | 🔧 (after M0/A4) | |
 | Routing follows motif vs label | ⬜ (needs non-uniform routing) | |
-| Body-region experts + random-group control (time-boxed) | ⏸ (needs the sensor-location map) | |
+| Body-region Gate 0 (laptop, dev users, 1-NN) | ✅ | anatomy 81.3 vs random 80.4 (94th pct, H2 fail) |
+| Body-region experts (deep) | ❌ dropped by Gate 0 (`specs/SPEC_body_regions.md` §4) | |
 | `DECISION_method.md` verdict | ⬜ (after the main runs) | |
 | Second dataset | ⏸ (decided with the venue) | |

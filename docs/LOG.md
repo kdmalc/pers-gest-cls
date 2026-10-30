@@ -1,6 +1,10 @@
 # LOG (context and design decisions that are not immediately critical)
 Full history: `docs/archive/FULL_RUNNING_LOG.md`. Status table: `docs/archive/HIGH_LEVEL_STATUS.md`. Immediate blockers (long form): `docs/archive/KAI_TODO.md`.
 
+## 2026-10-30, body-region line
+- Sensor map from Kai's `docs/emg-sensor-placements.png`, in `system/arch_variants/body_regions.py`. IMU order comes from recording slots 1-8, 9, 11, 13, 15; pods 9-12 have two EMG leads. Side assignment verified on the signals; position within a side was not.
+- Gate 0 rules were committed in `398078a` before the first run. Result: anatomical groups barely beat random groups, so deep region experts were dropped. `docs/specs/SPEC_body_regions.md` §4.
+
 ## 2026-10-25
 - Created `CURRENT_TODOs.md` (short handoff) and this file. Existing `docs/archive/KAI_TODO.md` remains the detailed version; keep the two consistent.
 - Why the TD baselines: peer feedback says journal reviewers will ask for LDA / time-domain / PCA+KNN baselines. `$B` is PCA + L1 1-NN, so label it that way in the paper. `td_lda_pool` is the only variant using the fold's train users (pooled within-class covariance, Ledoit-Wolf).

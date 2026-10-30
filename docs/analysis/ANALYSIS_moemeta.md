@@ -1,9 +1,6 @@
 # ANALYSIS — EncoderMoE vs MoEMeta, and the plan for originality
 
-*Written 2026-10-30 (Opus) from Kai's questions of the same day. Sources: both papers in `docs/`, the OpenReview thread (`docs/papers/OpenReview_downloaded.pdf`), and the code in `system/`. Status: analysis and proposals only. Nothing here is implemented.*
-
-> ## ⚠️ KAI: FIND THE SENSOR-INDEX-TO-BODY-LOCATION MAP
-> Find the map from sensor index to body location (all 16 EMG and 12 IMU sensors) and share it with Claude. It is not in the repo. **Track B (§6) cannot start without it.**
+*Written 2026-10-30 (Opus) from Kai's questions of the same day. Sources: both papers in `docs/`, the OpenReview thread (`docs/papers/OpenReview_downloaded.pdf`), and the code in `system/`. Status: analysis and proposals. MoEMeta-TS is not implemented. The body-region line (§6) ran its Gate 0 and was stopped.*
 
 ## 1. Verdict
 - **EncoderMoE and MoEMeta differ mechanically.** A time-series MoEMeta would not be EncoderMoE (§3).
@@ -68,6 +65,8 @@ This is the critical path and it ships whatever Track B does.
 ## 6. Track B: make the method more original (time-boxed)
 All of this uses dev users only, so the 28 test users stay clean.
 
+> **Update 2026-10-30: Gate 0 stopped this candidate.** Anatomical groups barely beat random sensor groups (81.3 vs 80.4, 94th percentile against a pre-stated 95th), so deep region experts will not be built. Per-user selection helps, but the support-only rule tried does not work. Details: `docs/specs/SPEC_body_regions.md` §4. The text below is kept as the original proposal.
+
 **Lead candidate: body-region experts with per-user sensor selection.**
 - Each expert reads a fixed anatomical sensor group. A new user calibrates only the gate and class prototypes, so personalisation becomes "which body regions does this person use?"
 - **The new capability is the point, not accuracy alone.** One calibration could recommend a small per-user sensor subset, which matters because a 28-sensor rig is not wearable. It also gives each user an interpretable body-use profile, and a way to test robustness to missing regions.
@@ -94,7 +93,7 @@ All of this uses dev users only, so the 28 test users stay clean.
 **Time box (proposal).** Decide Track B by 2026-11-20, which is roughly when the screen should have results and early enough to protect the ICML timeline. If nothing passes, the Track A paper goes out unchanged. Track B never blocks Track A.
 
 ## 7. Open items
-- [ ] **Kai:** find the sensor map.
+- [x] **Kai:** find the sensor map (`docs/emg-sensor-placements.png`).
 - [ ] **Kai:** confirm the 2026-11-20 decision date.
 - [ ] **Kai:** go-ahead on MoEMeta-TS and the `DECISION_method.md` edit.
 - [ ] Do a proper literature search before claiming that nobody has done MoE + MAML on sEMG. The check so far was one search.

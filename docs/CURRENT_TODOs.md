@@ -3,9 +3,6 @@
 
 **Goal:** resubmit EncoderMoE (rejected NeurIPS'26) on one clean protocol: 28 users, 7 folds, cached episodes, 10-way 1-shot primary. Add the reviewer-requested baselines and ablations. **Venue: ICML (Jan) or TMLR, decided after the main runs finish.**
 
-> ## ⚠️ KAI: FIND THE SENSOR-INDEX-TO-BODY-LOCATION MAP
-> Find the map from sensor index to body location (all 16 EMG and 12 IMU sensors) and share it with Claude. It is not in the repo. **The body-region expert work cannot start without it** (`docs/analysis/ANALYSIS_moemeta.md` §6).
-
 ## 0. What Claude is doing now
 - **Done this session (2026-10-30), all tested locally (356 tests pass), NOT yet run on the cluster:** see §3 for the full list.
 - **Next code, waiting for Kai's go:**
@@ -143,6 +140,8 @@ sacct -u km82 -S 2026-10-29 -X -n -P --format=JobID,ElapsedRaw,AllocTRES | \
 - Cross-user zero-shot gets 13-16%, against 62-78% within-user.
 - Executions recur across users under different labels.
 - The ability-group effect is weak (Mantel r 0.05-0.09).
+
+**Body-region Gate 0 (dev users, 1-NN, `specs/SPEC_body_regions.md` §4):** region experts dropped by the pre-stated rule. Anatomical groups do no better than random groups (81.3 vs 80.4, 94th percentile). Per-user selection helps (+5.3 over one shared subset), but the support-only selector tried fails. Sensor map: `system/arch_variants/body_regions.py`.
 
 ## 5. Open issues
 - **IMU time axis:** fs64 still uses the dict's IMU, which carries the env20 anomaly. Rebuilding the IMU from the raw CSVs costs about a day; decide before the finalist HPO.

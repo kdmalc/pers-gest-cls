@@ -46,3 +46,32 @@ Source: `docs/emg-sensor-placements.png` (Kai, 2026-10-30), every user has the s
 | Neither H1 nor H3 | Stop Track B's region line |
 
 With 4 users these are go/no-go signals, not results. m is reported in full rather than selected.
+
+## 4. Gate 0 result (2026-10-30)
+Commit `398078a` holds the rules above; the run came after it. Output: `~/gest_results/region_gate0/dev_10w1s.json`. Fs64 + IMU, 10-way 1-shot, 100 episodes per user. The baseline reproduces notebook 01 on all four users.
+
+| Accuracy (%) | P005 | P109 | P116 | P131 | Mean |
+|---|---|---|---|---|---|
+| All channels | 71.2 | 84.8 | 95.4 | 60.8 | 78.1 |
+| CV oracle, anatomical | 80.0 | 86.6 | 95.7 | 62.7 | 81.3 |
+| CV oracle, ≤ 4 regions | 80.0 | 86.2 | 95.7 | 62.0 | 81.0 |
+| One subset for everyone (leave-one-user-out) | 72.8 | 77.3 | 95.3 | 58.6 | 76.0 |
+| Support-only selector, m = 4 | 63.4 | 77.7 | 94.1 | 60.1 | 73.8 |
+
+Random-partition CV oracle: mean 80.4, 95th percentile 81.27, maximum 82.1. Support-only selector means for m = 1-8: 60.7, 67.8, 70.9, 73.8, 76.6, 77.6, 77.7, 78.1.
+
+| Rule | Result | Verdict |
+|---|---|---|
+| H1 accuracy headroom | +3.2 points, 4/4 users (P005 gives +8.8; the others +0.3 to +1.9) | pass |
+| H2 anatomy matters | 81.25 vs 95th percentile 81.27 (94th percentile; 12 of 200 random partitions at or above it) | **fail** |
+| H3 sensor reduction | ≤ 4 regions = 81.0, above the 77.1 bar | pass |
+| H4 real method exists | Best at m ≤ 4 = 73.8, below the 76.1 bar | **fail** |
+
+**Decision by the §3 table: "H3 without H2". Do not build region experts; report the redundancy as a finding.**
+
+**Reading it.**
+- H2 missed narrowly, but the effect is small either way: anatomy adds 0.8 points over a random grouping of the same shape. The threshold was not moved.
+- Per-user selection is what helps: the per-user CV oracle beats one shared subset by 5.3 points, whatever the grouping. The subsets differ across users and many sensors are redundant, so most groupings contain a good subset.
+- Picking a subset still needs query data. The one support-only rule tried loses accuracy, and needs 5 or more regions to come within 2 points of all channels.
+
+**Limits.** Four users, a flat 1-NN rather than a deep model, one representation, and one simple selector. Episodes share reps, so the CV oracle is somewhat optimistic for both the anatomical and random arms. A deep model could behave differently, but this gate gave no evidence to pay for finding out.
