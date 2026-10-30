@@ -60,10 +60,16 @@ is that the fusion claim at L34-38 narrows from blanket complementarity to
 specific failure modes (static and low-movement gestures). Cheaper reported by
 us than found by a reviewer.
 
-Usage (NOTS):
-    python A13_modality_ablation.py --condition emg_only
-    python A13_modality_ablation.py --condition imu_only
-    python A13_modality_ablation.py --condition both
+CURRENT PROTOCOL (2026-10-30; supersedes the SPLIT / VOCABULARY notes above)
+-----------------------------------------------------------------------------
+kfold7 (one job per fold, all 28 users), trained at the primary task 10-way 1-shot (the base config's
+n_way), evaluated on --cells (default 10x1; `all` = the 3x3 grid, the 10-output head serves every
+n <= 10). Hyperparameters: the fused model's (HPO_CONFIG tuned/frozen), so the bias still runs
+against the unimodal conditions. Paired per-user comparison with `both` is possible because all
+three conditions see the same cached episodes.
+
+Usage (NOTS; kfold_launcher.sh tokens A13_both / A13_emg_only / A13_imu_only):
+    python A13_modality_ablation.py --condition emg_only --fold-idx 0 --cells all [--seed 43]
 """
 
 import os
@@ -88,7 +94,7 @@ from ablation_config import (
     set_seeds, FIXED_SEED,
     run_episodic_test_eval, save_results, save_model_checkpoint, count_parameters,
     make_periodic_checkpoint_fn, make_periodic_test_eval_fn,
-    apply_kfold_fold, add_fold_arg,
+    apply_kfold_fold, add_fold_arg, add_seed_arg, add_cells_arg, parse_cells,
 )
 from MAML.maml_data_pipeline import get_maml_dataloaders
 
@@ -99,7 +105,8 @@ if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
 
-def build_config(condition: str, fold_idx: int, n_way: int = None, k_shot: int = None) -> dict:
+def build_config(condition: str, fold_idx: int, n_way: int = None, k_shot: int = None,
+                 seed: int = FIXED_SEED) -> dict:
     assert condition in CONDITIONS, f"--condition must be one of {CONDITIONS}"
 
     ablation_id = f"A13_{condition}"
@@ -114,7 +121,7 @@ def build_config(condition: str, fold_idx: int, n_way: int = None, k_shot: int =
     # line 89). Omitting this raises KeyError: 'seed' at the dataloader build,
     # i.e. AFTER model construction and any pre-flight checks have printed --
     # which is why the mask verification passed and the job still died.
-    config["seed"] = FIXED_SEED
+    config["seed"] = seed
 
     # The ablation-defining flag. Everything else inherits M0's HPO values.
     config["modality_mask"] = condition
@@ -229,9 +236,10 @@ def verify_masking(config: dict, tensor_dict_path: str) -> dict:
     return {"emg_energy": emg_energy, "imu_energy": imu_energy}
 
 
-def run(condition: str, fold_idx: int, n_way: int = None, k_shot: int = None) -> dict:
-    config = build_config(condition, fold_idx, n_way=n_way, k_shot=k_shot)
-    set_seeds(FIXED_SEED)
+def run(condition: str, fold_idx: int, n_way: int = None, k_shot: int = None,
+        seed: int = FIXED_SEED, cells=None) -> dict:
+    config = build_config(condition, fold_idx, n_way=n_way, k_shot=k_shot, seed=seed)
+    set_seeds(seed)
 
     tensor_dict_path = tensor_dict_file(config)
 
@@ -259,24 +267,24 @@ def run(condition: str, fold_idx: int, n_way: int = None, k_shot: int = None) ->
     save_model_checkpoint(
         {
             "condition":        condition,
-            "seed":             FIXED_SEED,
+            "seed":             seed,
             "model_state_dict": train_history["best_state"],
             "config":           config,
             "best_val_acc":     best_val_acc,
         },
         config,
-        tag=f"{config['ablation_id']}_seed{FIXED_SEED}_best",
+        tag=f"{config['ablation_id']}_kfold7_fold{fold_idx}_seed{seed}_best",
     )
 
     trained_model.load_state_dict(train_history["best_state"])
     test_results = run_episodic_test_eval(
-        trained_model, config, tensor_dict_path, config["test_PIDs"]
+        trained_model, config, tensor_dict_path, config["test_PIDs"], cells=cells
     )
 
     result = {
         "ablation_id":     config["ablation_id"],
         "description":     (f"Modality ablation ({condition}), masked channels, "
-                            f"fixed split, {config['n_way']}-way "
+                            f"kfold7, {config['n_way']}-way "
                             f"{config['k_shot']}-shot"),
         "condition":       condition,
         "modality_mask":   condition,
@@ -287,7 +295,7 @@ def run(condition: str, fold_idx: int, n_way: int = None, k_shot: int = None) ->
         "q_query_nominal": int(config["q_query"]),
         "q_per_class_realised": int(config["realised_q_per_class"]),
         "chance_level":    1.0 / float(config["n_way"]),
-        "seed":            FIXED_SEED,
+        "seed":            seed,
         "n_params":        n_params,
         "mask_check":      mask_check,
         "best_val_acc":    float(best_val_acc),
@@ -296,27 +304,23 @@ def run(condition: str, fold_idx: int, n_way: int = None, k_shot: int = None) ->
         "caveats": [
             "Channels are zero-masked, not removed; masked channels are dead "
             "capacity, so this is not a purpose-built unimodal model.",
-            "Fixed 24/4/4 split: cannot enter the paired RM-ANOVA. Compare "
-            "against the `both` control FROM THIS HARNESS at the same n_way, "
-            "not against the published 88.4% and not against L2SO (86.7%): "
-            "three runs of the identical fixed-split config have spanned "
-            "88.46 / 87.58 / 90.68.",
-            "Hyperparameters were tuned for the fused model at 3-way, so "
-            "unimodal conditions and larger vocabularies are handicapped. Bias "
-            "runs against the ablations.",
+            "kfold7 on the shared cached episodes: compare per user against the "
+            "`both` control of THIS harness (same folds, episodes and seed).",
+            "Hyperparameters were tuned for the fused model, so the unimodal "
+            "conditions are handicapped. Bias runs against the ablations.",
             f"Realised query count is {config['realised_q_per_class']} per class "
             f"({len(config['target_trial_reps'])} reps - {config['k_shot']} "
             f"support), not the nominal q_query={config['q_query']}.",
         ],
         "config_snapshot": {k: str(v) for k, v in config.items()},
     }
-    save_results(result, config, tag=f"{config['ablation_id']}_fold{fold_idx:02d}_final")
+    save_results(result, config, tag=f"{config['ablation_id']}_fold{fold_idx:02d}_seed{seed}_final")
 
     print(f"\n{'='*70}")
     print(f"[A13] FINAL {condition}: {test_results['mean_acc']*100:.2f}% "
           f"± {test_results['std_acc']*100:.2f}%")
-    print(f"      {config['n_way']}-way {config['k_shot']}-shot, fixed split, "
-          f"seed={FIXED_SEED}")
+    print(f"      {config['n_way']}-way {config['k_shot']}-shot, kfold7, "
+          f"seed={seed}")
     print(f"      chance={100.0 / config['n_way']:.1f}%   "
           f"q/class realised={config['realised_q_per_class']}")
     print(f"      params={n_params:,}   compare against the `both` control at "
@@ -348,15 +352,17 @@ def main():
     ap.add_argument("--condition", choices=list(CONDITIONS), required=True)
     add_fold_arg(ap, required=True)
     ap.add_argument("--n-way", type=_n_way_arg, default=None,
-                    help="Vocabulary size. Default: config value (3). "
-                         "Sweep 3 5 10 -- 3-way alone is near ceiling and "
-                         "cannot resolve the modality difference.")
+                    help="TRAINING vocabulary size. Default: the base config's (10, the primary "
+                         "task). Smaller n are evaluated from the same 10-way model via --cells.")
     ap.add_argument("--k-shot", type=int, default=None,
                     help="Support examples per class. Default: config value (1).")
+    add_seed_arg(ap)
+    add_cells_arg(ap)
     args = ap.parse_args()
     if args.k_shot is not None and args.k_shot < 1:
         ap.error(f"--k-shot must be >= 1, got {args.k_shot}")
-    run(args.condition, args.fold_idx, n_way=args.n_way, k_shot=args.k_shot)
+    run(args.condition, args.fold_idx, n_way=args.n_way, k_shot=args.k_shot, seed=args.seed,
+        cells=parse_cells(args.cells))
 
 
 if __name__ == "__main__":

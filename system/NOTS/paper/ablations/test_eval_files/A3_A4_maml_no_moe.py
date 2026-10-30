@@ -38,7 +38,7 @@ from ablation_config import (
     make_periodic_checkpoint_fn, make_periodic_test_eval_fn,
     compute_matched_filters_for_ablation,
     RUN_DIR,
-    run_kfold, add_fold_arg, kfold_tag, resolve_fold_ids, add_smoke_arg, apply_smoke,
+    run_kfold, add_fold_arg, kfold_tag, resolve_fold_ids, add_smoke_arg, apply_smoke, add_seed_arg,
 )
 from MAML.maml_data_pipeline import get_maml_dataloaders
 from MAML.mamlpp import mamlpp_pretrain
@@ -181,7 +181,7 @@ def run_one_fold(ablation_id: str, fold_id: str, seed: int, config: dict) -> dic
 # Orchestration  (protocol: kfold7 only; legacy protocols removed 2026-10-21)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_ablation(ablation_id: str, config: dict, description: str, fold_idx=None):
+def run_ablation(ablation_id: str, config: dict, description: str, fold_idx=None, seed: int = FIXED_SEED):
     assert config["test_procedure"] == "kfold7", config["test_procedure"]
 
     print(f"\n{ablation_id} CONFIG:")
@@ -193,6 +193,7 @@ def run_ablation(ablation_id: str, config: dict, description: str, fold_idx=None
     all_results = run_kfold(
         config, fold_idx,
         functools.partial(run_one_fold, ablation_id),
+        seed=seed,
     )
     test_accs = [r["test_results"]["mean_acc"] for r in all_results]
     summary = {
@@ -205,14 +206,14 @@ def run_ablation(ablation_id: str, config: dict, description: str, fold_idx=None
         "mean_test_acc":      float(np.mean(test_accs)),
         "std_test_acc":       float(np.std(test_accs)),
         "num_folds":          len(all_results),
-        "seed":               FIXED_SEED,
+        "seed":               seed,
         "cnn_base_filters":   config["cnn_base_filters"],
         "param_match_target": config["_param_match_target"],
         "matched_cnn_params": config[matched_cnn_key],
         "param_ratio":        config[param_ratio_key],
         "config_snapshot":    {k: str(v) for k, v in config.items()},
     }
-    save_results(summary, config, tag=kfold_tag(fold_idx))
+    save_results(summary, config, tag=kfold_tag(fold_idx, seed))
 
     param_ratio = config[param_ratio_key]
     print(f"\n{'='*70}")
@@ -240,16 +241,17 @@ def main():
     )
     add_fold_arg(parser)
     add_smoke_arg(parser)
+    add_seed_arg(parser)
     args = parser.parse_args()
 
     if args.ablation == "A3":
         run_ablation("A3", apply_smoke(build_config_a3(), args.smoke),
                      "MAML + No-MoE (single encoder matched to ONE M0 expert)",
-                     fold_idx=args.fold_idx)
+                     fold_idx=args.fold_idx, seed=args.seed)
     else:
         run_ablation("A4", apply_smoke(build_config_a4(), args.smoke),
                      "MAML + No-MoE (single encoder matched to ALL M0 experts) ← CRITICAL",
-                     fold_idx=args.fold_idx)
+                     fold_idx=args.fold_idx, seed=args.seed)
 
 
 if __name__ == "__main__":

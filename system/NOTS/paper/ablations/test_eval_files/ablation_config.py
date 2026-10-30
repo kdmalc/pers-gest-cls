@@ -119,8 +119,12 @@ def build_kfold_folds() -> list:
 #   env20 : 20 Hz MAV envelope, 16 channels   (the original input)
 #   fs64  : windowed spectral features of the native-rate EMG, 112 channels (16 x 7)
 #   td64  : classical Hudgins time-domain features (MAV, WL, ZC, SSC), 64 channels (16 x 4); for the A6 LDA/kNN baselines
+#   raw3s : native-rate (2048 Hz) EMG, 3.0 s crop centred on the activity centroid, 16 channels x 6144
+#           samples; read through a learned strided stem (config["emg_stem"] = "raw_strided",
+#           pretrain_models.EMGRawStem) that brings it to T=64 before the IMU concat. EMG-RAW ablation.
 EMG_REPRS = {"env20": ("segfilt_rts_tensor_dict.pkl", 16), "fs64": ("segfilt_fs64_tensor_dict.pkl", 112),
-             "td64": ("segfilt_td64_tensor_dict.pkl", 64)}
+             "td64": ("segfilt_td64_tensor_dict.pkl", 64), "raw3s": ("segfilt_raw3s_tensor_dict.pkl", 16)}
+EMG_STEM_FOR_REPR = {"raw3s": "raw_strided"}      # every other representation is already at T=64
 
 
 def apply_emg_repr(config: dict, emg_repr: str) -> dict:
@@ -128,6 +132,7 @@ def apply_emg_repr(config: dict, emg_repr: str) -> dict:
         raise ValueError(f"EMG_REPR must be one of {sorted(EMG_REPRS)}, got {emg_repr!r}")
     config["emg_repr"] = emg_repr
     config["emg_in_ch"] = EMG_REPRS[emg_repr][1]
+    config["emg_stem"] = EMG_STEM_FOR_REPR.get(emg_repr, "none")
     return config
 
 
@@ -171,6 +176,10 @@ def apply_hpo_config(config: dict, mode: str) -> dict:
     key = "M0" if mode == "frozen" or own is None else own
     if key not in allcfg:
         raise KeyError(f"no HPO result for {key!r} in {HPO_CONFIG_PATH}: have {sorted(allcfg)}")
+    hpo_repr = allcfg[key]["provenance"].get("emg_repr")
+    if hpo_repr is not None and hpo_repr != config["emg_repr"]:
+        raise ValueError(f"HPO result {key!r} was tuned on emg_repr={hpo_repr!r} but this run uses "
+                         f"{config['emg_repr']!r}")
     for k, v in allcfg[key]["overrides"].items():
         if k not in config:
             raise KeyError(f"HPO override {k!r} (from {key}) is not a config key")
@@ -237,9 +246,39 @@ def run_kfold(config: dict, fold_idx, run_one_fold_fn, seed: int = None) -> list
     return results
 
 
-def kfold_tag(fold_idx) -> str:
-    """results-JSON tag: per-fold file name for single-fold jobs, 'summary' for all."""
-    return "summary" if fold_idx is None else f"fold{fold_idx:02d}_summary"
+def kfold_tag(fold_idx, seed: int = None) -> str:
+    """results-JSON tag: per-fold file name for single-fold jobs, 'summary' for all. A non-default
+    training seed is part of the name, so the seeds of one fold never overwrite each other."""
+    s = "" if seed is None or seed == FIXED_SEED else f"_seed{seed}"
+    return ("summary" if fold_idx is None else f"fold{fold_idx:02d}_summary") + s
+
+
+def add_cells_arg(parser, default=("10x1",)):
+    """--cells NxK ... | all : which (n_way, k_shot) cells of the episode cache to evaluate."""
+    parser.add_argument("--cells", nargs="+", default=list(default),
+                        help="cells as NxK (e.g. 10x1 5x3), or 'all' for the 3x3 grid of the cache")
+
+
+def parse_cells(tokens) -> list:
+    """['all'] -> every cached cell; ['10x1', '3x5'] -> [(10, 1), (3, 5)]. Raises on cells not in the cache."""
+    from episodes import episode_cache as ec
+    if list(tokens) == ["all"]:
+        return list(ec.CELLS)
+    cells = []
+    for t in tokens:
+        n, k = t.lower().split("x")
+        cells.append((int(n), int(k)))
+    bad = [c for c in cells if c not in ec.CELLS]
+    if bad:
+        raise SystemExit(f"cells {bad} not in the cache grid {ec.CELLS}")
+    return cells
+
+
+def add_seed_arg(parser):
+    """--seed: the training seed (model init, training-episode order). Default FIXED_SEED (42).
+    The aggregator averages each user's accuracy over the seeds of a method (SPEC_stats.md)."""
+    parser.add_argument("--seed", type=int, default=FIXED_SEED,
+                        help=f"training seed (default {FIXED_SEED}); kfold_launcher.sh --seeds fans out")
 
 
 def get_hpo_split() -> dict:
@@ -317,6 +356,7 @@ def make_base_config(ablation_id: str) -> dict:
     config["sequence_length"] = 64
     config["emg_in_ch"]       = 16
     config["emg_repr"]        = "env20"   # explicit; EMG_REPR env (kfold_launcher --emg-repr) overrides
+    config["emg_stem"]        = "none"    # set by apply_emg_repr (raw3s -> "raw_strided")
     config["imu_in_ch"]       = 72
     config["demo_in_dim"]     = 12
 
@@ -489,6 +529,10 @@ def make_base_config(ablation_id: str) -> dict:
 
     config["device"] = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # Architecture-exploration keys at their M0 values (docs/specs/SPEC_architecture_exploration.md), so
+    # every config names them explicitly and the tuned overrides of any variant token apply.
+    from arch_variants.registry import arch_defaults
+    arch_defaults(config)
     return config
 
 
@@ -1068,13 +1112,15 @@ def _print_eval(res: dict):
 
 
 def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
-                            test_pids: list, cells=None) -> dict:
+                            test_pids: list, cells=None, adapt_and_eval_fn=None) -> dict:
     """
     Evaluate a MAML model on the fold's cached TEST episodes (docs/specs/SPEC_episode_cache.md).
 
     cells: list of (n_way, k_shot); None = the trained cell. Returns the first cell's per-user
     summary at the top level (mean_acc / std_acc / per_user_acc), plus per_cell, episode_source
     (file + sha256) and per_episode rows (id, user, n_query, n_correct) for the aggregator.
+    adapt_and_eval_fn: per-episode evaluator with mamlpp_adapt_and_eval's signature (default: MAML++;
+    the metric learners pass arch_variants.metric_learners.metric_adapt_and_eval).
     """
     from MAML.maml_data_pipeline import maml_mm_collate, reorient_tensor_dict
     from MAML.mamlpp import mamlpp_adapt_and_eval
@@ -1095,7 +1141,8 @@ def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
         dl = DataLoader(ds, batch_size=1, shuffle=False, num_workers=4, collate_fn=maml_mm_collate)
         correct = []
         for batch in dl:
-            metrics = mamlpp_adapt_and_eval(model, config, batch["support"], batch["query"])
+            metrics = (mamlpp_adapt_and_eval if adapt_and_eval_fn is None else adapt_and_eval_fn)(
+                model, config, batch["support"], batch["query"])
             correct.append(int(round(metrics["acc"] * batch["query"]["labels"].numel())))
         rows_by_cell[(n, k)] = outcomes_to_per_episode(eps, correct)
 

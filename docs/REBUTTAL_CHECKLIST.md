@@ -17,9 +17,9 @@
 ## HPO
 | Run | Status | Best dev acc |
 |---|---|---|
-| A4 (MAML, no MoE): shared training HPs | 🔧 | |
-| A2 (supervised + fine-tune) | 🔧 | |
-| Architecture screen (one study per variant below, frozen shared HPs) | 🔧 | |
+| A4 (MAML, no MoE) | ⏸ until EncoderMoE is final | |
+| A2 (supervised + fine-tune) | ⏸ until EncoderMoE is final | |
+| Architecture screen: one study per variant below, plus M0 and A4 as references, legacy HPs frozen, ≥24 trials each | 🔧 | |
 | E × top-k grid on the best MoE config | 🔧 | |
 | Finalists + re-matched controls (M0 or successor, A1, A4), full space | ⬜ | |
 | Top-3 × 3-seed replay and export of the finalists | 🔧 | |
@@ -34,7 +34,7 @@
 | A4: MAML++, no MoE (param-matched) | 🔧 | |
 | A14: ProtoNet / kNN readout on frozen M0 and A4 encoders | 🔧 | |
 | ANIL (head-only inner loop; M0 and A4) | 🔧 | |
-| 3 seeds for the headline rows | ⬜ | |
+| 3 seeds for the headline rows | 🔧 | |
 
 ## MoE structure (screen; the best goes in the paper, the controls go in the appendix)
 | Run | Status | Dev acc |
@@ -92,7 +92,7 @@
 | Run | Status | Acc |
 |---|---|---|
 | Meta GNI (Kaifosh): zero-shot and fine-tuned, on raw 2 kHz EMG | ⬜ (needs rewiring to the episode cache) | |
-| EncoderMoE EMG-only on raw 2 kHz vs GNI, same episodes | ⬜ | |
+| EncoderMoE EMG-only on raw 2 kHz vs GNI, same episodes | 🔧 our side (A13 emg_only on raw3s); ⬜ GNI side | |
 | EMGBench EMG-only, with gate statistics (promised to fkxS) | ⬜ | |
 | FS-HGR | ⬜ | |
 | EMG-CrossFormer | ⬜ | |
@@ -101,12 +101,12 @@
 ## Reviewer-requested ablations
 | Run | Status | Acc |
 |---|---|---|
-| Modality: EMG-only / IMU-only / both (A13, at 10-way) | 🔧 (switch to 10-way) | |
+| Modality: EMG-only / IMU-only / both (A13, 10-way, all cells) | 🔧 | |
 | EMG input: env20 vs fs64 (dev decision) | ✅ fs64 (+17 to +29 pts EMG-only) | |
-| EMG input: fs64 vs a learned raw-EMG stem | ⬜ | |
+| EMG input: fs64 vs a learned raw-EMG stem | 🔧 (needs the raw3s dict built) | |
 | Meta-training user sweep: 4 / 8 / 12 / 16 / 20 users (A15) | 🔧 | |
-| Upper bound: fine-tune on all of the test user's other reps (A16) | ⬜ | |
-| Zero-shot Z1-Z4 | ⬜ | |
+| Upper bound: fine-tune on all of the test user's other reps (A16; A2 and M0) | 🔧 | |
+| Zero-shot Z1-Z4 | 🔧 | |
 | Shots × ways grid: k ∈ {1, 3, 5} × n ∈ {3, 5, 10} (M0, A2, A4) | 🔧 | |
 | Subject-specific models (A7 / A8) | ⏸ (not ported) | |
 

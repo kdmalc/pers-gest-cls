@@ -36,7 +36,16 @@ GOLDEN = Path(__file__).with_name("golden_base_config_keys.json")
 # this list can be written ahead of the implementation.
 DEFAULT_OFF_KEYS: list[tuple[str, object]] = [
     # Fusion / normalisation (plan 0.5)
-    ("fusion_mode", "early_concat"),
+    ("fusion_mode", "early"),          # FlexNet F0 (arch_variants.registry)
+    # Architecture exploration (docs/specs/SPEC_architecture_exploration.md; arch_variants.registry)
+    ("arch_family", "legacy"),
+    ("MOE_gate_mode", "learned"),
+    ("MOE_router_z_coeff", 0.0),
+    ("MOE_skip_unselected_experts", False),
+    ("temporal_model", "lstm"),
+    ("tf_moe_every", 0),
+    ("maml_inner_param_include", None),
+    ("emg_stem", "none"),
     ("input_norm_mode", "none"),
     ("MOE_expert_groups", None),
     ("MOE_aux_coeff_group", 0.0),

@@ -4,26 +4,23 @@
 **Goal:** resubmit EncoderMoE (rejected NeurIPS'26) on one clean protocol: 28 users, 7 folds, cached episodes, 10-way 1-shot primary. Add the reviewer-requested baselines and ablations. **Venue: ICML (Jan) or TMLR, decided after the main runs finish.**
 
 ## 0. What Claude is doing now
-- **Done this session (2026-10-30), all tested locally (356 tests pass), NOT yet run on the cluster:** see §3 for the full list.
-- **Next code, waiting for Kai's go:**
-  1. kfold eval wiring for the screen finalists;
-  2. the raw-EMG stem (`raw3s`);
-  3. zero-shot Z1-Z4;
-  4. upper bound;
-  5. `--seed` flag;
-  6. A13 at 10-way.
+- **Nothing running.** Everything below is built and tested locally (386 tests pass); none of it has run on the cluster.
+- **Next code, waiting for Kai's go:** nothing queued. Open options: F4, T1/T3, CNP, the GNI side of the raw-EMG comparison, ports of A7/A8/portA and Kaifosh (A10-A12) to the cache.
 
-## 1. Decisions for Kai (proposals in `SPEC_architecture_exploration.md` §3)
-1. **Tuning order.** Kai's objection is right: M0 and the param-matched controls change if the MoE scheme changes. **Proposal:**
-   - tune **A4 and A2 now**: their architecture does not depend on the MoE result;
-   - freeze A4's best training HPs and screen every variant with only its own HPs searched;
-   - full HPO only for the finalists and their re-matched controls (M0, A1, A4).
-2. **Budgets.**
-   - Screen: **24 trials** per variant with frozen shared HPs (2-6 searched dims).
-   - Finalists: **100 trials**, minimum 60, depending on the measured trial cost.
-   - Pick after the debug runs (§2B) give the per-epoch time.
-3. **E and top-k:** a **grid** (E ∈ {4, 8, 16, 22, 36} × k ∈ {1, 2, 4, 9}, k ≤ E, 2 seeds) around the best MoE config, not TPE. This gives the E=8-vs-22 figure reviewers asked for.
-4. **PI sign-offs:** fs64 for the main table; building td64 (the build command is in `LOG.md`, 2026-10-25; then cluster tokens `A6_td_knn A6_td_lda A6_td_lda_pool`); reporting `$B` if it wins.
+## 1. Plan (Kai, 2026-10-30 evening)
+1. **Settle the MoE and fusion architecture first, on the dev users. No final HPO yet.**
+   - Read the routing diagnostics (X1 vs X2) to see whether the MoE routes or just averages experts.
+   - **A4 and A2 tuning stay on hold until EncoderMoE is final.**
+   - The screen therefore freezes the shared training HPs at the **legacy Trial-89 values** (`system/NOTS/paper/ablations/screen_fixed/`), the same for every variant.
+   - M0 and A4 are screened with the same frozen values, as the references.
+2. **Budgets:**
+   - **≥ 24 trials** per screened variant.
+   - Finalists: 100 or 60 trials, decided from the debug timings (§2B).
+3. **E and top-k:** a grid around the best MoE config, not TPE.
+4. **PI sign-offs:**
+   - fs64 for the main table;
+   - building td64 (command in `LOG.md`, 2026-10-25; then the tokens `A6_td_knn A6_td_lda A6_td_lda_pool`);
+   - reporting `$B` if it wins.
 
 ## 2. Cluster commands (Kai runs these)
 **Every session starts with:**
@@ -49,32 +46,43 @@ mkdir -p ~/gest_results/A6_cluster && scp -r "km82@<NOTS login host>:/scratch/my
 ```
 Claude then runs notebook 02 with `A6_RESULTS=~/gest_results/A6_cluster`.
 
-**B. NEEDS CLUSTER TEST: debug trials of the new code, fs64.** These are 15-minute single trials on the `debug` partition, with nothing written to the journals.
+**B. Debug trials of the new code: RE-RUN after this `git pull`.**
+- **Bug found 2026-10-30 evening:** the HPO driver never applied `--emg-repr` to the training config, so the first debug batch (and any earlier "fs64" study) trained on the **env20** dict.
+- That batch still shows crashes, but its epoch times are not fs64 times. Paste me its output anyway, then re-run on the fixed code.
 ```bash
 bash hpo_ablation_launcher.sh A4 M0 X2 X3 X4 X6 T2 F1 F2 F3 T0 T4 P1 P1_moe P1_rel P1_feat P3 A4_ANIL --emg-repr fs64 --debug
 ```
 When they finish, paste Claude the output of:
 ```bash
 LOGS=/scratch/my13/kai/runs/paper/sub2/hpo/logs
-for f in $(ls -t $LOGS/hpo_*.out | head -18); do echo "== $(basename $f)"; grep -m1 "build_model\]" $f; grep -m2 -E "Epoch completed in|\[metric:.*epoch 1:" $f; grep -m1 -E "Traceback|Error" $f; done
+for f in $(ls -t $LOGS/hpo_*.out | head -18); do echo "== $(basename $f)"; grep -m1 "emg_in_ch:" $f; grep -m1 "build_model\]" $f; grep -m2 -E "Epoch completed in|\[metric:.*epoch 1:" $f; grep -m1 -E "Traceback|Error" $f; done
 ```
-- **Pass:** every log shows `[build_model] ... parameters` and at least one epoch line, with no Traceback.
-- The epoch times give the trial cost, which sets the budgets in §1.
+- **Pass:** every log shows `emg_in_ch: 112` (fs64), `[build_model] ... parameters` and at least one epoch line, with no Traceback.
 
-**C. After Kai decides §1:** stage 0, the full HPO of A4 and A2 (default 60 trials; add `--n-trials 100` if chosen).
+**C. Eval-path smoke tests of the new scripts** (debug partition, fold 0, legacy HPs; checks train → test → save end to end):
 ```bash
-bash hpo_ablation_launcher.sh A4 A2 --emg-repr fs64 --dry-run
-bash hpo_ablation_launcher.sh A4 A2 --emg-repr fs64
+bash kfold_launcher.sh V_X2 V_P1 V_P3 Z_all M0 --folds 0 --debug --hpo-config legacy --emg-repr fs64
+# after that M0 smoke finishes (they read its fold-0 checkpoint):
+bash kfold_launcher.sh Z3 A16_M0 --folds 0 --debug --hpo-config legacy --emg-repr fs64
 ```
-When A4 is done, freeze its training HPs and launch the screen. The exact command list will be given then. Its shape:
+Pass: every `kfold7_*_f0_*.out` ends with `PYTHON_EXIT_CODE=0`.
+
+**C2. The architecture screen**, after B passes. It uses ≥ 24 trials and the legacy shared HPs frozen.
 ```bash
-P=/projects/my13/kai/meta-pers-gest/pers-gest-cls/system/NOTS/paper/ablations
-python $P/hpo_tools.py freeze --db-dir hpo/optuna_dbs --study ablation_A4_10w1s_kfold7_fs64_v1 --trial best \
-  --keys outer_lr,wd,maml_inner_steps,maml_alpha_init,maml_alpha_init_eval,maml_use_lslr,use_lslr_at_eval,use_maml_msl,episodes_per_epoch_train \
-  --out /scratch/my13/kai/runs/paper/sub2/hpo/shared_maml_fs64.json
-bash hpo_ablation_launcher.sh X2 X3 X4 X5 X6 T2 F1 F2 F3 --emg-repr fs64 --n-trials 24 --study-suffix screen \
-  --fixed-params /scratch/my13/kai/runs/paper/sub2/hpo/shared_maml_fs64.json
+F=/projects/my13/kai/meta-pers-gest/pers-gest-cls/system/NOTS/paper/ablations/screen_fixed
+bash hpo_ablation_launcher.sh M0 A4 X2 X3 X4 X5 X6 F1 F2 F3 --emg-repr fs64 --n-trials 24 --study-suffix screen --fixed-params $F/legacy_shared_maml.json --dry-run
+bash hpo_ablation_launcher.sh M0 A4 X2 X3 X4 X5 X6 F1 F2 F3 --emg-repr fs64 --n-trials 24 --study-suffix screen --fixed-params $F/legacy_shared_maml.json
+bash hpo_ablation_launcher.sh T0 T2 T4 --emg-repr fs64 --n-trials 24 --study-suffix screen --fixed-params $F/legacy_inner_only.json
+bash hpo_ablation_launcher.sh P1 P1_moe P1_match P1_rel P1_ridge P1_feat P3 --emg-repr fs64 --n-trials 24 --study-suffix screen
 ```
+
+**C3. EMG-RAW dict (laptop; raw CSVs in Box):** about 0.6 GB.
+```bash
+cd ~/Repos/pers-gest-cls; PY=~/anaconda3/envs/fl_torch/python.exe
+$PY system/universal_preprocessing/EMG_preprocessing/build_raw3s_tensor_dict.py --root "/c/Users/kdmen/Box/Yamagami Lab/Data/2024_UIST_dataset/upload/segmented_raw_data" --fused-dict dataset/meta-learning-sup-que-ds/segfilt_rts_tensor_dict.pkl --out dataset/meta-learning-sup-que-ds/segfilt_raw3s_tensor_dict.pkl
+scp dataset/meta-learning-sup-que-ds/segfilt_raw3s_tensor_dict.pkl km82@<NOTS login host>:/projects/my13/kai/meta-pers-gest/pers-gest-cls/dataset/meta-learning-sup-que-ds/
+```
+Then any token runs on it with `--emg-repr raw3s`.
 
 **D. Status, timing and GPU-hours of any HPO, at any time:**
 ```bash
@@ -89,38 +97,29 @@ sacct -u km82 -S 2026-10-29 -X -n -P --format=JobID,ElapsedRaw,AllocTRES | \
 - run one `--smoke` M0 on fs64: `bash kfold_launcher.sh M0 --folds 0 --debug --hpo-config legacy --emg-repr fs64`;
 - delete the non-smoke A1/A2 fold-0 JSONs under `.../eval/kfold7/{A1,A2}/fold0/`.
 
-## 3. Code status
-**Tokens** in `ablation_hpo.ARCH_VARIANTS`; each is its own Optuna study.
+## 3. Code status (all local-tested; none cluster-tested yet)
+| Item | Where | Launch |
+|---|---|---|
+| X2-X6, T2 (MoE variants in M0's class) | `MOE/MOE_encoder.py` | HPO tokens `X2`..`X6 T2`; eval `V_<token>` |
+| F1-F3, T0, T4 | `arch_variants/flexnet.py` | `F1 F2 F3 T0 T4`; `V_<token>` |
+| ProtoNet / Matching / Relation / R2-D2 / FEAT; ADANN; ANIL | `arch_variants/metric_learners.py`, `adann.py` | `P1* P3 *_ANIL`; `V_<token>` |
+| One registry for every token (HPO, eval, launcher) | `arch_variants/registry.py` | |
+| Routing diagnostics | `MOE/routing_metrics.py` (per HPO trial; per fold on val in `V_*`) | |
+| Timing, `hpo_tools.py`, frozen HPs, study suffix, E×k enqueue | `ablation_hpo.py` | `--fixed-params --study-suffix --enqueue-json` |
+| 7-fold eval of any token | `test_eval_files/arch_variant_eval.py` | `kfold_launcher.sh V_<token>` |
+| EMG-RAW stem + raw3s builder | `pretrain_models.EMGRawStem`, `build_raw3s_tensor_dict.py` | `--emg-repr raw3s` (both launchers) |
+| Zero-shot Z1-Z4 | `test_eval_files/Z_zeroshot_crossuser.py` | `Z_all`, `Z3` |
+| Upper bound (kfold7, leave-one-rep-out) | `test_eval_files/A16_upper_bound_kfold.py` | `A16_A2`, `A16_M0` |
+| `--seed` (M0, A1, A2, A3/A4, A13, V_*, Z) | `ablation_config.add_seed_arg` | `kfold_launcher.sh --seeds 42 43 44` |
+| A13 at 10-way, all 9 cells | `A13_modality_ablation.py` | `A13_both A13_emg_only A13_imu_only` |
+| **Fixes:** HPO ignored `--emg-repr`; A2 tuned at a different width than evaluated; collapse penalty zeroed balanced trials | | |
 
-| Item | Token / file | Local tests | Cluster |
-|---|---|---|---|
-| X2 uniform gate | `X2` (`MOE_gate_mode`) | ✓ | ☐ §2B |
-| X3 sparse top-1/2 + z-loss | `X3` | ✓ | ☐ |
-| X4 support-set routing | `X4` (`mamlpp.task_support`) | ✓ | ☐ |
-| X5 shared expert | `X5` | ✓ | ☐ |
-| X6 cross-attention router | `X6` | ✓ | ☐ |
-| F1 mid / F2 FiLM / F3 cross-attention fusion | `F1 F2 F3` (`arch_variants/flexnet.py`) | ✓ | ☐ |
-| T0 transformer / T2 CNN experts + transformer / T4 MoE-FFN transformer | `T0 T2 T4` | ✓ | ☐ |
-| ProtoNet / Matching / Relation / R2-D2 / FEAT, episodic | `P1 P1_match P1_rel P1_ridge P1_feat`, `P1_moe` (`arch_variants/metric_learners.py`) | ✓ | ☐ |
-| ADANN-style (gradient-reversal user head) | `P3` (`arch_variants/adann.py`) | ✓ | ☐ |
-| ANIL | `A4_ANIL M0_ANIL` | ✓ | ☐ |
-| Routing diagnostics (fixes debug issues 5-7) | `MOE/routing_metrics.py`; stored per MoE trial as user attr `routing` | ✓ | ☐ |
-| Per-trial timing + `hpo_tools.py` (report / freeze / grid) | every trial | ✓ | ☐ |
-| Frozen shared HPs, study suffix, E×k enqueue | `--fixed-params`, `--study-suffix`, `--enqueue-json` | ✓ | ☐ |
-| **Bug fix:** HPO collapse penalty zeroed balanced trials with top_k/E ≳ 0.7 | `_objective_episodic` | ✓ | ☐ |
-
-**Not built yet:**
-- 7-fold eval scripts for the new tokens (finalists only);
-- EMG-RAW stem;
-- F4 (modality-specific expert pools);
-- T1/T3;
-- CNP (low priority);
+**Not built:**
+- F4 and T1/T3;
+- CNP;
 - learned `$B` (only if R4 triggers);
-- zero-shot;
-- upper bound;
-- `--seed`;
-- A13 at 10-way;
-- ports of A7/A8/portA/A16 and Kaifosh to the cache.
+- the GNI side of the raw-EMG comparison;
+- ports of A7/A8/portA and Kaifosh A10-A12 to the cache.
 
 ## 4. Results so far
 **Dev EMG decision (notebook 01):** fs64. At 10-way 1-shot, EMG-only gains +28.9 (proto) / +17.2 (1-NN) points over env20, on 4/4 users.

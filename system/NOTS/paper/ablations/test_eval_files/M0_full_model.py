@@ -32,7 +32,7 @@ from ablation_config import (
     make_periodic_checkpoint_fn, make_periodic_test_eval_fn,
     RUN_DIR,
     apply_kfold_fold, KFOLD_N_FOLDS,
-    add_smoke_arg, apply_smoke,
+    add_smoke_arg, apply_smoke, add_seed_arg, kfold_tag,
 )
 from MAML.maml_data_pipeline import get_maml_dataloaders
 
@@ -51,6 +51,7 @@ def parse_args() -> argparse.Namespace:
         help="kfold7 fold index 0..6 (one SLURM job per fold). Omit to run all folds sequentially.",
     )
     add_smoke_arg(parser)
+    add_seed_arg(parser)
     return parser.parse_args()
 
 
@@ -137,14 +138,14 @@ def main():
     for i in fold_ids:
         fold_config = apply_kfold_fold(config, i)
         print(f"\n[M0] kfold7 fold {i}  test={fold_config['test_PIDs']}  val={fold_config['val_PIDs']}")
-        results.append(run_one_fold(fold_id=f"kfold7_fold{i}", seed=FIXED_SEED, config=fold_config))
+        results.append(run_one_fold(fold_id=f"kfold7_fold{i}", seed=args.seed, config=fold_config))
     accs = [r["test_results"]["mean_acc"] for r in results]
     summary = {
         "ablation_id":     "M0",
         "description":     "Full Model: MAML + MoE",
         "test_procedure":  "kfold7",
         "fold_idxs":       fold_ids,
-        "seed":            FIXED_SEED,
+        "seed":            args.seed,
         "n_params":        results[0]["n_params"],
         "fold_results":    results,
         "mean_test_acc":   float(np.mean(accs)),
@@ -152,7 +153,7 @@ def main():
         "num_folds":       len(results),
         "config_snapshot": {k: str(v) for k, v in config.items()},
     }
-    tag = f"fold{fold_ids[0]:02d}_summary" if len(fold_ids) == 1 else "summary"
+    tag = kfold_tag(fold_ids[0] if len(fold_ids) == 1 else None, args.seed)
     save_results(summary, config, tag=tag)
     print(f"[M0] FINAL kfold7 {fold_ids}: {summary['mean_test_acc']*100:.2f}% "
           f"+/- {summary['std_test_acc']*100:.2f}% over {len(results)} fold(s)")

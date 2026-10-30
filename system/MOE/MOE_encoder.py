@@ -887,12 +887,17 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         self._last_router_logits = None
         D = 2 if bidir else 1
 
+        # EMG-RAW: native-rate EMG through a learned strided stem before the concat (else None)
+        from pretraining.pretrain_models import build_emg_stem
+        self.emg_stem, C_emg = build_emg_stem(config)
         in_ch = C_emg + (C_imu if use_imu else 0)
 
         # ── Optional shared strided front-end ────────────────────────────────
         front_end_stride = config.get("front_end_stride", 0)
         assert isinstance(front_end_stride, int) and front_end_stride >= 0, \
             f"front_end_stride must be a non-negative int, got {front_end_stride}"
+        if front_end_stride > 0 and self.emg_stem is not None:
+            raise ValueError("front_end_stride and emg_stem are exclusive (the stem replaces it)")
         if front_end_stride > 0:
             front_k = 2 * front_end_stride
             front_out_ch = max(gn_grps, in_ch)
@@ -1014,6 +1019,8 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
                     "MOE_routing_signal='context_proj_task' needs the episode's support set: wrap the "
                     "forward in mamlpp.task_support(model, support_batch, device)")
             s_emg, s_imu = sup
+            if self.emg_stem is not None:
+                s_emg = self.emg_stem(s_emg)
             xs = torch.cat([s_emg, s_imu], dim=1) if (self.use_imu and s_imu is not None) else s_emg
             if self.front_end is not None:
                 xs = self.front_end(xs)
@@ -1035,6 +1042,8 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
     # ─────────────────────────────────────────────────────────────────────────
     def backbone(self, x_emg, x_imu=None, demographics=None,
                  return_routing: bool = False):
+        if self.emg_stem is not None:
+            x_emg = self.emg_stem(x_emg)
         x = x_emg
         if self.use_imu and x_imu is not None:
             x = torch.cat([x, x_imu], dim=1)

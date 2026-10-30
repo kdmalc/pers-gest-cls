@@ -120,6 +120,12 @@ class FlexNet(nn.Module):
         self.temporal_model = config["temporal_model"]
         self.use_moe_encoder = bool(config["use_MOE"]) and self.fusion_mode != "none"
         self.needs_task_support = False
+        # EMG-RAW: native-rate EMG through a learned strided stem first; the fusion encoders then see
+        # the stem's channels at T=64
+        from pretraining.pretrain_models import build_emg_stem
+        self.emg_stem, C_emg = build_emg_stem(config)
+        if self.emg_stem is not None:
+            config = dict(config, emg_in_ch=C_emg)
         raw_ch = C_emg + (C_imu if self.use_imu else 0)
 
         # ── encoder (single, or an expert bank of fusion encoders) ───────────
@@ -183,6 +189,8 @@ class FlexNet(nn.Module):
 
     def _encode(self, x_emg, x_imu):
         """-> (h (B, C, T), routing dict or None)."""
+        if self.emg_stem is not None:
+            x_emg = self.emg_stem(x_emg)
         if self.fusion_mode == "none":
             x = torch.cat([x_emg, x_imu], dim=1) if (self.use_imu and x_imu is not None) else x_emg
             return x, None

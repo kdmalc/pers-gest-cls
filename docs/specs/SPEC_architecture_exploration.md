@@ -99,10 +99,13 @@ The other problem is budget. The full M0 space has about 17 HPs. 16 TPE trials o
 
 The fix is to separate the shared training HPs from each architecture's own HPs.
 
-**Stage 0 (now): shared training HPs.**
-- Full HPO of **A4** (MAML, no MoE, fixed width): the cheapest MAML model, and its architecture does not depend on the MoE outcome.
-- Also **A2** (supervised, fixed arch), which is needed in every version of the paper.
-- Freeze A4's best training HPs for stage S with `hpo_tools.py freeze`: outer_lr, wd, inner steps, both inner step sizes, LSLR on/off, MSL, episodes per epoch.
+**Stage 0: shared training HPs. Revised 2026-10-30 evening (Kai): A4 and A2 are NOT tuned before EncoderMoE is final.**
+- The screen freezes the shared training HPs at the **legacy Trial-89 values** (`system/NOTS/paper/ablations/screen_fixed/`): outer_lr, wd, inner steps, both inner step sizes, LSLR on/off, MSL, episodes per epoch.
+  - **T family:** inner-loop HPs only.
+  - **Metric learners:** nothing frozen.
+- M0 (X1) and A4 (F0) are screened with the same frozen values, as the references.
+- **Caveat:** the legacy values come from the old 3-way env20 protocol. They are fine for ranking, because every variant shares them. They are not fine for final numbers, which come from stage F.
+- *(The earlier proposal was to tune A4 first and freeze its best values; `hpo_tools.py freeze` still supports that if the legacy values turn out too poor on fs64.)*
 
 **Stage S (screen), dev users, fs64.**
 - Each variant is its own study (`--study-suffix screen --fixed-params ...`) and searches only its own HPs, 2-6 dims:

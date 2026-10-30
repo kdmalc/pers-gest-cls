@@ -110,8 +110,8 @@ if [[ -n "$FIXED_PARAMS" ]]; then
     [[ -n "$STUDY_SUFFIX" ]] || { echo "ERROR: --fixed-params needs --study-suffix (a frozen-HP study must not share the main study's journal)"; exit 1; }
 fi
 case "$EMG_REPR_ARG" in
-    env20|fs64) ;;
-    *) echo "ERROR: --emg-repr env20|fs64 is required (got '${EMG_REPR_ARG}')"; exit 1 ;;
+    env20|fs64|raw3s) ;;
+    *) echo "ERROR: --emg-repr env20|fs64|raw3s is required (got '${EMG_REPR_ARG}')"; exit 1 ;;
 esac
 
 # =============================================================================

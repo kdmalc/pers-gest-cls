@@ -1,0 +1,142 @@
+"""
+registry.py
+===========
+Side-effect-free definitions shared by the HPO driver (ablation_hpo.py) and the 7-fold evaluation
+script (test_eval_files/arch_variant_eval.py), so the two can never disagree on what a token means:
+
+  ARCH_DEFAULTS / arch_defaults()  the architecture-exploration config keys at their M0 / A4 values.
+                                   make_base_config() writes them into EVERY config, so tuned
+                                   overrides of any variant name existing keys.
+  A4 widths                        the param-matched no-MoE widths the HPO uses for A4-based tokens.
+  ARCH_VARIANTS                    one entry per exploration token (docs/specs/SPEC_architecture_exploration.md).
+  variant_kind()                   how a token trains and is evaluated: "maml" | "metric" | "supervised".
+"""
+
+from __future__ import annotations
+
+import copy
+
+# Param-matched encoder dims for A4 (and every A4-based token). See ablation_hpo.py for how they are
+# meant to be derived from M0's bank.
+A4_CNN_BASE_FILTERS: int = 128
+A4_LSTM_HIDDEN: int = 128
+
+ARCH_DEFAULTS: dict = dict(
+    arch_family="legacy",
+    MOE_gate_mode="learned", MOE_routing_signal="context_proj", MOE_use_shared_expert=False,
+    MOE_router_z_coeff=0.0, MOE_skip_unselected_experts=False,
+    MOE_xattn_d_model=64, MOE_xattn_heads=4,
+    temporal_model="lstm",
+    fusion_mode="early", fusion_branch_width=0.71, fusion_d_model=64, fusion_heads=4,
+    tf_d_model=128, tf_heads=4, tf_blocks=3, tf_ff_mult=2, tf_moe_every=0,
+    maml_inner_param_include=None,
+
+)
+
+
+def arch_defaults(config: dict) -> dict:
+    """Write every architecture-exploration key at its M0 / A4 value (explicit, never a silent .get)."""
+    config.update(copy.deepcopy(ARCH_DEFAULTS))
+    return config
+
+
+# Each variant is its OWN Optuna study with the same budget (never a categorical arm inside one
+# study). "base" = the profile whose HP groups it reuses (M0: MAML+MoE, A4: MAML no MoE at the
+# param-matched widths, A2: supervised, A1: supervised + MoE); "family" = model builder (legacy =
+# pretrain_models / MOE_encoder, flexnet = arch_variants.flexnet, metric = arch_variants.metric_learners);
+# "set" = fixed config overrides; "spaces" = extra HP groups (ablation_hpo._apply_variant).
+ARCH_VARIANTS: dict[str, dict] = {
+    # ── MoE structure (same expert bank as M0; one change each) ──────────────
+    "X2":  dict(base="M0", family="legacy", set={"MOE_gate_mode": "uniform"}, spaces=("moe_uniform",),
+                note="M0 with a fixed uniform gate (1/E, no router): routing or just ensembling?"),
+    "X3":  dict(base="M0", family="legacy", set={"MOE_skip_unselected_experts": True}, spaces=("moe_sparse",),
+                note="Sparse top-1/2 over a small bank + load balance + router z-loss (ST-MoE recipe)"),
+    "X4":  dict(base="M0", family="legacy", set={"MOE_routing_signal": "context_proj_task"}, spaces=(),
+                note="Task-conditioned routing: [sample context, support-set mean context]"),
+    "X5":  dict(base="M0", family="legacy", set={"MOE_use_shared_expert": True}, spaces=(),
+                note="Shared always-on expert + routed experts (DeepSeek-MoE style)"),
+    "X6":  dict(base="M0", family="legacy", set={"MOE_routing_signal": "xattn"}, spaces=("xattn_router",),
+                note="Router input = EMG tokens cross-attending to IMU tokens"),
+    # ── EMG-IMU fusion, screened on the no-MoE MAML backbone (reference: A4 = early concat) ─
+    "F1":  dict(base="A4", family="flexnet", set={"fusion_mode": "mid"}, spaces=("fusion",),
+                note="Mid fusion: per-modality CNNs, features concatenated before the LSTM"),
+    "F2":  dict(base="A4", family="flexnet", set={"fusion_mode": "film"}, spaces=("fusion",),
+                note="FiLM: IMU CNN produces per-channel, per-step gamma/beta for the EMG CNN"),
+    "F3":  dict(base="A4", family="flexnet", set={"fusion_mode": "xattn"}, spaces=("fusion", "fusion_xattn"),
+                note="Cross-attention fusion: EMG tokens <-> IMU tokens"),
+    # ── Transformers ─────────────────────────────────────────────────────────
+    "T0":  dict(base="A4", family="flexnet", set={"fusion_mode": "none", "temporal_model": "transformer"},
+                spaces=("tf",), note="Single transformer on the 64 time steps (no CNN, no MoE), MAML++"),
+    "T2":  dict(base="M0", family="legacy", set={"temporal_model": "transformer"}, spaces=("tf",),
+                note="M0's CNN expert bank, LSTM replaced by a transformer"),
+    "T4":  dict(base="M0", family="flexnet",
+                set={"fusion_mode": "none", "temporal_model": "transformer", "tf_moe_every": 2,
+                     "MOE_skip_unselected_experts": True},
+                spaces=("tf", "moe_sparse"), note="Transformer with sparse MoE feed-forward layers (Switch-style)"),
+    # ── Alternatives to MAML (episodic metric learners, no inner loop) ──────────
+    "P1":       dict(base="A4", family="metric", set={"metric_kind": "proto", "metric_backbone": "cnnlstm"},
+                     spaces=("metric",), note="ProtoNet trained episodically (A4 encoder)"),
+    "P1_moe":   dict(base="A1", family="metric", set={"metric_kind": "proto", "metric_backbone": "moe"},
+                     spaces=("metric",), note="ProtoNet trained episodically on M0's expert-bank encoder"),
+    "P1_match": dict(base="A4", family="metric", set={"metric_kind": "matching", "metric_backbone": "cnnlstm"},
+                     spaces=("metric",), note="Matching Network (no FCE)"),
+    "P1_rel":   dict(base="A4", family="metric", set={"metric_kind": "relation", "metric_backbone": "cnnlstm"},
+                     spaces=("metric", "metric_relation"), note="Relation Network (CE on relation scores)"),
+    "P1_ridge": dict(base="A4", family="metric", set={"metric_kind": "ridge", "metric_backbone": "cnnlstm"},
+                     spaces=("metric",), note="R2-D2 closed-form ridge head"),
+    "P1_feat":  dict(base="A4", family="metric", set={"metric_kind": "feat", "metric_backbone": "cnnlstm"},
+                     spaces=("metric",), note="FEAT: set-to-set adapted prototypes"),
+    # ── Other learning approaches ──────────────────────────────────────────
+    "P3":       dict(base="A2", family="legacy", set={"adann_disc_hidden": 128}, spaces=("adann",),
+                     note="ADANN-style: supervised + gradient-reversal user head, then fine-tune"),
+    "A4_ANIL":  dict(base="A4", family="legacy", set={"maml_inner_param_include": ["head"]}, spaces=(),
+                     note="ANIL: inner loop adapts the head only (A4 backbone)"),
+    "M0_ANIL":  dict(base="M0", family="legacy", set={"maml_inner_param_include": ["head"]}, spaces=(),
+                     note="ANIL on M0 (MoEMeta Port B is close to this)"),
+}
+
+
+# Values of the family-specific keys that exist only for some tokens. The 7-fold evaluation writes
+# them before the tuned overrides are applied (overrides may only name existing keys); in legacy /
+# smoke mode these are the values used.
+FAMILY_EVAL_DEFAULTS: dict = {
+    "metric": dict(metric_relation_hidden=128, label_smooth=0.0, meta_batchsize=24),
+    "adann": dict(adann_lambda=0.1, adann_disc_hidden=128),
+}
+
+
+def variant_kind(token: str) -> str:
+    v = ARCH_VARIANTS[token]
+    if v["family"] == "metric":
+        return "metric"
+    if v["base"] in ("A1", "A2"):
+        return "supervised"
+    return "maml"
+
+
+def uses_a4_widths(token: str) -> bool:
+    """A4-based tokens use the param-matched no-MoE widths (T0 has no CNN, so widths are moot)."""
+    return ARCH_VARIANTS[token]["base"] == "A4"
+
+
+def uses_moe(token: str) -> bool:
+    v = ARCH_VARIANTS[token]
+    return v["base"] in ("M0", "A1")
+
+
+def build_model_for_config(config: dict):
+    """The model a (HPO or eval) config describes, dispatched on arch_family and use_MOE. Not moved to a device."""
+    family = config["arch_family"]
+    if family == "flexnet":
+        from arch_variants.flexnet import build_flexnet
+        return build_flexnet(config)
+    if family == "metric":
+        from arch_variants.metric_learners import build_metric_learner
+        return build_metric_learner(config)
+    if family != "legacy":
+        raise ValueError(f"unknown arch_family {family!r}")
+    if config["use_MOE"]:
+        from MOE.MOE_encoder import build_MOE_model
+        return build_MOE_model(config)
+    from pretraining.pretrain_models import build_model
+    return build_model(config)

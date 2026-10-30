@@ -52,6 +52,41 @@ class MLPHead(nn.Module):
         return self.net(x)
 
 
+class EMGRawStem(nn.Module):
+    """
+    EMG-RAW ablation (docs/specs/SPEC_2khz_emg.md §3): learned strided stem on native-rate EMG, applied
+    to the EMG BEFORE the EMG/IMU concat, so the rest of the model sees T=64 as with fs64:
+      Conv1d(C->32, k11, s4) -> GN -> GELU -> Conv1d(32->64, k9, s4) -> GN -> GELU
+      -> Conv1d(64->64, k7, s4) -> GN -> GELU -> AdaptiveAvgPool1d(64)
+    (B, C_emg, 6144) -> (B, 64, 64). The raw dict is stored in float16; the stem casts to float32.
+    """
+    OUT_CH = 64
+
+    def __init__(self, in_ch: int, gn_groups: int, out_steps: int = 64):
+        super().__init__()
+        layers, c = [], in_ch
+        for out, k in ((32, 11), (64, 9), (self.OUT_CH, 7)):
+            layers += [nn.Conv1d(c, out, kernel_size=k, stride=4, padding=k // 2, bias=False),
+                       nn.GroupNorm(gn_groups, out), nn.GELU()]
+            c = out
+        layers.append(nn.AdaptiveAvgPool1d(out_steps))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.net(x.float())
+
+
+def build_emg_stem(config: dict):
+    """-> (stem module or None, EMG channels the rest of the model sees). config['emg_stem'] is required
+    for the stem to exist; configs from before the key (old checkpoints) have no stem."""
+    kind = config.get("emg_stem", "none")
+    if kind == "none":
+        return None, config["emg_in_ch"]
+    if kind == "raw_strided":
+        return EMGRawStem(config["emg_in_ch"], config["groupnorm_num_groups"]), EMGRawStem.OUT_CH
+    raise ValueError(f"emg_stem must be 'none' or 'raw_strided', got {kind!r}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. MetaCNNLSTM
 # ─────────────────────────────────────────────────────────────────────────────
@@ -210,6 +245,8 @@ class DeepCNNLSTM(nn.Module):
         bidir     = config.get('bidirectional', True)
         head_type = config.get('head_type', 'mlp')
 
+        # EMG-RAW: native-rate EMG through a learned strided stem before the concat (else None)
+        self.emg_stem, C_emg = build_emg_stem(config)
         in_ch = C_emg + (C_imu if use_imu else 0)
 
         # ── CNN Encoder (3 layers, doubling filters) ─────────────────────────
@@ -260,6 +297,8 @@ class DeepCNNLSTM(nn.Module):
             self.head = MLPHead(self.feat_dim, self.feat_dim // 2, n_way, drop)
 
     def backbone(self, x_emg: torch.Tensor, x_imu=None, demographics=None):
+        if self.emg_stem is not None:
+            x_emg = self.emg_stem(x_emg)
         if self.config.get('use_imu', False) and x_imu is not None:
             assert x_emg.shape[0] == x_imu.shape[0], \
                 f"Batch size mismatch: EMG {x_emg.shape} vs IMU {x_imu.shape}"

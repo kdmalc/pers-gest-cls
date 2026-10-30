@@ -63,7 +63,9 @@ def overrides_for(H, ablation: str, params: dict) -> dict:
     skip = {"train_PIDs", "val_PIDs", "test_PIDs", "device", "timestamp", "results_save_dir",
             "models_save_dir", "val_episode_source", "val_episodes_per_user", "num_epochs",
             "use_earlystopping", "earlystopping_patience", "earlystopping_min_delta",
-            "num_workers", "ablation_id"}
+            "num_workers", "ablation_id",
+            # the EMG representation is the RUN's choice (EMG_REPR), checked against provenance, never overridden
+            "emg_repr", "emg_in_ch", "emg_stem"}
     out = {}
     for k, v in cfg.items():
         if k in skip:
@@ -117,6 +119,7 @@ def cmd_finalize(a):
     allcfg[a.ablation] = {
         "overrides": overrides_for(H, a.ablation, params),
         "provenance": {"study": name, "trial": best_trial, "reeval": summary[best_trial],
+                       "emg_repr": os.environ["EMG_REPR"],
                        "all_candidates": summary, "params": params},
     }
     out_path.write_text(json.dumps(allcfg, indent=1, sort_keys=True) + "\n")

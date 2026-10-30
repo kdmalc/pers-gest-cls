@@ -30,6 +30,13 @@
 #
 #   A14_M0 A14_A4                               (ProtoNet / kNN readout on the fold's frozen M0 / A4 backbone;
 #                                                submit AFTER that fold's M0 / A4 job has finished)
+#   V_<token>                                   (architecture-exploration finalists: V_X2 ... V_M0_ANIL, see
+#                                                ARCH_VARIANT_TOKENS below; arch_variant_eval.py, all 9 cells)
+#   Z_all Z3                                    (zero-shot cross-user; Z3 after the fold's M0 job)
+#   A16_A2 A16_M0                               (upper bound; after the fold's A2 / M0 job)
+#
+# --seeds 42 43 44 : one job per seed for the scripts that take --seed (headline 3-seed runs).
+# --emg-repr env20 | fs64 | raw3s (raw3s = native-rate EMG through the learned stem; EMG-RAW ablation)
 # NOT on the shared episode cache yet, so deliberately NOT launchable (the aggregator would reject
 # their results): A7/A8 (subject-specific), portA, A16.
 # NOT wired yet (use only after the pending work in docs/archive/FULL_RUNNING_LOG.md):
@@ -51,6 +58,7 @@ HPO_CONFIG_ARG=""
 EMG_REPR_ARG="env20"   # env20 | fs64 (needs segfilt_fs64_tensor_dict.pkl next to the env20 dict)
 TOKENS=()
 FOLDS=()
+SEEDS=()
 N_FOLDS=7
 
 while [[ $# -gt 0 ]]; do
@@ -61,6 +69,10 @@ while [[ $# -gt 0 ]]; do
         --cluster)   CLUSTER="$2"; shift 2 ;;
         --hpo-config) HPO_CONFIG_ARG="$2"; shift 2 ;;
         --emg-repr)  EMG_REPR_ARG="$2"; shift 2 ;;
+        --seeds)
+            shift
+            while [[ $# -gt 0 && "$1" =~ ^[0-9]+$ ]]; do SEEDS+=("$1"); shift; done
+            ;;
         --folds)
             shift
             while [[ $# -gt 0 && "$1" =~ ^[0-9]+$ ]]; do FOLDS+=("$1"); shift; done
@@ -80,6 +92,7 @@ fi
 for k in "${FOLDS[@]}"; do
     (( k >= 0 && k < N_FOLDS )) || { echo "ERROR: fold $k not in [0, $N_FOLDS)"; exit 1; }
 done
+[[ ${#SEEDS[@]} -gt 0 ]] || SEEDS=(42)
 
 if [[ "$CLUSTER" == "NOTS" ]]; then
     CODE_DIR=/projects/my13/kai/meta-pers-gest/pers-gest-cls
@@ -126,9 +139,9 @@ SPEC[A1]="A1_no_maml_moe.py||02:00:00|24G"
 SPEC[A2]="A2_no_maml_no_moe.py||02:00:00|16G"
 SPEC[A3]="A3_A4_maml_no_moe.py|--ablation A3|12:00:00|24G"
 SPEC[A4]="A3_A4_maml_no_moe.py|--ablation A4|12:00:00|24G"
-SPEC[A13_both]="A13_modality_ablation.py|--condition both|12:00:00|32G"
-SPEC[A13_emg_only]="A13_modality_ablation.py|--condition emg_only|12:00:00|32G"
-SPEC[A13_imu_only]="A13_modality_ablation.py|--condition imu_only|12:00:00|32G"
+SPEC[A13_both]="A13_modality_ablation.py|--condition both --cells all|12:00:00|32G"
+SPEC[A13_emg_only]="A13_modality_ablation.py|--condition emg_only --cells all|12:00:00|32G"
+SPEC[A13_imu_only]="A13_modality_ablation.py|--condition imu_only --cells all|12:00:00|32G"
 for n in 4 8 12 16 20; do
     SPEC[A15_N$n]="A15_metatrain_user_sweep.py|--n-users $n|12:00:00|32G"
 done
@@ -147,6 +160,22 @@ SPEC[A6_riemann_ts]="A6_classical_baselines.py|--method riemann_ts --cells all|2
 for m in td_knn td_lda td_lda_pool; do
     SPEC[A6_$m]="A6_classical_baselines.py|--method $m --emg-repr td64 --cells all|03:00:00|16G|cpu"
 done
+# Architecture-exploration tokens (arch_variants/registry.py ARCH_VARIANTS; finalists of the dev-user screen only).
+# Launcher token V_<token>; tests/test_arch_variants.py checks this list against the registry.
+ARCH_VARIANT_TOKENS="X2 X3 X4 X5 X6 F1 F2 F3 T0 T2 T4 P1 P1_moe P1_match P1_rel P1_ridge P1_feat P3 A4_ANIL M0_ANIL"
+for t in $ARCH_VARIANT_TOKENS; do
+    SPEC[V_$t]="arch_variant_eval.py|--token $t --cells all|12:00:00|32G"
+done
+SPEC[V_P3]="arch_variant_eval.py|--token P3 --cells all|03:00:00|24G"
+# Zero-shot cross-user (SPEC_zeroshot.md): Z1 + Z2 + Z4 train their own models; Z3 reads the fold's M0 checkpoint.
+SPEC[Z_all]="Z_zeroshot_crossuser.py|--models Z1 Z2 Z4|04:00:00|32G"
+SPEC[Z3]="Z_zeroshot_crossuser.py|@CKPT:M0 --models Z3|02:00:00|32G"
+# Upper bound (ARaC Q2): fine-tune the fold's A2 / M0 checkpoint on 9 of each test user's reps.
+SPEC[A16_A2]="A16_upper_bound_kfold.py|@CKPT:A2 --base A2|06:00:00|32G"
+SPEC[A16_M0]="A16_upper_bound_kfold.py|@CKPT:M0 --base M0|12:00:00|32G"
+# Scripts that take --seed (kfold_launcher --seeds S1 S2 ... fans out one job per seed); the others are
+# deterministic or read a seed-42 checkpoint and are submitted once.
+SEEDABLE_SCRIPTS=" M0_full_model.py A1_no_maml_moe.py A2_no_maml_no_moe.py A3_A4_maml_no_moe.py A13_modality_ablation.py arch_variant_eval.py Z_zeroshot_crossuser.py "
 SPEC[grid_M0]="fewshot_grid.py|@GRID|12:00:00|32G"
 SPEC[grid_A2]="fewshot_grid_A2.py|@GRID|02:00:00|16G"
 SPEC[grid_A4]="fewshot_grid_A4.py|@GRID|12:00:00|32G"
@@ -168,7 +197,7 @@ echo \"CKPT      : \$CKPT\""
     if [[ "$DEBUG" == true ]]; then
         partition="debug"; time="00:15:00"
         # --smoke (1 epoch x 48 episodes) so train -> val -> TEST -> save all run inside 15 min
-        case "$script" in M0_full_model.py|A3_A4_maml_no_moe.py) extra="$extra --smoke" ;; esac
+        case "$script" in M0_full_model.py|A3_A4_maml_no_moe.py|arch_variant_eval.py|Z_zeroshot_crossuser.py|A16_upper_bound_kfold.py) extra="$extra --smoke" ;; esac
     fi
 
     local wrap_body
@@ -216,20 +245,33 @@ WRAPEOF
 
 for token in "${TOKENS[@]}"; do
     [[ -n "${SPEC[$token]:-}" ]] || { echo "ERROR: unknown token '$token'. See header."; exit 1; }
-    IFS='|' read -r script extra time mem kind <<< "${SPEC[$token]}"
+    IFS='|' read -r script extra0 time mem kind <<< "${SPEC[$token]}"
     kind="${kind:-gpu}"
+    if [[ "$SEEDABLE_SCRIPTS" == *" $script "* ]]; then token_seeds=("${SEEDS[@]}"); else token_seeds=(42); fi
+    if [[ "$SEEDABLE_SCRIPTS" != *" $script "* && "${SEEDS[*]}" != "42" ]]; then
+        echo "NOTE: $token ($script) takes no --seed; submitted once"
+    fi
+    for seed in "${token_seeds[@]}"; do
+    extra="$extra0"; seed_tag=""
+    if [[ "$SEEDABLE_SCRIPTS" == *" $script "* ]]; then extra="$extra --seed $seed"; seed_tag="_s$seed"; fi
     for fold in "${FOLDS[@]}"; do
-        if [[ "$extra" == "@GRID" ]]; then
+        if [[ "$extra0" == "@GRID" ]]; then
             for k in 1 3 5; do for n in 3 5 10; do
                 submit_job "$token" "$fold" "$script" "--k-shot $k --n-way $n" "$time" "$mem" "_k${k}n${n}" "" "$kind"
             done; done
-        elif [[ "$extra" == @CKPT:* ]]; then
-            # checkpoint of the same fold from the named run; the job fails loudly if absent.
-            src="${extra#@CKPT:}"
+        elif [[ "$extra0" == @CKPT:* ]]; then
+            # checkpoint of the same fold (seed 42) from the named run; the job fails loudly if absent.
+            # "@CKPT:SRC" alone = the A14 argument form; "@CKPT:SRC <args>" = <args> --checkpoint <ckpt>.
+            # reads the seed-42 checkpoint: submitted once, not once per --seeds entry
+            [[ "$seed" == "${token_seeds[0]}" ]] || continue
+            rest="${extra0#@CKPT:}"; src="${rest%% *}"; args=""
+            [[ "$rest" == *" "* ]] && args="${rest#* }"
             ckpt_glob="$EVAL_OUT_BASE/kfold7/$src/$EMG_REPR_ARG/fold$fold/${src}_*_kfold7_fold${fold}_seed42_best.pt"
-            submit_job "$token" "$fold" "$script" "--model $src --cells all --checkpoint \"\$CKPT\"" "$time" "$mem" "" "$ckpt_glob" "$kind"
+            if [[ -z "$args" ]]; then args="--model $src --cells all"; fi
+            submit_job "$token" "$fold" "$script" "$args --checkpoint \"\$CKPT\"" "$time" "$mem" "" "$ckpt_glob" "$kind"
         else
-            submit_job "$token" "$fold" "$script" "$extra" "$time" "$mem" "" "" "$kind"
+            submit_job "$token" "$fold" "$script" "$extra" "$time" "$mem" "$seed_tag" "" "$kind"
         fi
+    done
     done
 done

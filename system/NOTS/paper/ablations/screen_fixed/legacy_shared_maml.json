@@ -1,0 +1,12 @@
+{
+ "outer_lr": 0.00019506115991520216,
+ "wd": 0.0008873572502558012,
+ "maml_inner_steps": 10,
+ "maml_alpha_init": 0.0009734890497675034,
+ "maml_alpha_init_eval": 0.00506597432775958,
+ "maml_use_lslr": true,
+ "use_lslr_at_eval": false,
+ "use_maml_msl": "hybrid",
+ "maml_msl_num_epochs": 31,
+ "episodes_per_epoch_train": 500
+}

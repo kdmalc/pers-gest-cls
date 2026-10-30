@@ -158,8 +158,7 @@ FIXED_GROUPNORM_NUM_GROUPS: int = 8
 #                    print(f"cnn={f}, lstm={h}: {p:,}")
 #
 #   4. Fill the winning values in below, then run A4 HPO.
-A4_CNN_BASE_FILTERS: int = 128   # TODO: set after step 3 above
-A4_LSTM_HIDDEN: int      = 128   # TODO: set after step 3 above
+from arch_variants.registry import A4_CNN_BASE_FILTERS, A4_LSTM_HIDDEN  # noqa: E402  (TODO: set after step 3 above)
 
 # =============================================================================
 # A11 / A12: 2kHz EMG-only data settings
@@ -187,8 +186,10 @@ ABLATION_PROFILES: dict[str, dict] = {
         script="A1_no_maml_moe.py",
         note="Supervised MoE (no MAML)",
     ),
+    # A2 uses the param-matched A4 widths (fix_arch=True; 2026-10-30): A2_no_maml_no_moe.py evaluates the
+    # param-matched network, so tuning it at the narrow fixed width tuned a different architecture.
     "A2": dict(
-        use_maml=False, use_moe=False, use_sup_ft=True,  is_a11=False, fix_arch=False,
+        use_maml=False, use_moe=False, use_sup_ft=True,  is_a11=False, fix_arch=True,
         eval_mode="supervised",
         script="A2_no_maml_no_moe.py",
         note="Vanilla supervised CNN-LSTM (no MAML, no MoE)",
@@ -246,55 +247,7 @@ ABLATION_PROFILES: dict[str, dict] = {
 # param-matched widths, A2: supervised); "family" = model builder (legacy = pretrain_models /
 # MOE_encoder, flexnet = arch_variants.flexnet, metric = arch_variants.metric_learners);
 # "set" = fixed config overrides; "spaces" = extra HP groups (see _apply_variant).
-ARCH_VARIANTS: dict[str, dict] = {
-    # ── MoE structure (same expert bank as M0; one change each) ──────────────
-    "X2":  dict(base="M0", family="legacy", set={"MOE_gate_mode": "uniform"}, spaces=("moe_uniform",),
-                note="M0 with a fixed uniform gate (1/E, no router): routing or just ensembling?"),
-    "X3":  dict(base="M0", family="legacy", set={"MOE_skip_unselected_experts": True}, spaces=("moe_sparse",),
-                note="Sparse top-1/2 over a small bank + load balance + router z-loss (ST-MoE recipe)"),
-    "X4":  dict(base="M0", family="legacy", set={"MOE_routing_signal": "context_proj_task"}, spaces=(),
-                note="Task-conditioned routing: [sample context, support-set mean context]"),
-    "X5":  dict(base="M0", family="legacy", set={"MOE_use_shared_expert": True}, spaces=(),
-                note="Shared always-on expert + routed experts (DeepSeek-MoE style)"),
-    "X6":  dict(base="M0", family="legacy", set={"MOE_routing_signal": "xattn"}, spaces=("xattn_router",),
-                note="Router input = EMG tokens cross-attending to IMU tokens"),
-    # ── EMG-IMU fusion, screened on the no-MoE MAML backbone (reference: A4 = early concat) ─
-    "F1":  dict(base="A4", family="flexnet", set={"fusion_mode": "mid"}, spaces=("fusion",),
-                note="Mid fusion: per-modality CNNs, features concatenated before the LSTM"),
-    "F2":  dict(base="A4", family="flexnet", set={"fusion_mode": "film"}, spaces=("fusion",),
-                note="FiLM: IMU CNN produces per-channel, per-step gamma/beta for the EMG CNN"),
-    "F3":  dict(base="A4", family="flexnet", set={"fusion_mode": "xattn"}, spaces=("fusion", "fusion_xattn"),
-                note="Cross-attention fusion: EMG tokens <-> IMU tokens"),
-    # ── Transformers ─────────────────────────────────────────────────────────
-    "T0":  dict(base="A4", family="flexnet", set={"fusion_mode": "none", "temporal_model": "transformer"},
-                spaces=("tf",), note="Single transformer on the 64 time steps (no CNN, no MoE), MAML++"),
-    "T2":  dict(base="M0", family="legacy", set={"temporal_model": "transformer"}, spaces=("tf",),
-                note="M0's CNN expert bank, LSTM replaced by a transformer"),
-    "T4":  dict(base="M0", family="flexnet",
-                set={"fusion_mode": "none", "temporal_model": "transformer", "tf_moe_every": 2,
-                     "MOE_skip_unselected_experts": True},
-                spaces=("tf", "moe_sparse"), note="Transformer with sparse MoE feed-forward layers (Switch-style)"),
-    # ── Alternatives to MAML (episodic metric learners, no inner loop) ──────────
-    "P1":       dict(base="A4", family="metric", set={"metric_kind": "proto", "metric_backbone": "cnnlstm"},
-                     spaces=("metric",), note="ProtoNet trained episodically (A4 encoder)"),
-    "P1_moe":   dict(base="A1", family="metric", set={"metric_kind": "proto", "metric_backbone": "moe"},
-                     spaces=("metric",), note="ProtoNet trained episodically on M0's expert-bank encoder"),
-    "P1_match": dict(base="A4", family="metric", set={"metric_kind": "matching", "metric_backbone": "cnnlstm"},
-                     spaces=("metric",), note="Matching Network (no FCE)"),
-    "P1_rel":   dict(base="A4", family="metric", set={"metric_kind": "relation", "metric_backbone": "cnnlstm"},
-                     spaces=("metric", "metric_relation"), note="Relation Network (CE on relation scores)"),
-    "P1_ridge": dict(base="A4", family="metric", set={"metric_kind": "ridge", "metric_backbone": "cnnlstm"},
-                     spaces=("metric",), note="R2-D2 closed-form ridge head"),
-    "P1_feat":  dict(base="A4", family="metric", set={"metric_kind": "feat", "metric_backbone": "cnnlstm"},
-                     spaces=("metric",), note="FEAT: set-to-set adapted prototypes"),
-    # ── Other learning approaches ──────────────────────────────────────────
-    "P3":       dict(base="A2", family="legacy", set={"adann_disc_hidden": 128}, spaces=("adann",),
-                     note="ADANN-style: supervised + gradient-reversal user head, then fine-tune"),
-    "A4_ANIL":  dict(base="A4", family="legacy", set={"maml_inner_param_include": ["head"]}, spaces=(),
-                     note="ANIL: inner loop adapts the head only (A4 backbone)"),
-    "M0_ANIL":  dict(base="M0", family="legacy", set={"maml_inner_param_include": ["head"]}, spaces=(),
-                     note="ANIL on M0 (MoEMeta Port B is close to this)"),
-}
+from arch_variants.registry import ARCH_VARIANTS  # noqa: E402  (one source for HPO and eval)
 
 for _vid, _v in ARCH_VARIANTS.items():
     _p = dict(ABLATION_PROFILES[_v["base"]])
@@ -607,23 +560,10 @@ def _suggest_supervised_ft_hps(trial: optuna.Trial, config: dict) -> dict:
 
 
 def _arch_fixed_defaults(config: dict) -> dict:
-    """
-    Explicit values for every architecture-exploration key, written into every trial's config (and so
-    into its printed snapshot and checkpoint). These reproduce M0 / A4 exactly; variants overwrite
-    them in _apply_variant. Set here rather than read with .get() defaults in the models, so that
-    no model silently falls back to a value nobody chose.
-    """
-    config.update(
-        arch_family="legacy",
-        MOE_gate_mode="learned", MOE_routing_signal="context_proj", MOE_use_shared_expert=False,
-        MOE_router_z_coeff=0.0, MOE_skip_unselected_experts=False,
-        MOE_xattn_d_model=64, MOE_xattn_heads=4,
-        temporal_model="lstm",
-        fusion_mode="early", fusion_branch_width=0.71, fusion_d_model=64, fusion_heads=4,
-        tf_d_model=128, tf_heads=4, tf_blocks=3, tf_ff_mult=2, tf_moe_every=0,
-        maml_inner_param_include=None,
-    )
-    return config
+    """Every architecture-exploration key at its M0 / A4 value (arch_variants.registry; also written by
+    make_base_config). Variants overwrite them in _apply_variant."""
+    from arch_variants.registry import arch_defaults
+    return arch_defaults(config)
 
 
 def _apply_variant(trial: optuna.Trial, config: dict, v: dict) -> dict:
@@ -707,6 +647,13 @@ def build_config_from_trial(
 
     trial = _with_fixed_params(trial)
     config = make_base_config(ablation_id=ablation_id)
+    # The EMG representation MUST come from EMG_REPR (the launcher's --emg-repr). Until 2026-10-30 it
+    # was only used in the study NAME, so "fs64" studies silently trained on the env20 default.
+    from ablation_config import apply_emg_repr
+    _repr = os.environ.get("EMG_REPR")
+    if not _repr:
+        raise SystemExit("EMG_REPR is not set (hpo_ablation_launcher.sh --emg-repr ...)")
+    apply_emg_repr(config, _repr)
 
     config["results_save_dir"] = str(RUN_DIR)
     config["models_save_dir"]  = str(RUN_DIR)
@@ -818,26 +765,12 @@ LAST_MODEL_N_PARAMS = None   # set by build_model; read into the trial's user at
 
 
 def build_model(config: dict):
-    """Build model matching ablation profile. Mirrors ablation_config.py builders."""
+    """Build the model a config describes (arch_variants.registry.build_model_for_config)."""
     global LAST_MODEL_N_PARAMS
-    family = config["arch_family"]
-    if family == "flexnet":
-        from arch_variants.flexnet import build_flexnet
-        model = build_flexnet(config)
-    elif family == "metric":
-        from arch_variants.metric_learners import build_metric_learner
-        model = build_metric_learner(config)
-    elif family != "legacy":
-        raise ValueError(f"unknown arch_family {family!r}")
-    elif config.get("use_MOE", False):
-        from MOE.MOE_encoder import build_MOE_model
-        model = build_MOE_model(config)
-    else:
-        from pretraining.pretrain_models import build_model as _build
-        model = _build(config)
-
+    from arch_variants.registry import build_model_for_config
+    model = build_model_for_config(config)
     LAST_MODEL_N_PARAMS = int(sum(p.numel() for p in model.parameters()))
-    print(f"  [build_model] {family}: {LAST_MODEL_N_PARAMS:,} parameters")
+    print(f"  [build_model] {config['arch_family']}: {LAST_MODEL_N_PARAMS:,} parameters")
     model.to(config["device"])
     return model
 

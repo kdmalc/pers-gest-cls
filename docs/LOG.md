@@ -17,3 +17,19 @@ Full history: `docs/archive/FULL_RUNNING_LOG.md`. Status table: `docs/archive/HI
 - **Debug runs of 2026-10-29: done**, plumbing OK, numbers meaningless (legacy HPs). Details: `docs/run_reports/10_29_26_debug_run_results.md`. Fixed the same day: `pretrain_trainer` honours `earlystopping_*` / `gradient_clip_max_norm`; legacy Kapanji / L2SO code removed; `label_smooth` capped at 0.2; HPO launcher requires `--emg-repr` and prints real hostname/date.
 - **Superseded plan:** the "weekend launch of A1/A2/A4/M0 HPO at 60 trials" (old §3b) was put on hold after Kai's point that M0 and the param-matched controls change if the MoE scheme changes. Replaced by the staged plan in `docs/specs/SPEC_architecture_exploration.md` §3 (A4/A2 first, architecture screen with frozen shared HPs, full HPO only for finalists).
 - **Architecture-exploration code (Claude, Opus, 2026-10-30):** X2-X6 and T2 in `MOE_encoder.DeepCNNLSTM_EncoderMOE` (defaults reproduce M0 bit for bit, tested); `system/arch_variants/` (functional attention, FlexNet for F1-F3/T0/T4, metric learners P1 family, ADANN P3); `MOE/routing_metrics.py` (replaces the saturated entropy / div-by-0 diagnostics, debug issues 5-7); per-trial timing in the journal plus `hpo_tools.py`; frozen-HP screening (`--fixed-params`); E x k grid enqueueing. Bug found and fixed on the way: the HPO collapse penalty used an absolute 0.80 selection-frequency threshold, which scored every balanced trial with top_k/E >~ 0.7 as 0 (and would have zeroed every uniform-gate trial). Tests 233 -> 356.
+
+## 2026-10-30 (evening): paper-run code
+- **Kai's plan:** settle the MoE and fusion architecture on the dev users first, and read the X1-vs-X2 routing diagnostics. A4 and A2 tuning is held until EncoderMoE is final. So the screen freezes the legacy Trial-89 training HPs (`screen_fixed/`) and screens M0 and A4 as references, with ≥ 24 trials per variant. 100 vs 60 trials for the finalists is decided from the debug timings.
+- **Built (local tests only):**
+  - EMG-RAW stem and the raw3s builder (IMU deliberately unchanged from the fused dict, so only the EMG input differs from fs64);
+  - `arch_variants/registry.py` (one token registry for HPO, eval and launcher);
+  - `arch_variant_eval.py` (7-fold eval of any token, `V_<token>`);
+  - zero-shot Z1-Z4 (`Z_all`, `Z3`);
+  - A16 upper bound on kfold7 (`A16_A2`, `A16_M0`);
+  - `--seed` through M0 / A1 / A2 / A3-A4 / A13 / V_* / Z, with `kfold_launcher.sh --seeds`;
+  - A13 at 10-way with all 9 cells.
+  - Tests 356 → 386.
+- **Bugs found and fixed:**
+  1. The HPO driver never applied `--emg-repr`: "fs64" studies, and the first debug batch, trained on env20.
+  2. A2 was tuned at width 64 but evaluated param-matched. A2's HPO now uses the A4 widths.
+  3. A tuned override from another EMG representation now raises (the provenance records `emg_repr`).

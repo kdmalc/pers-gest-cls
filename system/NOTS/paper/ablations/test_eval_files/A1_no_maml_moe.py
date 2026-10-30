@@ -53,7 +53,7 @@ from ablation_config import (
     run_supervised_test_eval, save_results, save_model_checkpoint, count_parameters,
     replace_head_for_eval,
     RUN_DIR,
-    run_kfold, add_fold_arg, kfold_tag, resolve_fold_ids,
+    run_kfold, add_fold_arg, kfold_tag, resolve_fold_ids, add_seed_arg,
 )
 from pretraining.pretrain_data_pipeline import get_pretrain_dataloaders
 from pretraining.pretrain_trainer import pretrain
@@ -182,6 +182,7 @@ def run_one_fold(fold_id: str, seed: int, config: dict, tensor_dict: dict) -> di
 def main():
     parser = argparse.ArgumentParser(description="A1: No-MAML + MoE")
     add_fold_arg(parser)
+    add_seed_arg(parser)
     args = parser.parse_args()
 
     config = build_config()
@@ -198,6 +199,7 @@ def main():
     all_results = run_kfold(
         config, args.fold_idx,
         functools.partial(run_one_fold, tensor_dict=tensor_dict),
+        seed=args.seed,
     )
     head_accs = [r["test_head_only"]["mean_acc"] for r in all_results]
     full_accs = [r["test_full_ft"]["mean_acc"]   for r in all_results]
@@ -206,7 +208,7 @@ def main():
         "description":         "No-MAML + MoE (Supervised MoE)",
         "test_procedure":      "kfold7",
         "fold_idxs":           resolve_fold_ids(args.fold_idx),
-        "seed":                FIXED_SEED,
+        "seed":                args.seed,
         "n_params":            all_results[0]["n_params"],
         "fold_results":        all_results,
         "mean_test_head_only": float(np.mean(head_accs)),
@@ -220,7 +222,7 @@ def main():
         "num_folds":           len(all_results),
         "config_snapshot":     {k: str(v) for k, v in config.items()},
     }
-    save_results(summary, config, tag=kfold_tag(args.fold_idx))
+    save_results(summary, config, tag=kfold_tag(args.fold_idx, args.seed))
 
     print(f"\n{'='*70}")
     print(f"[A1] FINAL head-only (kfold7 {summary['fold_idxs']}): "
