@@ -1,7 +1,7 @@
 """
 adann.py
 ========
-P3 (docs/SPEC_architecture_exploration.md): supervised pretraining with a gradient-reversal
+P3 (docs/specs/SPEC_architecture_exploration.md): supervised pretraining with a gradient-reversal
 user-ID head, i.e. every training user is a domain and the encoder is trained to make users
 indistinguishable (multi-source DANN, Ganin et al. 2016, as used for cross-user EMG by
 Cote-Allard et al.). Then the usual supervised fine-tune on the support set (A2's evaluation path).

@@ -3,7 +3,7 @@ metric_learners.py
 ==================
 Episodic metric-based few-shot learners: trained on the same cached 10-way 1-shot episodes as
 MAML, but with no inner loop. The support set is embedded and the query is classified against it
-in one forward pass. docs/SPEC_architecture_exploration.md section 2D (P1 and the
+in one forward pass. docs/specs/SPEC_architecture_exploration.md section 2D (P1 and the
 "for edification" alternatives).
 
   config["metric_kind"]

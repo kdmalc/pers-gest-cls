@@ -1,6 +1,6 @@
 """
 EMG-TD64: classical Hudgins time-domain features as a 64-step windowed sequence, for the classical
-LDA / kNN baselines reviewers ask for (docs/SPEC_group_analysis.md sibling: docs/SPEC_2khz_emg.md §4).
+LDA / kNN baselines reviewers ask for (docs/specs/SPEC_group_analysis.md sibling: docs/specs/SPEC_2khz_emg.md §4).
 
 Same pipeline, windows and step alignment as EMG-FS64 (emg_fs64.py); only the features differ:
 per channel per window (F = 4): log MAV, log WL (mean absolute first difference), ZC rate and SSC rate

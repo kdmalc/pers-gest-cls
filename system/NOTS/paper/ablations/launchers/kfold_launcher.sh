@@ -32,7 +32,7 @@
 #                                                submit AFTER that fold's M0 / A4 job has finished)
 # NOT on the shared episode cache yet, so deliberately NOT launchable (the aggregator would reject
 # their results): A7/A8 (subject-specific), portA, A16.
-# NOT wired yet (use only after the pending work in docs/FULL_RUNNING_LOG.md):
+# NOT wired yet (use only after the pending work in docs/archive/FULL_RUNNING_LOG.md):
 #   A10/A11/A12/A11b (2 kHz + Kaifosh, waits on the O1 design), A16 (needs fold checkpoints
 #   manifest), A5, portA, steps sweeps (must use the dev users P005 P131 P116 P109).
 #

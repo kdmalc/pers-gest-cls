@@ -1,7 +1,7 @@
 """
 tests/test_arch_variants.py
 ===========================
-Behaviour of the architecture-exploration code (docs/SPEC_architecture_exploration.md):
+Behaviour of the architecture-exploration code (docs/specs/SPEC_architecture_exploration.md):
 the MoE variants inside M0's class (X2 uniform gate, X3 z-loss / sparse skip, X4 task routing),
 FlexNet (fusion, transformers), the metric learners, ADANN, the routing diagnostics, and the HPO
 wiring of every ARCH_VARIANTS token. functional_call fidelity of each model is covered by

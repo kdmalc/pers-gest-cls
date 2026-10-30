@@ -1,5 +1,5 @@
 """
-Classical / non-parametric few-shot baselines on cached episodes (docs/SOTA_COMPARISONS.md, Tier 1).
+Classical / non-parametric few-shot baselines on cached episodes (docs/specs/SOTA_COMPARISONS.md, Tier 1).
 
 Every method maps a MaterializedEpisode (support + query arrays, local labels) to predicted local
 labels for the query samples. They use ONLY the support set (no query labels, no other users; the one

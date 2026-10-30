@@ -1,7 +1,7 @@
 """
 arch_variants
 =============
-Architecture-exploration code (docs/SPEC_architecture_exploration.md):
+Architecture-exploration code (docs/specs/SPEC_architecture_exploration.md):
 
   attention.py        functional_call-safe attention, transformer blocks, MoE feed-forward (T0/T2/T4, F3, X6)
   flexnet.py          FlexNet: fusion variants (F1 mid, F2 FiLM, F3 cross-attention), transformer

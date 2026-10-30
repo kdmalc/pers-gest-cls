@@ -1,5 +1,5 @@
 """
-EMG-FS64: a 64-step windowed spectral-feature sequence from native-rate sEMG (docs/SPEC_2khz_emg.md).
+EMG-FS64: a 64-step windowed spectral-feature sequence from native-rate sEMG (docs/specs/SPEC_2khz_emg.md).
 
 For each trial (L samples x 16 channels at FS_EMG = 2048 Hz) we produce (64, 16*F) features whose 64
 steps sit at the same NORMALISED times as the 64 IMU steps of the fused tensor dict

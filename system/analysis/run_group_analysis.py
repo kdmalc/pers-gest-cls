@@ -1,5 +1,5 @@
 """
-CLI for the per-ability-group MoE gain (docs/SPEC_group_analysis.md).
+CLI for the per-ability-group MoE gain (docs/specs/SPEC_group_analysis.md).
 
   python system/analysis/run_group_analysis.py RESULT.json [RESULT.json ...] \
       --cell 10 1 [--treat M0 --ref A4] [--out DIR]

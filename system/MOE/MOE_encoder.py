@@ -270,7 +270,7 @@ class ContextProjRouter(nn.Module):
 class CrossModalRouter(nn.Module):
     """
     X6 router: EMG time tokens cross-attend to IMU time tokens; the pooled result is the routing
-    vector. Couples fusion and routing (docs/SPEC_architecture_exploration.md, X6). Uses the
+    vector. Couples fusion and routing (docs/specs/SPEC_architecture_exploration.md, X6). Uses the
     functional_call-safe attention block (arch_variants.attention), never nn.MultiheadAttention.
     """
     def __init__(self, C_emg: int, C_imu: int, d_model: int, n_heads: int, out_dim: int,
@@ -859,7 +859,7 @@ class DeepCNNLSTM_EncoderMOE(nn.Module):
         routing_signal = config.get("MOE_routing_signal", "context_proj")
         use_shared     = config.get("MOE_use_shared_expert", False)
         demo_embed_dim = config.get("demo_embed_dim", 8)
-        # Architecture-exploration switches (docs/SPEC_architecture_exploration.md). The defaults
+        # Architecture-exploration switches (docs/specs/SPEC_architecture_exploration.md). The defaults
         # reproduce M0 exactly; .get() only so checkpoints saved before these keys still load.
         gate_mode      = config.get("MOE_gate_mode", "learned")        # "learned" | "uniform" (X2)
         temporal_model = config.get("temporal_model", "lstm")          # "lstm" | "transformer" (T2)

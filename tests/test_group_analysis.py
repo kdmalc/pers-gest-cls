@@ -1,4 +1,4 @@
-"""Per-ability-group gain analysis (docs/SPEC_group_analysis.md) on synthetic per-user results."""
+"""Per-ability-group gain analysis (docs/specs/SPEC_group_analysis.md) on synthetic per-user results."""
 import numpy as np
 import pytest
 

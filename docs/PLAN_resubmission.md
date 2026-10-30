@@ -119,6 +119,8 @@ All exploration happens on the **dev users and dev episodes only**, so the 28-us
 ## 6. Open decisions
 
 ### Venue and second dataset (decide at S4, not now)
+**Kai, 2026-10-30:** the plan is **ICML (Jan) or TMLR**, decided after all the main ablations and paper runs finish (`REBUTTAL_CHECKLIST.md`). The other venues below are fallbacks only.
+
 | Outcome at S4 | Venue | Second dataset? |
 |---|---|---|
 | R1 (MoE wins and the gate matters), or R2 + X4 wins | ICML (Jan) | Helpful for the single-dataset critique (R6) but not required. Only if it fits by mid-December. |

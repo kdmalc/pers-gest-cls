@@ -1,6 +1,6 @@
 """
 Build segfilt_fs64_tensor_dict.pkl: the fused tensor dict with EMG replaced by the EMG-FS64 feature
-sequence (docs/SPEC_2khz_emg.md). IMU, demographics, labels and rep ids are taken UNCHANGED from the
+sequence (docs/specs/SPEC_2khz_emg.md). IMU, demographics, labels and rep ids are taken UNCHANGED from the
 existing fused dict (joined by pid / class / rep), so the episode cache and every consumer work as is.
 
     python build_fs64_tensor_dict.py --root <segmented_raw_data> \

@@ -2,7 +2,7 @@
 A6_classical_baselines.py
 =========================
 Classical / non-parametric baselines (`$B`, kNN, ProtoNet-on-raw, Riemannian, MiniRocket) evaluated
-on the SAME cached test episodes as every other method (docs/SPEC_episode_cache.md).
+on the SAME cached test episodes as every other method (docs/specs/SPEC_episode_cache.md).
 
     python A6_classical_baselines.py --method dollar_b --fold-idx 0 [--cells 10x1 3x1 ...]
 

@@ -1,5 +1,5 @@
 """
-Statistics for per-user results (docs/SPEC_stats.md). numpy + scipy only.
+Statistics for per-user results (docs/specs/SPEC_stats.md). numpy + scipy only.
 
 The unit of analysis is the USER. Episodes are never treated as independent samples.
 """

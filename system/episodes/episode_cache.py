@@ -1,5 +1,5 @@
 """
-Shared episode cache (docs/SPEC_episode_cache.md). Stdlib only.
+Shared episode cache (docs/specs/SPEC_episode_cache.md). Stdlib only.
 
 Episodes are generated ONCE from a seed, with no access to data, written to disk, hashed, and
 read by every method. An episode stores ids only:

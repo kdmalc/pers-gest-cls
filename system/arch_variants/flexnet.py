@@ -4,7 +4,7 @@ flexnet.py
 FlexNet = [fusion encoder | E fusion encoders + router] -> temporal model -> head.
 
 One class covers the fusion screen and the transformer backbones of
-docs/SPEC_architecture_exploration.md:
+docs/specs/SPEC_architecture_exploration.md:
 
   fusion_mode   (config["fusion_mode"])
     "early"  F0: concat EMG+IMU channels, one CNN (same layout as DeepCNNLSTM / A4)

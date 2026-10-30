@@ -115,7 +115,7 @@ def build_kfold_folds() -> list:
     return out
 
 
-# EMG representation of the tensor dict a run reads (docs/SPEC_2khz_emg.md):
+# EMG representation of the tensor dict a run reads (docs/specs/SPEC_2khz_emg.md):
 #   env20 : 20 Hz MAV envelope, 16 channels   (the original input)
 #   fs64  : windowed spectral features of the native-rate EMG, 112 channels (16 x 7)
 #   td64  : classical Hudgins time-domain features (MAV, WL, ZC, SSC), 64 channels (16 x 4); for the A6 LDA/kNN baselines
@@ -145,7 +145,7 @@ _STRUCTURAL_KEYS = {"use_MOE", "meta_learning", "cnn_base_filters", "lstm_hidden
 
 def apply_hpo_config(config: dict, mode: str) -> dict:
     """
-    Which hyperparameters a run uses (docs/SPEC_hpo.md). Raises on any inconsistency.
+    Which hyperparameters a run uses (docs/specs/SPEC_hpo.md). Raises on any inconsistency.
 
       legacy : keep the Trial-89 values hard-coded in make_base_config (tuned for the OLD 3-way
                protocol). Only for smoke tests / regression; results are labelled.
@@ -1070,7 +1070,7 @@ def _print_eval(res: dict):
 def run_episodic_test_eval(model, config: dict, tensor_dict_path: str,
                             test_pids: list, cells=None) -> dict:
     """
-    Evaluate a MAML model on the fold's cached TEST episodes (docs/SPEC_episode_cache.md).
+    Evaluate a MAML model on the fold's cached TEST episodes (docs/specs/SPEC_episode_cache.md).
 
     cells: list of (n_way, k_shot); None = the trained cell. Returns the first cell's per-user
     summary at the top level (mean_acc / std_acc / per_user_acc), plus per_cell, episode_source

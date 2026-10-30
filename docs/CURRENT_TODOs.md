@@ -1,7 +1,10 @@
 # CURRENT TODOs
-*Short list of open threads only; finished work goes to `LOG.md`. Top-level plan: `docs/PLAN_resubmission.md`. Architecture work: `docs/SPEC_architecture_exploration.md`. Updated 2026-10-30, afternoon.*
+*Short list of open threads only; finished work goes to `docs/LOG.md`. Run tracker: `docs/REBUTTAL_CHECKLIST.md`. Top-level plan: `docs/PLAN_resubmission.md`. Docs index: `docs/README.md`. Architecture work: `docs/specs/SPEC_architecture_exploration.md`. Updated 2026-10-30, evening.*
 
-**Goal:** resubmit EncoderMoE (rejected NeurIPS'26) on one clean protocol: 28 users, 7 folds, cached episodes, 10-way 1-shot primary. Add the reviewer-requested baselines and ablations, and pick the venue after the reruns.
+**Goal:** resubmit EncoderMoE (rejected NeurIPS'26) on one clean protocol: 28 users, 7 folds, cached episodes, 10-way 1-shot primary. Add the reviewer-requested baselines and ablations. **Venue: ICML (Jan) or TMLR, decided after the main runs finish.**
+
+> ## ⚠️ KAI: FIND THE SENSOR-INDEX-TO-BODY-LOCATION MAP
+> Find the map from sensor index to body location (all 16 EMG and 12 IMU sensors) and share it with Claude. It is not in the repo. **The body-region expert work cannot start without it** (`docs/analysis/ANALYSIS_moemeta.md` §6).
 
 ## 0. What Claude is doing now
 - **Done this session (2026-10-30), all tested locally (356 tests pass), NOT yet run on the cluster:** see §3 for the full list.
@@ -156,6 +159,6 @@ sacct -u km82 -S 2026-10-29 -X -n -P --format=JobID,ElapsedRaw,AllocTRES | \
 - **Venue / second dataset:** decide after the `DECISION_method.md` verdict. ICML needs HPO started by about mid-November.
 - **Rules:**
   - no silent fallbacks;
-  - never commit `.pkl` files or reviewer/paper PDFs (`docs/NeurIPS-2025-moemeta.pdf` is untracked; leave it out);
+  - never commit `.pkl` files or reviewer/paper PDFs (`docs/papers/NeurIPS-2025-moemeta.pdf` is untracked; leave it out);
   - only Kai launches jobs;
   - refresh the scratch launchers after every `git pull`.

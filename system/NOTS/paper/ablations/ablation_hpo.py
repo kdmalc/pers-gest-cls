@@ -239,7 +239,7 @@ ABLATION_PROFILES: dict[str, dict] = {
 }
 
 # =============================================================================
-# Architecture-exploration variants (docs/SPEC_architecture_exploration.md)
+# Architecture-exploration variants (docs/specs/SPEC_architecture_exploration.md)
 # =============================================================================
 # Each variant is its OWN Optuna study with the same budget (never a categorical arm inside one
 # study). "base" = the profile whose HP groups it reuses (M0: MAML+MoE, A4: MAML no MoE at the
@@ -450,7 +450,7 @@ def _suggest_label_smooth_supervised(trial: optuna.Trial, config: dict) -> dict:
     is a different regime, so it is tuned over [0.0, 0.2].
     """
     # capped at 0.2: the 10/29 debug trial drew 0.42, which flattens 10-way targets towards uniform
-    # (docs/10_29_26_debug_run_results.md, issue 4)
+    # (docs/run_reports/10_29_26_debug_run_results.md, issue 4)
     config["label_smooth"] = trial.suggest_float("label_smooth", 0.0, 0.2)
     return config
 

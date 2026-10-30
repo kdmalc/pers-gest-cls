@@ -2,8 +2,8 @@
 routing_metrics.py
 ==================
 Routing diagnostics that can tell routing from ensembling (X1 vs X2 in
-docs/SPEC_architecture_exploration.md). Replaces the numbers the old RoutingAnalyzer printed, which
-were misleading (docs/10_29_26_debug_run_results.md, issues 5-7):
+docs/specs/SPEC_architecture_exploration.md). Replaces the numbers the old RoutingAnalyzer printed, which
+were misleading (docs/run_reports/10_29_26_debug_run_results.md, issues 5-7):
 
   * entropy was measured on the post-top-k weights, so it sat at ln(top_k) whatever the gate learned.
     Here: per-sample entropy of the PRE-top-k softmax, normalised by ln(E) (1 = the router has no

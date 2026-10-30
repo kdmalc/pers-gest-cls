@@ -102,7 +102,7 @@ def arch_keys(cfg: dict) -> dict:
     return cfg
 
 
-# Architecture-exploration variants (docs/SPEC_architecture_exploration.md). X4 is absent on purpose:
+# Architecture-exploration variants (docs/specs/SPEC_architecture_exploration.md). X4 is absent on purpose:
 # it needs the episode's support set (tests/test_arch_variants.py covers it inside task_support).
 ARCH_VARIANT_KINDS = {
     "X2_uniform_gate":  ("moe", dict(MOE_gate_mode="uniform", MOE_top_k=3)),

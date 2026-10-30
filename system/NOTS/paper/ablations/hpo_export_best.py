@@ -1,5 +1,5 @@
 """
-Export the best HPO configuration(s) from an Optuna journal (docs/SPEC_hpo.md).
+Export the best HPO configuration(s) from an Optuna journal (docs/specs/SPEC_hpo.md).
 
 Replays each trial's sampled parameters through the SAME `build_config_from_trial` the HPO used
 (optuna FixedTrial), so there is no hand-written trial-param -> config-key mapping to drift.

@@ -67,7 +67,7 @@ mkdir -p "$HPO_DB_DIR" "$HPO_OUT_BASE" "$LOG_DIR"
 ABLATIONS=()
 DRY_RUN=false
 DEBUG=false
-N_TRIALS=60     # equal budget per method family (docs/SPEC_hpo.md)
+N_TRIALS=60     # equal budget per method family (docs/specs/SPEC_hpo.md)
 EXPLICIT_N_TRIALS=""   
 OVERRIDE_PARTITION=""
 EMG_REPR_ARG=""        # required: env20 | fs64 (no silent default)

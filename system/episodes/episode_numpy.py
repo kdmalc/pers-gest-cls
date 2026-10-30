@@ -1,6 +1,6 @@
 """
 Numpy adapter for cached episodes: what `$B`, kNN, ProtoNet, Riemannian, ROCKET and the
-zero-shot centroid baseline consume (docs/SPEC_episode_cache.md).
+zero-shot centroid baseline consume (docs/specs/SPEC_episode_cache.md).
 
 tensor_dict must be reoriented to (reps, C, T) (maml_data_pipeline.reorient_tensor_dict).
 """

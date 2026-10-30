@@ -1,5 +1,5 @@
 """
-Generate the committed episode files + MANIFEST.json (docs/SPEC_episode_cache.md).
+Generate the committed episode files + MANIFEST.json (docs/specs/SPEC_episode_cache.md).
 
     python system/episodes/make_episodes.py            # write missing files
     python system/episodes/make_episodes.py --check    # verify committed files == regenerated

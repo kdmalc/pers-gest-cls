@@ -1,4 +1,4 @@
-"""Statistics + aggregator (docs/SPEC_stats.md) on synthetic results with known answers."""
+"""Statistics + aggregator (docs/specs/SPEC_stats.md) on synthetic results with known answers."""
 import json
 
 import numpy as np

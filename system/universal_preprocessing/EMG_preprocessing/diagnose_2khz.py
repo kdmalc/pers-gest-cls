@@ -1,5 +1,5 @@
 """
-E1 diagnostics for the native-rate EMG (docs/SPEC_2khz_emg.md). Runs on the raw CSVs (laptop or cluster).
+E1 diagnostics for the native-rate EMG (docs/specs/SPEC_2khz_emg.md). Runs on the raw CSVs (laptop or cluster).
 
     python diagnose_2khz.py --root "<...>/segmented_raw_data" [--pids P102 P103 ...] [--out diag.json]
 

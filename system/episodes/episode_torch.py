@@ -1,5 +1,5 @@
 """
-Torch adapter for cached episodes (docs/SPEC_episode_cache.md).
+Torch adapter for cached episodes (docs/specs/SPEC_episode_cache.md).
 
 CachedEpisodeDataset returns, per item, exactly the dict MetaGestureDataset._build_episode returns
 (so maml_mm_collate, mamlpp_adapt_and_eval and the supervised finetune path work unchanged), plus

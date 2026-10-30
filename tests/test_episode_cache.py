@@ -1,5 +1,5 @@
 """
-Shared episode cache (docs/SPEC_episode_cache.md): determinism, structure, independence,
+Shared episode cache (docs/specs/SPEC_episode_cache.md): determinism, structure, independence,
 label permutation, tamper detection, and the torch / numpy adapters on real fold PIDs.
 """
 import copy

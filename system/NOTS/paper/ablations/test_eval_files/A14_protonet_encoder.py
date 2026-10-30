@@ -2,7 +2,7 @@
 A14_protonet_encoder.py
 =======================
 ProtoNet / kNN readout on the FROZEN meta-trained backbone of the same fold, evaluated on the shared
-cached test episodes (docs/SPEC_episode_cache.md). Answers "is the meta-learned adaptation better
+cached test episodes (docs/specs/SPEC_episode_cache.md). Answers "is the meta-learned adaptation better
 than a nearest-prototype readout on the same features?" (reviewer R1 W1 / R4 W2).
 
     python A14_protonet_encoder.py --fold-idx 0 --checkpoint <M0 or A4 fold checkpoint .pt> \

@@ -1,5 +1,5 @@
 """
-The running-sum expert mixing (docs/SPEC_moe_compute.md section 1) is numerically the same
+The running-sum expert mixing (docs/specs/SPEC_moe_compute.md section 1) is numerically the same
 function as the old stack -> weight -> sum(dim=1), forward AND gradients, in float64.
 """
 import pytest

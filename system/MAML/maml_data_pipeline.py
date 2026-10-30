@@ -651,7 +651,7 @@ def get_maml_dataloaders(config, tensor_dict_path):
         else config["val_PIDs"]
     )
 
-    # Validation episodes: the shared cache (docs/SPEC_episode_cache.md) unless the config
+    # Validation episodes: the shared cache (docs/specs/SPEC_episode_cache.md) unless the config
     # explicitly asks for on-the-fly sampling ("sampled": tests, debug, subject-specific runs).
     #   "val" -> val_fold{fold_idx}.json.gz   (kfold7 training; checkpoint selection)
     #   "dev" -> dev.json.gz                  (HPO; the 4 dev users)

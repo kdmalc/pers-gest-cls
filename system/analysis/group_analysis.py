@@ -1,5 +1,5 @@
 """
-Per-ability-group analysis of the MoE gain (docs/SPEC_group_analysis.md). numpy + scipy only.
+Per-ability-group analysis of the MoE gain (docs/specs/SPEC_group_analysis.md). numpy + scipy only.
 
 Question: does the gain of the MoE model over its no-MoE twin (default M0 - A4) differ across the
 three ability groups? Unit of analysis is the USER; groups are small (5/9/14 test users), so

@@ -1,5 +1,5 @@
 """
-Aggregator for results JSONs (docs/SPEC_stats.md, docs/SPEC_episode_cache.md).
+Aggregator for results JSONs (docs/specs/SPEC_stats.md, docs/specs/SPEC_episode_cache.md).
 
 Collects every block carrying `per_episode` + `episode_source`, then enforces:
   * the episode file hash equals the committed manifest hash,
