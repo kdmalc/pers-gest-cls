@@ -20,7 +20,7 @@
 #                                                          # architecture screen (ARCH_VARIANTS tokens
 #                                                          # in ablation_hpo.py: X2-X6 F1-F3 T0 T2 T4
 #                                                          # P1 P1_moe P1_match P1_rel P1_ridge P1_feat
-#                                                          # P3 A4_ANIL M0_ANIL)
+#                                                          # P3 A4_ANIL M0_ANIL Q1 Q1_nola Q1_mlp Q1_uni Q1_ce)
 #
 # Per-trial cost: every trial prints one "HPO_TRIAL_TIMING {json}" line and stores the same fields in
 # the journal; summarise with  python system/NOTS/paper/ablations/hpo_tools.py report

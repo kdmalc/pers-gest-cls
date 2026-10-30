@@ -593,6 +593,17 @@ def _apply_variant(trial: optuna.Trial, config: dict, v: dict) -> dict:
             "episodes_per_epoch_train", [100, 200, 250, 500])
     if "metric_relation" in spaces:
         config["metric_relation_hidden"] = trial.suggest_categorical("metric_relation_hidden", [64, 128, 256])
+    if "moemeta" in spaces:
+        # MoEMeta-TS: the paper's M / N / hidden sizes around their values; alpha and the number of inner
+        # steps are not given in the paper, so they are tuned. margin = 1 and the loss are fixed by the token.
+        M = trial.suggest_categorical("moemeta_num_experts", [8, 16, 32])
+        config["moemeta_num_experts"] = M
+        config["moemeta_top_n"] = min(trial.suggest_categorical("moemeta_top_n", [3, 5]), M)
+        config["moemeta_expert_hidden"] = trial.suggest_categorical("moemeta_expert_hidden", [64, 128])
+        config["moemeta_inner_steps"] = trial.suggest_categorical("moemeta_inner_steps", [1, 3, 5])
+        config["moemeta_inner_lr"] = trial.suggest_float("moemeta_inner_lr", 1e-2, 1.0, log=True)
+        config["moemeta_margin"] = 1.0
+        config["moemeta_first_order"] = False
     if "adann" in spaces:
         config["adann_lambda"] = trial.suggest_float("adann_lambda", 0.01, 1.0, log=True)
     return config

@@ -63,6 +63,8 @@ def build_config(token: str, smoke: bool) -> dict:
     if kind == "metric":
         config["meta_learning"] = True
         config.update(FAMILY_EVAL_DEFAULTS["metric"])
+    if "moemeta" in v["spaces"]:
+        config.update(FAMILY_EVAL_DEFAULTS["moemeta"])
     if "adann" in v["spaces"]:
         config.update(FAMILY_EVAL_DEFAULTS["adann"])
     if config["MOE_gate_mode"] == "uniform":

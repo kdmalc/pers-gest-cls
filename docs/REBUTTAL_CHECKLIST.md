@@ -88,7 +88,7 @@
 | FEAT | 🔧 | |
 | ADANN-style (gradient-reversal user head) | 🔧 | |
 | CNP | ⬜ | |
-| Time-series MoEMeta reimplementation | ⏸ (Kai, 2026-10-30) | |
+| MoEMeta-TS (time-series port of Wu & Yin; `Q1`, controls `Q1_nola Q1_mlp Q1_uni Q1_ce`) | 🔧 (go from Kai 2026-10-30 evening) | |
 
 ## Baselines: EMG-specific / SOTA
 | Run | Status | Acc |

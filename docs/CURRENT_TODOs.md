@@ -5,7 +5,8 @@
 
 ## 0. What Claude is doing now
 - **Nothing running.** Everything below is built and tested locally (386 tests pass); none of it has run on the cluster.
-- **Next code, waiting for Kai's go:** nothing queued. Open options: F4, T1/T3, CNP, the GNI side of the raw-EMG comparison, ports of A7/A8/portA and Kaifosh (A10-A12) to the cache.
+- **Next code, waiting for Kai's go:** nothing queued. Open options: F4, T1/T3, CNP, the GNI side of the raw-EMG comparison, ports of A7/A8/portA and Kaifosh (A10-A12) to the cache, EMGBench EMG-only (promised to fkxS).
+- **Add to the next cluster batch (B or C2):** `Q1 Q1_nola Q1_mlp Q1_uni Q1_ce` with `--emg-repr fs64 --debug` first, then in the screen with the other P-tokens (no frozen MAML HPs: they are metric learners).
 
 ## 1. Plan (Kai, 2026-10-30 evening)
 1. **Settle the MoE and fusion architecture first, on the dev users. No final HPO yet.**
@@ -50,12 +51,12 @@ Claude then runs notebook 02 with `A6_RESULTS=~/gest_results/A6_cluster`.
 - **Bug found 2026-10-30 evening:** the HPO driver never applied `--emg-repr` to the training config, so the first debug batch (and any earlier "fs64" study) trained on the **env20** dict.
 - That batch still shows crashes, but its epoch times are not fs64 times. Paste me its output anyway, then re-run on the fixed code.
 ```bash
-bash hpo_ablation_launcher.sh A4 M0 X2 X3 X4 X6 T2 F1 F2 F3 T0 T4 P1 P1_moe P1_rel P1_feat P3 A4_ANIL --emg-repr fs64 --debug
+bash hpo_ablation_launcher.sh A4 M0 X2 X3 X4 X6 T2 F1 F2 F3 T0 T4 P1 P1_moe P1_rel P1_feat P3 A4_ANIL Q1 Q1_mlp --emg-repr fs64 --debug
 ```
 When they finish, paste Claude the output of:
 ```bash
 LOGS=/scratch/my13/kai/runs/paper/sub2/hpo/logs
-for f in $(ls -t $LOGS/hpo_*.out | head -18); do echo "== $(basename $f)"; grep -m1 "emg_in_ch:" $f; grep -m1 "build_model\]" $f; grep -m2 -E "Epoch completed in|\[metric:.*epoch 1:" $f; grep -m1 -E "Traceback|Error" $f; done
+for f in $(ls -t $LOGS/hpo_*.out | head -20); do echo "== $(basename $f)"; grep -m1 "emg_in_ch:" $f; grep -m1 "build_model\]" $f; grep -m2 -E "Epoch completed in|\[metric:.*epoch 1:" $f; grep -m1 -E "Traceback|Error" $f; done
 ```
 - **Pass:** every log shows `emg_in_ch: 112` (fs64), `[build_model] ... parameters` and at least one epoch line, with no Traceback.
 
@@ -73,7 +74,7 @@ F=/projects/my13/kai/meta-pers-gest/pers-gest-cls/system/NOTS/paper/ablations/sc
 bash hpo_ablation_launcher.sh M0 A4 X2 X3 X4 X5 X6 F1 F2 F3 --emg-repr fs64 --n-trials 24 --study-suffix screen --fixed-params $F/legacy_shared_maml.json --dry-run
 bash hpo_ablation_launcher.sh M0 A4 X2 X3 X4 X5 X6 F1 F2 F3 --emg-repr fs64 --n-trials 24 --study-suffix screen --fixed-params $F/legacy_shared_maml.json
 bash hpo_ablation_launcher.sh T0 T2 T4 --emg-repr fs64 --n-trials 24 --study-suffix screen --fixed-params $F/legacy_inner_only.json
-bash hpo_ablation_launcher.sh P1 P1_moe P1_match P1_rel P1_ridge P1_feat P3 --emg-repr fs64 --n-trials 24 --study-suffix screen
+bash hpo_ablation_launcher.sh P1 P1_moe P1_match P1_rel P1_ridge P1_feat P3 Q1 Q1_nola Q1_mlp Q1_uni Q1_ce --emg-repr fs64 --n-trials 24 --study-suffix screen
 ```
 
 **C3. EMG-RAW dict (laptop; raw CSVs in Box):** about 0.6 GB.
@@ -112,6 +113,8 @@ sacct -u km82 -S 2026-10-29 -X -n -P --format=JobID,ElapsedRaw,AllocTRES | \
 | Upper bound (kfold7, leave-one-rep-out) | `test_eval_files/A16_upper_bound_kfold.py` | `A16_A2`, `A16_M0` |
 | `--seed` (M0, A1, A2, A3/A4, A13, V_*, Z) | `ablation_config.add_seed_arg` | `kfold_launcher.sh --seeds 42 43 44` |
 | A13 at 10-way, all 9 cells | `A13_modality_ablation.py` | `A13_both A13_emg_only A13_imu_only` |
+| MoEMeta-TS (faithful port; margin loss, local adaptation, MoE relation meta) | `arch_variants/moemeta_ts.py` | `Q1 Q1_nola Q1_mlp Q1_uni Q1_ce`; eval `V_Q1` etc. |
+| Gate-0 harness: any support-only channel-weighting idea vs uniform 1-NN and a permutation null | `nonparametric/gate0.py`, `docs/specs/SPEC_gate0.md` | laptop: `python system/nonparametric/gate0.py --candidate ...` |
 | **Fixes:** HPO ignored `--emg-repr`; A2 tuned at a different width than evaluated; collapse penalty zeroed balanced trials | | |
 
 **Not built:**
@@ -142,7 +145,7 @@ sacct -u km82 -S 2026-10-29 -X -n -P --format=JobID,ElapsedRaw,AllocTRES | \
 
 **Body-region Gate 0 (dev users, 1-NN, `specs/SPEC_body_regions.md` §4):** region experts dropped by the pre-stated rule. Anatomical groups do no better than random groups (81.3 vs 80.4, 94th percentile). Per-user selection helps (+5.3 over one shared subset), but the support-only selector tried fails. Sensor map: `system/arch_variants/body_regions.py`.
 
-**On hold (Kai, 2026-10-30):** the originality track and MoEMeta-TS are held; do not build them without Kai's go. Body-region is closed and low priority. The 2026-11-20 Track B date no longer applies.
+**Kai, 2026-10-30 evening:** MoEMeta-TS is a go (built, see §3). The originality track is exploratory: test concrete, cheap ideas through `SPEC_gate0.md` when they come up; otherwise spend the time on the main runs. Body-region is closed. Venue (ICML vs TMLR) follows the results. The `.md` specs are suggestions, not rules: prefer a better solution when there is one.
 
 ## 5. Open issues
 - **IMU time axis:** fs64 still uses the dict's IMU, which carries the env20 anomaly. Rebuilding the IMU from the raw CSVs costs about a day; decide before the finalist HPO.

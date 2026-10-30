@@ -12,3 +12,6 @@ __pycache__/
 # paper / review PDFs (local only)
 docs/papers/
 NeurIPS-2025-moemeta.pdf
+
+# local test venv (requirements.txt)
+.venv/

@@ -324,7 +324,8 @@ def hpo_module():
 def _variant_ids():
     # importing ablation_hpo at collection time would need HPO_DB_DIR; list the ids statically
     return ["X2", "X3", "X4", "X5", "X6", "F1", "F2", "F3", "T0", "T2", "T4",
-            "P1", "P1_moe", "P1_match", "P1_rel", "P1_ridge", "P1_feat", "P3", "A4_ANIL", "M0_ANIL"]
+            "P1", "P1_moe", "P1_match", "P1_rel", "P1_ridge", "P1_feat", "P3", "A4_ANIL", "M0_ANIL",
+            "Q1", "Q1_nola", "Q1_mlp", "Q1_uni", "Q1_ce"]
 
 
 def test_variant_id_list_matches_the_driver(hpo_module):

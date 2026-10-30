@@ -1,6 +1,6 @@
 # ANALYSIS — EncoderMoE vs MoEMeta, and the plan for originality
 
-*Written 2026-10-30 (Opus) from Kai's questions of the same day. Sources: both papers in `docs/`, the OpenReview thread (`docs/papers/OpenReview_downloaded.pdf`), and the code in `system/`. Status: analysis and proposals. MoEMeta-TS is not implemented. The body-region line (§6) ran its Gate 0 and was stopped.*
+*Written 2026-10-30 (Opus) from Kai's questions of the same day. Sources: both papers in `docs/`, the OpenReview thread (`docs/papers/OpenReview_downloaded.pdf`), and the code in `system/`. Status: MoEMeta-TS is implemented (`system/arch_variants/moemeta_ts.py`, tokens `Q1*`, 2026-10-30 evening, Fable); the substitutions forced by the domain change are listed in its module docstring. The body-region line (§6) ran its Gate 0 and was stopped.*
 
 ## 1. Verdict
 - **EncoderMoE and MoEMeta differ mechanically.** A time-series MoEMeta would not be EncoderMoE (§3).
@@ -94,6 +94,6 @@ All of this uses dev users only, so the 28 test users stay clean.
 
 ## 7. Open items
 - [x] **Kai:** find the sensor map (`docs/emg-sensor-placements.png`).
-- **Kai's decisions, 2026-10-30:** Track B is on hold, so the 2026-11-20 date no longer applies. MoEMeta-TS and its `DECISION_method.md` edit are on hold. Body-region stays closed, low priority.
+- **Kai's decisions, 2026-10-30 (evening):** MoEMeta-TS built. Track B is exploratory, no date; candidates go through `SPEC_gate0.md`. The `DECISION_method.md` edit is dropped: Kai's view is that if MoEMeta-TS beats EncoderMoE and that cannot be fixed, EncoderMoE is not publishable, which needs no rule. Body-region stays closed.
 - [ ] Do a proper literature search before claiming that nobody has done MoE + MAML on sEMG. The check so far was one search.
 - [ ] Trace the Port A vs Port B baseline mismatch, or let the rerun replace both.

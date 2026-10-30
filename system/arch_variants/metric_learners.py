@@ -20,6 +20,9 @@ in one forward pass. docs/specs/SPEC_architecture_exploration.md section 2D (P1 
     "feat"      FEAT (Ye et al. CVPR 2020): the class prototypes attend to each other through one
                 transformer layer (set-to-set adaptation), then ProtoNet distance with a learned
                 temperature. FEAT's auxiliary contrastive term is not implemented.
+    "moemeta"   MoEMeta-TS (Wu & Yin, NeurIPS 2025, ported): MoE relation meta per class, local
+                adaptation of the task vectors on the support set, translational distance, margin
+                loss. Built by arch_variants.moemeta_ts (same episodic interface).  Q1 family.
 
   config["metric_backbone"]
     "cnnlstm"   DeepCNNLSTM (A2/A4 family; widths from cnn_base_filters / lstm_hidden)
@@ -148,13 +151,18 @@ class EpisodicMetricLearner(nn.Module):
 
 
 def build_metric_learner(config: dict) -> EpisodicMetricLearner:
+    if config["metric_kind"] == "moemeta":
+        from arch_variants.moemeta_ts import MoEMetaTS
+        return MoEMetaTS(config)
     return EpisodicMetricLearner(config)
 
 
 def _episode_loss(model, episode, config, criterion):
     from MAML.mamlpp import _compute_aux_loss
     logits, y, routing = model.episode_logits(episode["support"], episode["query"], config["device"])
-    loss = criterion(logits, y)
+    # a learner with its own outer loss (MoEMeta-TS margin loss) overrides the cross-entropy criterion
+    custom = getattr(model, "query_loss", None)
+    loss = custom(logits, y) if custom is not None else criterion(logits, y)
     if routing is not None and config["use_MOE"]:
         loss = loss + _compute_aux_loss(routing, config, float(config["MOE_aux_coeff"]))
     return loss, logits, y
