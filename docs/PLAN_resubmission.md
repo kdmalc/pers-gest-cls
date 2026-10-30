@@ -109,7 +109,7 @@ Critical path: **smoke → representation decision → HPO → 7-fold runs → a
 Kai is not wedded to EncoderMoE. Pre-registered rules decide this (`DECISION_method.md` R1-R5), so the choice is not fitted to results. Candidates, in order of expected value and cost:
 1. **The simplest learned model that wins.** If A4, a fine-tune baseline or the trained ProtoNet ties M0 (R3), lead with it and make MoE an ablation.
 2. **Learned `$B` / covariance embedding** (`system/nonparametric/metric_models.py`) if a classical method wins (R4). It is cheap to iterate on, using dev users only.
-3. **Task-conditioned routing (X4).** This is the only MoE variant with an originality argument against MoEMeta: the router sees the episode's support set.
+3. **Task-conditioned routing (X4).** Keep as a control. It moves toward MoEMeta's support-derived signal, so it is not an originality case (`analysis/ANALYSIS_moemeta.md` §4).
 4. **Better input representation (FS64 / raw stem) with a small backbone.** If FS64 is the main jump, the paper's contribution may be "representation + protocol + benchmark", not the architecture.
 
 All exploration happens on the **dev users and dev episodes only**, so the 28-user test folds stay clean for the final comparison.

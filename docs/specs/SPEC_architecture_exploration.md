@@ -38,7 +38,7 @@
 | X1 | Current M0 (soft top-k, context router) | the submitted method | exists | required |
 | X2 | Same experts, **uniform fixed gate** (1/E, no router) | **the key control:** routing or just ensembling? | small (`_forced_gate_weights` hook exists) | **required** |
 | X3 | Sparse top-1/2 + load-balance + router z-loss (ST-MoE style), small E | the standard modern MoE recipe; directly tests "fewer experts, lower k" | small–medium | high |
-| X4 | Task-conditioned routing: router input = sample context ⊕ mean context of the episode's support set | the only routing idea with an originality case against MoEMeta | medium | high |
+| X4 | Task-conditioned routing: router input = sample context ⊕ mean context of the episode's support set | a control only: it moves toward MoEMeta's support-derived signal (`analysis/ANALYSIS_moemeta.md` §4) | medium | high |
 | X5 | Shared expert + routed experts (DeepSeek-MoE style; `MOE_use_shared_expert` exists) | common fix when routing is near-uniform; the shared expert carries common structure | trivial (flag) | medium |
 | X6 | Cross-attention-gated routing: router input = EMG features cross-attended to IMU (or vice versa) | Kai's idea; it couples fusion and routing | medium | after the F screen |
 

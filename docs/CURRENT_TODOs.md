@@ -142,6 +142,8 @@ sacct -u km82 -S 2026-10-29 -X -n -P --format=JobID,ElapsedRaw,AllocTRES | \
 
 **Body-region Gate 0 (dev users, 1-NN, `specs/SPEC_body_regions.md` §4):** region experts dropped by the pre-stated rule. Anatomical groups do no better than random groups (81.3 vs 80.4, 94th percentile). Per-user selection helps (+5.3 over one shared subset), but the support-only selector tried fails. Sensor map: `system/arch_variants/body_regions.py`.
 
+**On hold (Kai, 2026-10-30):** the originality track and MoEMeta-TS are held; do not build them without Kai's go. Body-region is closed and low priority. The 2026-11-20 Track B date no longer applies.
+
 ## 5. Open issues
 - **IMU time axis:** fs64 still uses the dict's IMU, which carries the env20 anomaly. Rebuilding the IMU from the raw CSVs costs about a day; decide before the finalist HPO.
 - **fs64 standardisation** uses the 4 dev users only. That is fine, but state it in the paper.

@@ -94,7 +94,6 @@ All of this uses dev users only, so the 28 test users stay clean.
 
 ## 7. Open items
 - [x] **Kai:** find the sensor map (`docs/emg-sensor-placements.png`).
-- [ ] **Kai:** confirm the 2026-11-20 decision date.
-- [ ] **Kai:** go-ahead on MoEMeta-TS and the `DECISION_method.md` edit.
+- **Kai's decisions, 2026-10-30:** Track B is on hold, so the 2026-11-20 date no longer applies. MoEMeta-TS and its `DECISION_method.md` edit are on hold. Body-region stays closed, low priority.
 - [ ] Do a proper literature search before claiming that nobody has done MoE + MAML on sEMG. The check so far was one search.
 - [ ] Trace the Port A vs Port B baseline mismatch, or let the rerun replace both.

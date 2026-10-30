@@ -86,7 +86,7 @@
 | FEAT | 🔧 | |
 | ADANN-style (gradient-reversal user head) | 🔧 | |
 | CNP | ⬜ | |
-| Time-series MoEMeta reimplementation | ⬜ | |
+| Time-series MoEMeta reimplementation | ⏸ (Kai, 2026-10-30) | |
 
 ## Baselines: EMG-specific / SOTA
 | Run | Status | Acc |
@@ -117,6 +117,6 @@
 | Per-ability-group gain (M0 − A4) | 🔧 (after M0/A4) | |
 | Routing follows motif vs label | ⬜ (needs non-uniform routing) | |
 | Body-region Gate 0 (laptop, dev users, 1-NN) | ✅ | anatomy 81.3 vs random 80.4 (94th pct, H2 fail) |
-| Body-region experts (deep) | ❌ dropped by Gate 0 (`specs/SPEC_body_regions.md` §4) | |
+| Body-region experts (deep) | ❌ closed by Gate 0, low priority (`specs/SPEC_body_regions.md` §4) | |
 | `DECISION_method.md` verdict | ⬜ (after the main runs) | |
 | Second dataset | ⏸ (decided with the venue) | |

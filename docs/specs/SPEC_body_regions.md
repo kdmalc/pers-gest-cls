@@ -1,6 +1,6 @@
 # SPEC — body-region experts with per-user sensor selection (Track B)
 
-*Written 2026-10-30 (Opus). Rules in §3 were committed to this file **before** the first Gate 0 run. Background: `docs/analysis/ANALYSIS_moemeta.md` §6. Dev users only (P005, P109, P116, P131); the 28 fold users are not touched.*
+*Status: closed, low priority (Kai, 2026-10-30). Written 2026-10-30 (Opus). Rules in §3 were committed to this file **before** the first Gate 0 run. Background: `docs/analysis/ANALYSIS_moemeta.md` §6. Dev users only (P005, P109, P116, P131); the 28 fold users are not touched.*
 
 ## 1. Sensor map
 Source: `docs/emg-sensor-placements.png` (Kai, 2026-10-30), every user has the same placement. Code: `system/arch_variants/body_regions.py`.
