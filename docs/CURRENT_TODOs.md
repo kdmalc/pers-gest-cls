@@ -8,10 +8,10 @@
 - §9 the finding ("for user-defined gestures the useful prior is geometric, not semantic");
 - §10 which covariance ideas augment EncoderMoE (dead end) vs build on MDM (go);
 - §11 finding paper (TMLR / TNSRE) vs method paper (ICML), and why the premise and the clustering/ability story survive;
-- **§12 the planned analyses (new, nothing implemented):** §12.1 the pooled-learned-tangent-metric gate decides whether any meta-learning story is left; §12.3 eight cheap CPU tests;
+- **§12 the planned analyses, reconciled with `specs/SPEC_riemannian.md`** (the other instance already built `rc_pool`, `cluster_pool`, `seg_mdm`, the cluster gate and the failure analysis; each §12 item is tagged built / NEW): §12.1 (`A6_riemann_rc_pool`) is the gate that decides whether any meta-learning story is left;
 - §13 what the pending fs64 sanity rows (other instance) will be used for.
 Venues under consideration: **ICML, TMLR, possibly TNSRE / a domain journal** (Kai, 2026-10-30).
-Nothing deep gets built before the §12.1 gate. Data is on the other laptop and the cluster, not this one (hold).
+No GPU screen budget on the covariance deep variants (X7-X9, R1, P1_cov, P1_spd) before the CPU gates (`rc_pool`, `cluster_pool`, cluster gate, failure analysis) report. Data is on the other laptop and the cluster, not this one (hold).
 
 ## 0b. What Claude is doing now
 - **Riemannian track (2026-10-30 night, PAUSED by Kai; pick up here):** all code is built and tested (`specs/SPEC_riemannian.md`; 468 tests pass). The laptop results are in `~/gest_results/riemann_analysis/` (env20 only so far):

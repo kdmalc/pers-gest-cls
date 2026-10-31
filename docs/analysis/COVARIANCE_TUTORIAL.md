@@ -4,7 +4,7 @@ Why a training-free classifier (Riemannian MDM, 91.4% at 10-way 1-shot on fs64, 
 
 Code: `system/nonparametric/classical.py` (`riemann_mdm`, `riemann_ts`, `dollar_b`); sanity checks: `system/analysis/riemann_sanity.py`.
 
-> **Sections 1-8** were written by the first Claude Code instance (Opus, 2026-10-30) with the classical results. **Sections 0 and 9-13** were added by a second instance (Fable, 2026-10-30 evening, the one that built MoEMeta-TS and Gate 0) after discussing the results with Kai. Nothing in 9-13 is implemented; §12 in particular is a *new* analysis that the first instance did not attempt.
+> **Sections 1-8** were written by the first Claude Code instance (Opus, 2026-10-30) with the classical results. **Sections 0 and 9-13** were added by a second instance (Fable, 2026-10-30 evening, the one that built MoEMeta-TS and Gate 0) after discussing the results with Kai. Sections 9-13 are analysis and plans. **Correction after `git pull` (same evening):** the first instance's `docs/specs/SPEC_riemannian.md` (commit fc3130a) already builds much of what §12 proposes; §12 now marks each item as *built by the first instance* or *new*, so the provenance is exact.
 
 ---
 
@@ -283,11 +283,11 @@ Kai's question (2026-10-30): are the §8 ideas improving the MDM version, or bol
 
 | Idea (§8) | Spectrum | Judgment |
 |---|---|---|
-| **X7**: tangent-space covariance as the MoE routing signal | augments EncoderMoE | A better router on a 67% model does not close 24 points. Keep only as a routing-diagnostics curiosity. |
-| **Hybrid late fusion**: MoE logits + lambda * (-MDM distance) | augments; capped by MDM | Pays only if the neural errors are *not* a subset of MDM's. The per-query complementarity test (§8) answers that first and is the right order. |
-| **Second-order pooling experts**: encoder -> covariance -> log-map -> MDM / ProtoNet head | middle | The one deep option that could beat MDM in principle (it learns *which features* to take the covariance of). Also the riskiest: it re-introduces learning from other users. Gate it on §12.1. |
-| **Riemannian experts / cluster-wise reference points** | builds on MDM; keeps the MoE vocabulary | Most promising for the original story. Note (§12.2) that plain re-centering is a no-op for within-user MDM because the AIRM is affine invariant; the experts must own *metrics*, not just reference points. |
-| **SPD clustering of per-user mean covariances** | builds on MDM; keeps the ability story | Cheap, no training. Do first (§12.3). |
+| **X7 / X7T** (built): tangent-space covariance as the MoE routing signal | augments EncoderMoE | A better router on a 67% model does not close 24 points. Keep only as a routing-diagnostics curiosity. |
+| **H1 hybrid** (built, `hybrid_fusion.py`): model logits + MDM, LOUO weight | augments; capped by MDM | Pays only if the neural errors are *not* a subset of MDM's. The per-query complementarity test (§8) answers that first and is the right order. |
+| **X9 / A4_cov / P1_cov / P1_spd** (built): second-order pooling, CovaMNet, SPDNet | middle | The one deep option that could beat MDM in principle (it learns *which features* to take the covariance of). Also the riskiest: it re-introduces learning from other users. Gate it on §12.1. |
+| **X8 / X8W** (built): Riemannian experts inside M0; **`cluster_pool`** (built): mixture of pooled metrics on MDM | X8 augments EncoderMoE (67 base); `cluster_pool` builds on MDM | Most promising for the original story. Note (§12.2) that plain re-centering is a no-op for within-user MDM because the AIRM is affine invariant; the experts must own *metrics*, not just reference points. |
+| **Cluster gate G1-G4** (built, `cov_cluster_gate.py`) | builds on MDM; keeps the ability story | Cheap, no training. Do first (§12.3). |
 | Plain MDM / TS, CovaMNet, SPDNet | no clustering | Baselines and controls. |
 
 **Recommendation:** go with the build-on-MDM side, and let the gates in §12 decide between "method" and "finding". "Whichever does best" is right, with one caveat: the hybrid and X7 can never do better than MDM by more than the complementarity test allows, so measure that before building either.
@@ -318,14 +318,14 @@ Per-user mean covariance (the Fréchet mean of a user's support covariances) is 
 
 Kai's PI is right for a method paper: a main table with **one representative per family** (raw kNN-L1, MDM, pretrained + fine-tune, ProtoNet, MAML / EncoderMoE, ours), the rest in the appendix. The comparisons become interesting only when they expose **failure modes** that the proposed method fixes (Kai's own criterion). That analysis has not been done; §12.3 items 3-5 are it.
 
-## 12. Planned analyses (NEW; none implemented; none attempted by the first instance)
+## 12. Planned analyses: reconciliation with `SPEC_riemannian.md`
 
-**Status of everything in this section: proposed on 2026-10-30 evening by the second instance (Fable). No code exists for any of it, and the first instance's covariance test list (§8) does not include it.** It is kept separate from §8 so the provenance is clear.
+**Provenance.** This section was drafted by the second instance (Fable) on 2026-10-30 evening *before* pulling the first instance's `SPEC_riemannian.md` (fc3130a). After the pull it turned out the first instance had already built the core of 12.1 (`A6_riemann_rc_pool`), a K=3 version of 12.2 (`A6_riemann_cluster_pool`), and several 12.3 items. Each item below is now tagged **[built: token]** (first instance; code exists, not run) or **[NEW]** (second instance; no code). The rules and gates in `SPEC_riemannian.md` §2-4 are the ones to follow; what this section adds is the *reading* of the results (what each outcome means for the paper) and the items tagged NEW.
 
 All of it runs on CPU with no training beyond a linear fit, on the cached episodes. Dev users (4) for the gates; 28 users only for whatever passes.
 
-### 12.1 The decisive gate: a pooled learned tangent metric
-**Question.** Does *any* cross-user learning help the geometric classifier?
+### 12.1 The decisive gate: a pooled learned tangent metric  **[built: `A6_riemann_rc_pool`]**
+**Question.** Does *any* cross-user learning help the geometric classifier? The first instance built exactly this (per-user re-centring → tangent space → within-class metric pooled over the TRAIN users). What is NEW here is (i) the decision reading below, and (ii) the second variant in step 2 (an episodically learned low-rank W), which is not built.
 
 **Procedure.**
 1. For every train user, map each trial's shrunk covariance (per modality, as in `riemann_mdm`) to the tangent space **at that user's own mean** (per-user re-centering, Zanini 2018; this is what makes tangent vectors from different users comparable, and is where re-centering actually matters, see 12.2).
@@ -338,25 +338,25 @@ All of it runs on CPU with no training beyond a linear fit, on the cached episod
 - *Passes:* cross-user learning helps inside the geometry. Proceed to 12.2 (the mixture). The method paper is alive.
 - *Fails:* the geometric prior is already saturated for this data; no mixture of metrics will help either. Finding paper. EncoderMoE and MoEMeta-TS become rows.
 
-### 12.2 Gate 1: a mixture of metrics routed by the user's signature ("MoE on the manifold")
-Only if 12.1 passes.
+### 12.2 Gate 1: a mixture of metrics routed by the user's signature ("MoE on the manifold")  **[built: `A6_riemann_cluster_pool` (K=3, k-means); controls NEW]**
+Only if 12.1 passes. `cluster_pool` is the K=3 hard-routed version. NEW: the controls (K=1 = `rc_pool`, random cluster assignment of the same sizes, uniform routing) and soft routing; without the random-assignment control a `cluster_pool` win cannot be attributed to the clusters (the body-region lesson). Note also that **X8 / X8W** (`SPEC_riemannian.md`) are Riemannian experts *inside M0*, so they inherit the 67% base; `cluster_pool` is the version that builds on MDM.
 - K metrics W_1..W_K instead of one. Each train user is assigned to a cluster (Riemannian k-means on user mean covariances, or a learned soft router on the tangent vector of the user mean); W_k is fitted on its cluster's users.
 - A new user is routed from the support set alone (its mean covariance), then classified with W_k. Soft routing = weighted sum of distances.
 - Controls, in the spirit of X1 vs X2: K = 1 (= 12.1), random cluster assignment, uniform routing. If ability groups are used as clusters, compare with random groups of the same sizes (the body-region lesson).
 - **Why re-centering alone is not a method.** The AIRM is affine invariant, so whitening a user's covariances by that user's mean leaves all *within-user* MDM distances unchanged. Per-user or per-cluster reference points therefore change nothing for 1-shot MDM; they only matter as the preprocessing that makes *pooling across users* (12.1) meaningful. Experts must own metrics W_k, not just reference points.
 
 ### 12.3 Cheap tests that shape the paper either way
-1. **SPD clustering of user signatures.** Riemannian k-means / Fréchet-mean clustering of the 32 per-user mean covariances (per modality). Silhouette vs a permutation null; Mantel / adjusted Rand against ability groups; correlation of cluster with per-user MDM accuracy. This is the clustering gate from §8, made concrete.
-2. **k-shot curve.** MDM (Riemannian class means) vs the best learned model at K = 1, 3, 5. If learning only pays at K = 5, say so; if MDM's lead shrinks with K, the method paper has a niche at higher shots.
-3. **MDM failure anatomy.** On dev, list the confused class pairs. Are they time-reversed or same-co-activation-different-order pairs (the §2 blind spots)? Posture gestures that differ only in mean orientation? This decides whether a temporal model has any job left.
-4. **Segment / augmented covariances.** 2-4 windows per trial, one covariance each, summed AIRM distances; or the augmented (time-lagged, Hankel-style) covariance, which encodes dynamics while staying SPD (Carrara & Papadopoulo 2023, "augmented covariance matrices"; verify the citation). If this recovers the item-3 failures cheaply, the temporal-model niche closes too.
-5. **Rep-gap stratified comparison for every method.** Accuracy vs |rep(query) - rep(support)| for MDM, kNN, `$B`, MiniRocket and the deep rows. If learned models degrade less with gap, that is the one robustness story they can still own (drift tolerance). If they degrade more, the finding is complete.
-6. **Cross-user zero-shot in the geometry.** Cross-user MDM on label-aligned executions (notebook 03's motif matches) as the geometric analogue of Z1-Z4. If it is also near chance, "geometric prior transfers, semantic does not" is nailed in the same space.
-7. **Per-user difficulty predictor.** Can the dispersion of a user's support covariances (mean pairwise AIRM) predict that user's MDM accuracy? A practical, HCI-flavoured result: "who needs more shots", from the calibration data alone.
-8. **Sensor-block Gate 0.** Per-IMU-sensor and per-EMG-channel block covariances scored with the Gate 0 logic (`SPEC_gate0.md`), to find the smallest sensor set that keeps 91. Wearability story; also tells whether the 72-channel IMU covariance is over-provisioned.
+1. **[built: `cov_cluster_gate.py` G1-G4]** **SPD clustering of user signatures.** Riemannian k-means / Fréchet-mean clustering of the 32 per-user mean covariances (per modality). Silhouette vs a permutation null; Mantel / adjusted Rand against ability groups; correlation of cluster with per-user MDM accuracy. This is the clustering gate from §8, made concrete.
+2. **[NEW]** **k-shot curve.** MDM (Riemannian class means) vs the best learned model at K = 1, 3, 5. If learning only pays at K = 5, say so; if MDM's lead shrinks with K, the method paper has a niche at higher shots.
+3. **[built: `failure_analysis.py` P1-P4, `gesture_descriptors.py`]** **MDM failure anatomy.** On dev, list the confused class pairs. Are they time-reversed or same-co-activation-different-order pairs (the §2 blind spots)? Posture gestures that differ only in mean orientation? This decides whether a temporal model has any job left.
+4. **[built: `A6_riemann_seg_mdm` (3 segments); augmented covariance NEW]** **Segment / augmented covariances.** 2-4 windows per trial, one covariance each, summed AIRM distances; or the augmented (time-lagged, Hankel-style) covariance, which encodes dynamics while staying SPD (Carrara & Papadopoulo 2023, "augmented covariance matrices"; verify the citation). If this recovers the item-3 failures cheaply, the temporal-model niche closes too.
+5. **[partly built: `riemann_sanity.py` has the MDM curve; other methods NEW]** **Rep-gap stratified comparison for every method.** Accuracy vs |rep(query) - rep(support)| for MDM, kNN, `$B`, MiniRocket and the deep rows. If learned models degrade less with gap, that is the one robustness story they can still own (drift tolerance). If they degrade more, the finding is complete.
+6. **[close to built: cluster gate G4 "shared motifs"; the Z-style accuracy readout is NEW]** **Cross-user zero-shot in the geometry.** Cross-user MDM on label-aligned executions (notebook 03's motif matches) as the geometric analogue of Z1-Z4. If it is also near chance, "geometric prior transfers, semantic does not" is nailed in the same space.
+7. **[NEW]** **Per-user difficulty predictor.** Can the dispersion of a user's support covariances (mean pairwise AIRM) predict that user's MDM accuracy? A practical, HCI-flavoured result: "who needs more shots", from the calibration data alone.
+8. **[NEW]** **Sensor-block Gate 0.** Per-IMU-sensor and per-EMG-channel block covariances scored with the Gate 0 logic (`SPEC_gate0.md`), to find the smallest sensor set that keeps 91. Wearability story; also tells whether the 72-channel IMU covariance is over-provisioned.
 
 ### 12.4 What stays off the table until the gates report
-X7, hybrid late fusion, second-order pooling experts, SPDNet experts, any new EncoderMoE variant, MoEMeta-TS on covariance features. The architecture screen (`SPEC_architecture_exploration.md` §3) still runs as planned because its rows are needed for the finding paper too.
+The first instance has already *built* X7/X7T, X8/X8W, X9/A4_cov, R1/R1_A4, P1_cov, P1_spd and the H1 hybrid (`SPEC_riemannian.md` §1), so "off the table" here means *do not spend GPU screen budget on them before `rc_pool`, `cluster_pool`, the cluster gate and the failure analysis (all CPU) have reported*. X9 / P1_cov / P1_spd are the second-order-pooling options and are the deep rows most worth screening if 12.1 passes. MoEMeta-TS on covariance features: not built, not planned. The architecture screen (`SPEC_architecture_exploration.md` §3) still runs as planned because its rows are needed for the finding paper too.
 
 ## 13. The pending fs64 sanity rows and how they will be used
 
