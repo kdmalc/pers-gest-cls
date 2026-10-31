@@ -1,6 +1,12 @@
 # LOG (context and design decisions that are not immediately critical)
 Full history: `docs/archive/FULL_RUNNING_LOG.md`. Status table: `docs/archive/HIGH_LEVEL_STATUS.md`. Immediate blockers (long form): `docs/archive/KAI_TODO.md`.
 
+## 2026-10-30, cluster batch read (late evening)
+- Results came back as one tarball (`find ... -newermt` minus `*.pt`/`*.pkl`, 3.3 MB), unpacked on the lab desktop in `~/gest_results/r1030/`; recipe in `CURRENT_TODOs.md` §2F.
+- A6 complete; `$B` fs64 = 80.4 ± 8.9 after the 12 h relaunch. Riemannian MDM fs64 (91.4) is the top classical baseline.
+- HPO debug batch 1 was mixed env20/fs64 because the code was pulled mid-batch and each job imports at start time. Lesson: pull only between batches, or check `emg_in_ch` per log.
+- Eval mislabel bug fixed (`make_base_config()` now applies `EMG_REPR`); test `test_base_config_records_launcher_emg_repr`.
+
 ## 2026-10-30, body-region line
 - Sensor map from Kai's `docs/emg-sensor-placements.png`, in `system/arch_variants/body_regions.py`. IMU order comes from recording slots 1-8, 9, 11, 13, 15; pods 9-12 have two EMG leads. Side assignment verified on the signals; position within a side was not.
 - Gate 0 rules were committed in `398078a` before the first run. Result: anatomical groups barely beat random groups, so deep region experts were dropped. `docs/specs/SPEC_body_regions.md` §4.

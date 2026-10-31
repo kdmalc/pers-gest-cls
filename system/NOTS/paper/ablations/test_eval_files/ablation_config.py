@@ -533,6 +533,11 @@ def make_base_config(ablation_id: str) -> dict:
     # every config names them explicitly and the tuned overrides of any variant token apply.
     from arch_variants.registry import arch_defaults
     arch_defaults(config)
+    # The launcher's EMG_REPR applies to the base config too, not only per fold (apply_kfold_fold):
+    # save_results() records emg_repr from the base config, and until 2026-10-30 fs64 eval runs
+    # were labelled env20 there.
+    if "EMG_REPR" in os.environ:
+        apply_emg_repr(config, os.environ["EMG_REPR"])
     return config
 
 

@@ -119,6 +119,7 @@ def test_apply_kfold_fold_requires_hpo_config_env(monkeypatch):
 
 
 def test_emg_repr_switches_dict_file_and_channels(monkeypatch):
+    monkeypatch.delenv("EMG_REPR", raising=False)
     base = ac.make_base_config("T")
     assert base["emg_repr"] == "env20" and base["emg_in_ch"] == 16
     assert ac.tensor_dict_file(base).endswith("segfilt_rts_tensor_dict.pkl")
@@ -128,3 +129,10 @@ def test_emg_repr_switches_dict_file_and_channels(monkeypatch):
         ac.apply_emg_repr(dict(base), "raw")
     monkeypatch.setenv("EMG_REPR", "fs64")
     assert ac.apply_kfold_fold(base, 0)["emg_in_ch"] == 112
+
+
+def test_base_config_records_launcher_emg_repr(monkeypatch):
+    # save_results() reads emg_repr from the base config; fs64 runs were once recorded as env20
+    monkeypatch.setenv("EMG_REPR", "fs64")
+    base = ac.make_base_config("T")
+    assert base["emg_repr"] == "fs64" and base["emg_in_ch"] == 112
