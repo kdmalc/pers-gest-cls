@@ -71,7 +71,7 @@
 |---|---|---|
 | kNN-L1 | ✅ | 58.0 ± 11.2 / 72.9 ± 9.5 |
 | ProtoNet on raw features | ✅ | 51.1 ± 12.4 / 65.6 ± 11.4 |
-| `$B` (PCA + L1 1-NN) | ✅ env20; ❌ fs64 folds 2-5 timed out (relaunch at 12 h) | 78.1 ± 11.2 / – |
+| `$B` (PCA + L1 1-NN) | ✅ | 78.1 ± 11.2 / 80.4 ± 8.9 |
 | `$B`-user | ✅ | 58.6 ± 10.8 / 74.0 ± 9.4 |
 | MiniRocket + ridge | ✅ | 78.8 ± 9.4 / 79.5 ± 9.6 |
 | Riemannian MDM | ✅ | 90.4 ± 10.3 / **91.4 ± 8.6** |
@@ -106,7 +106,7 @@
 | FEAT | 🔧 | |
 | ADANN-style (gradient-reversal user head) | 🔧 | |
 | CNP | ⬜ | |
-| Time-series MoEMeta reimplementation | ⏸ (Kai, 2026-10-30) | |
+| MoEMeta-TS (time-series port of Wu & Yin; `Q1`, controls `Q1_nola Q1_mlp Q1_uni Q1_ce`) | 🔧 (go from Kai 2026-10-30 evening) | |
 
 ## Baselines: EMG-specific / SOTA
 | Run | Status | Acc |

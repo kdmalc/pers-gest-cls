@@ -169,7 +169,7 @@ for m in td_knn td_lda td_lda_pool; do
 done
 # Architecture-exploration tokens (arch_variants/registry.py ARCH_VARIANTS; finalists of the dev-user screen only).
 # Launcher token V_<token>; tests/test_arch_variants.py checks this list against the registry.
-ARCH_VARIANT_TOKENS="X2 X3 X4 X5 X6 F1 F2 F3 T0 T2 T4 P1 P1_moe P1_match P1_rel P1_ridge P1_feat P3 A4_ANIL M0_ANIL X7 X7T X8 X8W X9 A4_cov R1 R1_A4 P1_cov P1_spd"
+ARCH_VARIANT_TOKENS="X2 X3 X4 X5 X6 F1 F2 F3 T0 T2 T4 P1 P1_moe P1_match P1_rel P1_ridge P1_feat P3 A4_ANIL M0_ANIL Q1 Q1_nola Q1_mlp Q1_uni Q1_ce X7 X7T X8 X8W X9 A4_cov R1 R1_A4 P1_cov P1_spd"
 for t in $ARCH_VARIANT_TOKENS; do
     SPEC[V_$t]="arch_variant_eval.py|--token $t --cells all --dump-logits|12:00:00|32G"   # per-query logits: failure analysis, hybrid
 done

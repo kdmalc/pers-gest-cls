@@ -112,6 +112,27 @@ ARCH_VARIANTS: dict[str, dict] = {
                      spaces=("metric",), note="R2-D2 closed-form ridge head"),
     "P1_feat":  dict(base="A4", family="metric", set={"metric_kind": "feat", "metric_backbone": "cnnlstm"},
                      spaces=("metric",), note="FEAT: set-to-set adapted prototypes"),
+    # ── MoEMeta-TS (Wu & Yin, NeurIPS'25, ported; arch_variants/moemeta_ts.py). Reviewer ARaC's Q1. ─
+    "Q1":      dict(base="A4", family="metric",
+                    set={"metric_kind": "moemeta", "metric_backbone": "cnnlstm", "moemeta_variant": "full",
+                         "moemeta_loss": "margin"},
+                    spaces=("metric", "moemeta"), note="MoEMeta-TS: MoE relation meta + local adaptation, margin loss"),
+    "Q1_nola": dict(base="A4", family="metric",
+                    set={"metric_kind": "moemeta", "metric_backbone": "cnnlstm", "moemeta_variant": "no_local",
+                         "moemeta_loss": "margin"},
+                    spaces=("metric", "moemeta"), note="MoEMeta-TS without local adaptation (paper's w/o L.A)"),
+    "Q1_mlp":  dict(base="A4", family="metric",
+                    set={"metric_kind": "moemeta", "metric_backbone": "cnnlstm", "moemeta_variant": "mlp",
+                         "moemeta_loss": "margin"},
+                    spaces=("metric", "moemeta"), note="MoEMeta-TS with one MLP instead of the MoE (paper's w/o MoE, MetaR-like)"),
+    "Q1_uni":  dict(base="A4", family="metric",
+                    set={"metric_kind": "moemeta", "metric_backbone": "cnnlstm", "moemeta_variant": "uniform",
+                         "moemeta_loss": "margin"},
+                    spaces=("metric", "moemeta"), note="MoEMeta-TS with a uniform gate (does its router matter?)"),
+    "Q1_ce":   dict(base="A4", family="metric",
+                    set={"metric_kind": "moemeta", "metric_backbone": "cnnlstm", "moemeta_variant": "full",
+                         "moemeta_loss": "ce"},
+                    spaces=("metric", "moemeta"), note="MoEMeta-TS trained with cross-entropy on -distance (loss sensitivity)"),
     # ── Other learning approaches ──────────────────────────────────────────
     "P3":       dict(base="A2", family="legacy", set={"adann_disc_hidden": 128}, spaces=("adann",),
                      note="ADANN-style: supervised + gradient-reversal user head, then fine-tune"),
@@ -128,6 +149,9 @@ ARCH_VARIANTS: dict[str, dict] = {
 FAMILY_EVAL_DEFAULTS: dict = {
     "metric": dict(metric_relation_hidden=128, label_smooth=0.0, meta_batchsize=24),
     "adann": dict(adann_lambda=0.1, adann_disc_hidden=128),
+    # the paper's values where it gives them (M=32, N=5, hidden 64, margin 1, one inner step); alpha is unstated
+    "moemeta": dict(moemeta_num_experts=32, moemeta_top_n=5, moemeta_expert_hidden=64, moemeta_margin=1.0,
+                    moemeta_inner_steps=1, moemeta_inner_lr=0.1, moemeta_first_order=False),
 }
 
 
