@@ -4,6 +4,14 @@
 **Goal:** resubmit EncoderMoE (rejected NeurIPS'26) on one clean protocol: 28 users, 7 folds, cached episodes, 10-way 1-shot primary. Add the reviewer-requested baselines and ablations. **Venue: ICML (Jan) or TMLR, decided after the main runs finish.**
 
 ## 0. What Claude is doing now
+- **Riemannian track (2026-10-30 night, PAUSED by Kai; pick up here):** all code is built and tested (`specs/SPEC_riemannian.md`; 468 tests pass). The laptop results are in `~/gest_results/riemann_analysis/` (env20 only so far):
+  - **Done:** distance bank `dist_env20.npz`; `gesture_descriptors.csv` (320 cells, raw CSVs); `fa_env20/` (failure analysis); `cov_cluster_gate_env20.json`.
+  - **Stopped half-way:** the fs64 distance bank. Re-run, then the fs64 gate and failure analysis:
+    `PY=~/anaconda3/envs/fl_torch/python.exe; O=~/gest_results/riemann_analysis; export CODE_DIR=$PWD`
+    `$PY system/analysis/trial_distances.py --emg-repr fs64 --out $O/dist_fs64.npz` (~30-40 min)
+    `$PY system/analysis/failure_analysis.py --dist $O/dist_fs64.npz --descriptors $O/gesture_descriptors.csv --out $O/fa_fs64`
+    `$PY system/analysis/cov_cluster_gate.py --emg-repr fs64 --out $O/cov_cluster_gate_fs64.json`
+  - **Still to do:** compute P4 (seg_mdm beats mdm on ≥ 20% of cells) from `fa_*/user_gesture_acc.csv`. Kai: cluster batch B + C2 + C4 below include the 10 new tokens and the A6 Riemannian methods.
 - **Nothing running.** Waiting on Kai's cluster batch B (debug HPO re-run on fs64, now including the Q1 family) and C (eval-path smoke tests). Results of the 2026-10-30 batch: §4.
 - **Next code, waiting for Kai's go:** nothing queued. Open options: F4, T1/T3, CNP, the GNI side of the raw-EMG comparison, ports of A7/A8/portA and Kaifosh (A10-A12) to the cache, EMGBench EMG-only (promised to fkxS).
 - The Q1 family is in the B command below; after B it goes into the screen with the other P-tokens (no frozen MAML HPs: they are metric learners).
@@ -42,13 +50,16 @@ mamba activate /projects/my13/kai/meta-pers-gest/envs/fl-torch
 - HPO logs never print `PYTHON_EXIT_CODE`; judge them by the pass rule below, not by an exit line.
 ```bash
 bash hpo_ablation_launcher.sh A4 M0 X2 X3 X4 X6 T2 F1 F2 F3 T0 T4 P1 P1_moe P1_rel P1_feat P3 A4_ANIL Q1 Q1_nola Q1_mlp Q1_uni Q1_ce --emg-repr fs64 --debug
+# the Riemannian track (specs/SPEC_riemannian.md):
+bash hpo_ablation_launcher.sh X7 X7T X8 X8W X9 A4_cov R1 R1_A4 P1_cov P1_spd --emg-repr fs64 --debug
 ```
 When they finish, paste Claude the output of:
 ```bash
 LOGS=/scratch/my13/kai/runs/paper/sub2/hpo/logs
-for f in $(ls -t $LOGS/hpo_*.out | head -20); do echo "== $(basename $f)"; grep -m1 "emg_in_ch:" $f; grep -m1 "build_model\]" $f; grep -m2 -E "Epoch completed in|\[metric:.*epoch 1:" $f; grep -m1 -E "Traceback|Error" $f; done
+for f in $(ls -t $LOGS/hpo_*.out | head -33); do echo "== $(basename $f)"; grep -m1 "emg_in_ch:" $f; grep -m1 "build_model\]" $f; grep -m2 -E "Epoch completed in|\[metric:.*epoch 1:" $f; grep -m1 -E "Traceback|Error" $f; done
 ```
 - **Pass:** every log shows `emg_in_ch: 112` (fs64), `[build_model] ... parameters` and at least one epoch line, with no Traceback.
+- X8 / X8W also print `[init_cov_centroids] ... cluster sizes [...]` before training.
 
 **C. Eval-path smoke tests of the new scripts** (debug partition, fold 0, legacy HPs; checks train → test → save end to end):
 ```bash
@@ -65,8 +76,16 @@ F=/projects/my13/kai/meta-pers-gest/pers-gest-cls/system/NOTS/paper/ablations/sc
 bash hpo_ablation_launcher.sh M0 A4 X2 X3 X4 X5 X6 F1 F2 F3 --emg-repr fs64 --n-trials 24 --study-suffix screen --fixed-params $F/legacy_shared_maml.json --dry-run
 bash hpo_ablation_launcher.sh M0 A4 X2 X3 X4 X5 X6 F1 F2 F3 --emg-repr fs64 --n-trials 24 --study-suffix screen --fixed-params $F/legacy_shared_maml.json
 bash hpo_ablation_launcher.sh T0 T2 T4 --emg-repr fs64 --n-trials 24 --study-suffix screen --fixed-params $F/legacy_inner_only.json
-bash hpo_ablation_launcher.sh P1 P1_moe P1_match P1_rel P1_ridge P1_feat P3 Q1 Q1_nola Q1_mlp Q1_uni Q1_ce --emg-repr fs64 --n-trials 24 --study-suffix screen
+bash hpo_ablation_launcher.sh X7 X7T X8 X8W X9 A4_cov R1 R1_A4 --emg-repr fs64 --n-trials 24 --study-suffix screen --fixed-params $F/legacy_shared_maml.json
+bash hpo_ablation_launcher.sh P1 P1_moe P1_match P1_rel P1_ridge P1_feat P3 Q1 Q1_nola Q1_mlp Q1_uni Q1_ce P1_cov P1_spd --emg-repr fs64 --n-trials 24 --study-suffix screen
 ```
+
+**C4. Riemannian classical extensions (CPU, any time):** all 9 cells x 7 folds, env20 and fs64.
+```bash
+bash kfold_launcher.sh A6_riemann_seg_mdm A6_riemann_rc_pool A6_riemann_cluster_pool --hpo-config legacy --emg-repr fs64
+bash kfold_launcher.sh A6_riemann_seg_mdm A6_riemann_rc_pool A6_riemann_cluster_pool --hpo-config legacy --emg-repr env20
+```
+- `M0` and every `V_*` eval now also save per-query test logits (`*_query_logits.npz`, next to the results JSON). Copy them back with the results; they feed the hybrid (H1) and the failure analysis.
 
 **C3. EMG-RAW dict (laptop; raw CSVs in Box):** about 0.6 GB.
 ```bash

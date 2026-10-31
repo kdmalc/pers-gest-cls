@@ -82,10 +82,10 @@
 | Run | Status | Acc / result |
 |---|---|---|
 | MDM sanity: shuffled labels / EMG-only / IMU-only (env20; fs64) | ✅ | 9.5 / 73.8 / 91.0; 9.6 / 76.6 / 91.0 |
-| Cluster gate G1-G4 (laptop, 32 users) | 🔧 | |
-| Failure analysis P1-P4 + gesture descriptors (laptop) | 🔧 | |
-| High- vs low-movement analysis (P2) | 🔧 | |
-| MDM on 3 time segments (`seg_mdm`) | 🔧 | |
+| Cluster gate G1-G4 (laptop, 32 users) | ✅ env20; ⬜ fs64 | env20: G1 1.00 ✓, G2 0.24 vs 0.11 ✓, G3 ARI 0.09 ✗, G4 0.14 ✗ |
+| Failure analysis P1-P4 + gesture descriptors (laptop) | ✅ env20; ⬜ fs64 | P1 ✗ (oracle 93.6, best fusion 90.0), P3 ✓ seg_mdm only, P4 pending |
+| High- vs low-movement analysis (P2) | ✅ env20 | MDM 94.5 high / 84.7 low; EMG-IMU gap equal → P2 ✗ |
+| MDM on 3 time segments (`seg_mdm`) | ✅ env20 10x1 (laptop) | 73.7 |
 | Re-centring + pooled tangent metric (`rc_pool`; `cluster_pool`, 3 clusters) | 🔧 | |
 | X7 / X7T: covariance-vector router (sample; + support set) | 🔧 | |
 | X8 / X8W: Riemannian experts (centroid gate; + re-centred experts) | 🔧 | |

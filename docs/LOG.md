@@ -1,6 +1,22 @@
 # LOG (context and design decisions that are not immediately critical)
 Full history: `docs/archive/FULL_RUNNING_LOG.md`. Status table: `docs/archive/HIGH_LEVEL_STATUS.md`. Immediate blockers (long form): `docs/archive/KAI_TODO.md`.
 
+## 2026-10-30 night, Riemannian track: first laptop results (env20; rules pre-stated in `specs/SPEC_riemannian.md`, commit fc3130a)
+- MDM sanity on fs64 (50 episodes/user): fused 91.5, shuffled labels 9.6, EMG-only 76.6, IMU-only 91.0.
+- **Distance bank:** reproduces `classical.py` exactly at 1-shot. The whole 28-user analysis takes ~5 min instead of hours. On env20, IMU-only MDM (91.0) beats fused MDM (90.4).
+- **Cluster gate (env20):**
+  - G1 identifiability: 1.00, pass.
+  - G2 silhouette: 0.24 vs null 95th percentile 0.11 (K=3), pass.
+  - **G3 split-half ARI: 0.09, fail.**
+  - G4 same-referent rate: 0.14 vs the 0.2 bar, fail.
+  - Verdict: users have stable, unique covariance signatures, but the clusters are not stable across halves. So use continuous routing (X7 / X7T, "routing by user signature") rather than discrete clusters (X8, `cluster_pool`). This waits on fs64.
+- **Failure analysis (env20, 504k queries):**
+  - **P1 not supported.** Oracle-or with MDM reaches 93.6 (`$B`) and 94.9 (MDM-IMU), but no equal-weight z-fusion beats MDM (best: mdm+td_knn 90.0).
+  - **P2 not supported as stated.** Every method drops on low-movement gestures (MDM 94.5 high vs 84.7 low). The EMG-IMU gap is the same in both tertiles (-15.5 / -16.6). On finger-like gestures EMG holds up better (-13.0 vs -17.9 elsewhere).
+  - **P3 supported for `seg_mdm` only** (leave-one-user-out rho 0.19, p 0.01): gesture properties predict where segment covariances help.
+  - `td_knn` (mean/std features) reaches 84.8, so the per-channel means carry signal that the centred covariance drops.
+  - P4 not computed yet.
+
 ## 2026-10-30, cluster batch read (late evening)
 - Results came back as one tarball (`find ... -newermt` minus `*.pt`/`*.pkl`, 3.3 MB), unpacked on the lab desktop in `~/gest_results/r1030/`; recipe in `CURRENT_TODOs.md` §2F.
 - A6 complete; `$B` fs64 = 80.4 ± 8.9 after the 12 h relaunch. Riemannian MDM fs64 (91.4) is the top classical baseline.
