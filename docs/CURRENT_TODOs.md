@@ -3,7 +3,17 @@
 
 **Goal:** resubmit EncoderMoE (rejected NeurIPS'26) on one clean protocol: 28 users, 7 folds, cached episodes, 10-way 1-shot primary. Add the reviewer-requested baselines and ablations. **Venue: ICML (Jan) or TMLR, decided after the main runs finish.**
 
-## 0. What Claude is doing now
+## 0. START HERE on Monday 2026-11-02
+**Read `docs/analysis/COVARIANCE_TUTORIAL.md` §0 (executive summary) first.** The 2026-10-30 classical results changed the plan: training-free Riemannian MDM scores 91.4% at 10-way 1-shot over the 28 users (IMU covariance does the work), 20+ points above any learned model we have. Consequences and the Monday plan are in that file:
+- §9 the finding ("for user-defined gestures the useful prior is geometric, not semantic");
+- §10 which covariance ideas augment EncoderMoE (dead end) vs build on MDM (go);
+- §11 finding paper (TMLR / TNSRE) vs method paper (ICML), and why the premise and the clustering/ability story survive;
+- **§12 the planned analyses (new, nothing implemented):** §12.1 the pooled-learned-tangent-metric gate decides whether any meta-learning story is left; §12.3 eight cheap CPU tests;
+- §13 what the pending fs64 sanity rows (other instance) will be used for.
+Venues under consideration: **ICML, TMLR, possibly TNSRE / a domain journal** (Kai, 2026-10-30).
+Nothing deep gets built before the §12.1 gate. Data is on the other laptop and the cluster, not this one (hold).
+
+## 0b. What Claude is doing now
 - **Riemannian track (2026-10-30 night, PAUSED by Kai; pick up here):** all code is built and tested (`specs/SPEC_riemannian.md`; 468 tests pass). The laptop results are in `~/gest_results/riemann_analysis/` (env20 only so far):
   - **Done:** distance bank `dist_env20.npz`; `gesture_descriptors.csv` (320 cells, raw CSVs); `fa_env20/` (failure analysis); `cov_cluster_gate_env20.json`.
   - **Stopped half-way:** the fs64 distance bank. Re-run, then the fs64 gate and failure analysis:
